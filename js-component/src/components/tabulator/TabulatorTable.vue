@@ -5,17 +5,17 @@
     :style="isServerSidePagination ? {} : { minHeight: '200px' }"
   >
     <div class="d-flex">
-      <div style="width: 100%; display: grid; grid-template-columns: 1fr 1fr 1fr">
-        <div class="d-flex justify-start" style="grid-column: 1 / span 1">
-          <div style="position: relative; display: inline-block">
-            <v-btn
-              variant="text"
-              size="small"
-              icon="mdi-download"
-              :loading="pendingDownloadId !== null"
-              :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
-              @click="downloadTable"
-            />
+      <div class="table-toolbar">
+        <div class="table-toolbar-buttons">
+          <v-btn
+            variant="text"
+            size="small"
+            icon="mdi-download"
+            :loading="pendingDownloadId !== null"
+            :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
+            @click="downloadTable"
+          />
+          <div style="position: relative; display: inline-flex">
             <v-btn variant="text" size="small" icon="mdi-filter" @click="openFilterDialog" />
             <div v-if="activeFilterCount > 0" class="filter-badge">
               {{ activeFilterCount }}
@@ -53,10 +53,10 @@
             color="default"
           />
         </div>
-        <div class="d-flex justify-center" style="grid-column: 2 / span 1">
-          <h4>{{ args.title ?? '' }}</h4>
+        <div class="table-toolbar-title">
+          <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
         </div>
-        <div class="d-flex justify-end" style="grid-column: 3 / span 1">
+        <div class="table-toolbar-toggles">
           <v-checkbox
             v-for="toggle in toggleFilters"
             :key="toggle.column"
@@ -2638,9 +2638,62 @@ export default defineComponent({
   font-size: 14px;
 }
 
+/* Toolbar above the table: buttons | title | toggle filters.
+   The side tracks share the free space so the title stays centred, but never
+   shrink below their content: the buttons stay on one line however narrow the
+   Streamlit column is, and the title gives way (ellipsis) instead. */
+.table-toolbar {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, max-content) minmax(min-content, 1fr);
+  align-items: center;
+  column-gap: 8px;
+}
+
+.table-toolbar-buttons {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.table-toolbar-title {
+  min-width: 0;
+  text-align: center;
+}
+
+.table-toolbar-title h4 {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.table-toolbar-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  column-gap: 8px;
+}
+
 .v-checkbox.v-input.toggle-filter,
 .toggle-filter .v-selection-control {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+}
+
+/* Vuetify sizes the control track minmax(0, 1fr), which reports a min-content
+   width of 0 and lets the label spill over the title */
+.v-input--horizontal.toggle-filter {
+  grid-template-columns: max-content minmax(min-content, 1fr) max-content;
+}
+
+/* When space is short, break a toggle label between words, never inside one */
+.toggle-filter .v-label {
+  min-width: min-content;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: normal;
 }
 
 .toggle-filter .v-label {
