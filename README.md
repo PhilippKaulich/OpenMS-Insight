@@ -20,6 +20,12 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Volcano plot component** for differential expression visualization with significance thresholds
 - **PCA component** for sample-level dimensionality reduction with per-group coloring and confidence ellipses
 - **Sequence view component** for peptide visualization with fragment ion matching and auto-zoom
+- **Deconvolved spectrum component** for charge-state deconvolution results: deconvolved masses, their annotated raw peaks per charge state, and sequence tag ladders
+- **Series plot component** for continuous curves (score densities, calibration curves, chromatogram overlays)
+- **3D plot component** drawing points as stems (e.g. isotope peaks across charge states) or as traces (e.g. the mass traces of a feature)
+- **Protein sequence view component** with matched fragment ions, tag coverage, truncations, modifications and internal fragments, linked to a fragment table
+- **Protein structure view component** (3Dmol.js) colouring a PDB or mmCIF structure by the fragment evidence of a sequence entry, with in-view upload and removal of structure files
+- **Batched reruns** (`defer_reruns()`) so a click across many linked components costs one script rerun
 - **Differential expression analysis** (`openms_insight.analysis`) - filtering, imputation, normalization, statistical testing and GO enrichment over Polars LazyFrames
 
 ## Installation
@@ -545,6 +551,116 @@ fragments = sequence_view.export_fragment_ions()  # matched ions only
 fragments = sequence_view.export_fragment_ions(include_unmatched=True)
 fragments.write_csv("fragment_ions.tsv", separator="\t")
 ```
+
+### DeconvolvedSpectrum
+
+Spectrum plot for charge-state deconvolution results. Each row of data is one spectrum, with list columns: the deconvolved masses and their intensities, the raw peaks, and for each mass the raw peaks assigned to it.
+
+```python
+from openms_insight import DeconvolvedSpectrum
+
+spectrum = DeconvolvedSpectrum(
+    cache_id="deconv_spectrum",
+    data=spectra,  # one row per scan, list columns
+    filters={"spectrum": "scan_idx"},
+    mass_identifier="mass",  # index into the selected spectrum's mass list
+    view="deconvolved",  # or "annotated", "ladder"
+)
+spectrum(key="spectrum", state_manager=state_manager)
+```
+
+**Views:**
+- `deconvolved`: the masses as sticks. Clicking one selects it.
+- `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
+- `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
+
+### SeriesPlot
+
+Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
+
+```python
+from openms_insight import SeriesPlot
+
+SeriesPlot(
+    cache_id="score_density",
+    data=densities,  # columns: x, y, kind
+    x_column="x",
+    y_column="y",
+    series_column="kind",
+    series_names={"target": "Target scores", "decoy": "Decoy scores"},
+    series_colors={"target": "green", "decoy": "red"},
+    x_label="Score",
+    y_label="Density",
+)(key="density", state_manager=state_manager)
+```
+
+### Plot3D
+
+Interactive 3D plot. `mode="stems"` draws every point as a vertical line from the floor (e.g. x = mass, y = charge, z = intensity); `mode="lines"` joins the points sharing a `trace_column` value (e.g. x = m/z, y = retention time, z = intensity). Data is tidy, or holds equal-length list columns with all points of one entity per row, which are spread into points after filtering.
+
+```python
+from openms_insight import Plot3D
+
+Plot3D(
+    cache_id="mass_signals",
+    data=peaks,  # columns: scan, mass_idx, kind, mass, charge, intensity
+    filters={"spectrum": "scan", "mass": "mass_idx"},
+    x_column="mass",
+    y_column="charge",
+    z_column="intensity",
+    series_column="kind",
+    series_colors={"Signal": "#3366CC", "Noise": "#DC3912"},
+)(key="signals", state_manager=state_manager)
+```
+
+### ProteinSequenceView
+
+Sequence view of a protein or peptide with its fragment and tag evidence: matched fragment ions (a/b/c/x/y/z), tag coverage, the selected tag, truncations, localized and ambiguous modifications and, with externally annotated fragments, internal fragments. A table below the grid lists the matched fragments. Residues, fragment rows and the masses of the spectrum are linked.
+
+```python
+from openms_insight import ProteinSequenceView
+
+ProteinSequenceView(
+    cache_id="sequence_view",
+    data=identifications,  # one row per sequence entry with its spectrum
+    filters={"protein": "hit_index"},
+    mass_column="masses",
+    mass_identifier="mass",
+    aa_identifier="aa",
+    fragment_identifier="fragment",  # selected fragment row, shared with other views
+)(key="sequence", state_manager=state_manager)
+```
+
+The expected columns are listed in `ProteinSequenceView.SEQUENCE_COLUMNS` and the class docstring. Pass `sequence=` (a dict with those columns) for one fixed sequence. `entry_title` and `observed_mass_label` name the entry in the header.
+
+### ProteinStructureView
+
+3D structure of a protein (PDB or mmCIF, drawn with 3Dmol.js), coloured by the fragment evidence of a sequence entry. It takes the same data as `ProteinSequenceView`, aligns the sequence to the structure's chains, and shares residue and fragment selection with a sequence view. Residues outside the entry's start..end positions are not shown.
+
+```python
+from openms_insight import ProteinStructureView
+
+view = ProteinStructureView(
+    cache_id="structure_view",
+    data=identifications,
+    filters={"protein": "hit_index"},
+    aa_identifier="aa",
+    fragment_identifier="fragment",
+)
+view.set_structure(
+    {
+        "status": "ok",
+        "format": "pdb",
+        "data": pdb_text,
+        "accession": "P60844",
+        "label": "AlphaFold DB model",
+    }
+)
+view.on_structure_action(handle_upload_or_remove)  # optional: upload/remove buttons
+view(key="structure", state_manager=state_manager)
+```
+
+The structure is given per render with `set_structure()`, since where it comes from is up to the app. With `on_structure_action(handler)`, the view offers buttons to upload a structure file and to remove an uploaded one. The handler receives `{"op": "upload", "accession", "name", "data"}` or `{"op": "remove", "accession"}` and returns True to rerun.
 
 ---
 
