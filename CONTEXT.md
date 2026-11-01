@@ -15,7 +15,7 @@ _Avoid_: expression matrix, intensity table, wide data
 
 **Feature**:
 The row identity of a quantification matrix — the analyte being quantified across
-samples, such as a protein, peptide or proteoform. Distinct from an OpenMS
+samples, such as a protein or peptide. Distinct from an OpenMS
 featureXML feature, which is a 2D isotopic peak cluster in a single run; when both
 senses appear together, name the file format explicitly.
 _Avoid_: analyte, entity, row

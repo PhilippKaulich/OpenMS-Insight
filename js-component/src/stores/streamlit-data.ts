@@ -12,6 +12,36 @@ import { Vector } from 'apache-arrow'
 import { useSelectionStore } from '@/stores/selection'
 import type { ComponentLayout, StreamlitData } from '@/types/component'
 
+/** An Arrow Vector, from this bundle's apache-arrow or another copy of it. */
+function isArrowVector(value: unknown): value is { length: number; get(index: number): unknown } {
+  if (value instanceof Vector) return true
+  if (value === null || typeof value !== 'object') return false
+  const candidate = value as { get?: unknown; length?: unknown; toArray?: unknown }
+  return (
+    typeof candidate.get === 'function' &&
+    typeof candidate.length === 'number' &&
+    typeof candidate.toArray === 'function'
+  )
+}
+
+/** JSON with sorted object keys, so that equal states give equal strings. */
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v
+  )
+}
+
+const COUNTER_KEYS = new Set(['counter', 'selection_counter', 'pagination_counter'])
+
+/** The selection values of a state, without its counters (stableStringify). */
+export function stateValues(state: Record<string, unknown>): string {
+  return stableStringify(
+    Object.fromEntries(Object.entries(state).filter(([key]) => !COUNTER_KEYS.has(key)))
+  )
+}
+
 export const useStreamlitDataStore = defineStore('streamlit-data', {
   state: () => ({
     renderData: null as RenderData | null,
@@ -22,6 +52,13 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
     annotations: null as { peak_id: number[]; highlight_color: string[]; annotation: string[] } | null,
     // Flag to request data from Python when cache is empty after page navigation
     requestData: false,
+    // The selection state Python sent last (stableStringify), to tell whether
+    // Vue's state holds anything Python does not know yet
+    lastPythonState: null as string | null,
+    // An action a view sends to Python once (e.g. a file the user chose), with
+    // a nonce Python tells repeats by: Streamlit returns the last value sent on
+    // every run
+    event: null as Record<string, unknown> | null,
   }),
 
   getters: {
@@ -69,6 +106,7 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       // all components see the correct counter value from Python. This prevents race conditions
       // where components with stale counters trigger spurious reruns that lose pagination state.
       if (pythonState) {
+        this.lastPythonState = stateValues(pythonState)
         // Support both new separate counters and legacy single counter
         const pythonSelectionCounter = (pythonState.selection_counter as number) ?? (pythonState.counter as number) ?? 0
         const pythonPaginationCounter = (pythonState.pagination_counter as number) ?? (pythonState.counter as number) ?? 0
@@ -116,6 +154,23 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
             }
           }
         })
+      }
+
+      // Data of the hash already held: sent again because Python could not
+      // know whether the earlier message arrived (a rerun drops undelivered ones)
+      const alreadyHeld =
+        dataChanged && !!newHash && newHash === this.hash &&
+        Object.keys(this.dataForDrawing).length > 0
+      if (alreadyHeld) {
+        if (!this.renderData) {
+          this.renderData = newData
+        } else if (newData.args.components) {
+          this.renderData.args.components = newData.args.components
+        }
+        for (const [key, value] of Object.entries(newData.args as StreamlitData)) {
+          if (!(value instanceof ArrowTable)) this.dataForDrawing[key] = value
+        }
+        return
       }
 
       // Only process data if Python says it changed (optimization to avoid re-parsing same data)
@@ -175,7 +230,10 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       } else if (!dataChanged) {
         // Data unchanged - Python only sent hash and state, keep cached data
         // But first check if we actually have cached data (may be empty after page navigation)
-        const hasCache = Object.keys(this.dataForDrawing).length > 0
+        // A hash other than the one of the data held means data sent for it was
+        // lost (e.g. its message was dropped when a rerun started): ask again
+        const hasCache =
+          Object.keys(this.dataForDrawing).length > 0 && (!newHash || newHash === this.hash)
 
         console.log('[StreamlitDataStore] Using cached data branch:', {
           timestamp: Date.now(),
@@ -201,7 +259,8 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
             this.dataForDrawing._plotConfig = (newData.args as any)._plotConfig
           }
         } else {
-          // Cache is empty (e.g., after page navigation) - request data from Python
+          // Cache is empty (e.g., after page navigation) or holds older data -
+          // request data from Python
           console.warn('[StreamlitDataStore] Cache miss - requesting data from Python')
           this.requestData = true
           // Don't update renderData - wait for Python to resend with actual data
@@ -292,8 +351,9 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       if (typeof value === 'bigint') {
         return Number(value)
       }
-      // Arrays are stored as vectors
-      if (value instanceof Vector) {
+      // Arrays are stored as vectors. streamlit-component-lib bundles its own
+      // apache-arrow, whose Vector class is not this one: recognise both.
+      if (isArrowVector(value)) {
         const result: unknown[] = []
         for (let i = 0; i < value.length; i++) {
           result.push(this.parseArrowValue(value.get(i)))
@@ -316,6 +376,13 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
      */
     clearRequestData() {
       this.requestData = false
+    },
+
+    /**
+     * Send an action to Python with the selection state (applied once).
+     */
+    sendEvent(event: Record<string, unknown>) {
+      this.event = { ...event, nonce: `${Date.now()}-${Math.random()}` }
     },
   },
 })

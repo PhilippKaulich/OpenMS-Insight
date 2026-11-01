@@ -1,5 +1,6 @@
 """State management for cross-component selection synchronization."""
 
+import contextvars
 import logging
 import os
 from typing import Any, Optional
@@ -25,6 +26,19 @@ def get_default_state_manager() -> "StateManager":
     if _default_state_manager is None:
         _default_state_manager = StateManager()
     return _default_state_manager
+
+
+# The StateManager of the component being rendered (set by render_component).
+# A context variable, not an attribute of the component, so a component object
+# shared between sessions cannot write into another session's state.
+_render_state_manager: contextvars.ContextVar[Optional["StateManager"]] = (
+    contextvars.ContextVar("openms_insight_render_state_manager", default=None)
+)
+
+
+def get_render_state_manager() -> "StateManager":
+    """StateManager of the render in progress, else the default one."""
+    return _render_state_manager.get() or get_default_state_manager()
 
 
 def reset_default_state_manager() -> None:

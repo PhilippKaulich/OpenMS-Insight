@@ -24,6 +24,10 @@ export interface PlotlyScatterOptions {
   getData: () => Record<string, unknown>[]
   /** Optional title for SVG export filename */
   title?: ComputedRef<string | undefined>
+  /** Optional SVG export filename (default: the title) */
+  svgFilename?: ComputedRef<string | undefined>
+  /** Whether the mouse wheel zooms the plot (default true; else it scrolls the page) */
+  scrollZoom?: ComputedRef<boolean | undefined>
   /** Width threshold for "narrow" mode (default 600) */
   narrowThreshold?: number
 }
@@ -52,7 +56,8 @@ export interface PlotlyScatterReturn {
 }
 
 export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterReturn {
-  const { id, interactivity, getData, title, narrowThreshold = 600 } = options
+  const { id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600 } =
+    options
 
   const streamlitDataStore = useStreamlitDataStore()
   const selectionStore = useSelectionStore()
@@ -106,7 +111,7 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
         icon: Plotly.Icons.camera,
         click: (plotlyElement: unknown) => {
           Plotly.downloadImage(plotlyElement as Plotly.PlotlyHTMLElement, {
-            filename: title?.value || 'plot',
+            filename: svgFilename?.value || title?.value || 'plot',
             height: 400,
             width: 1200,
             format: 'svg',
@@ -119,7 +124,7 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
     return {
       modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'] as Plotly.ModeBarDefaultButtons[],
       modeBarButtonsToAdd: buttons,
-      scrollZoom: true,
+      scrollZoom: scrollZoom?.value ?? true,
       responsive: true,
     }
   }

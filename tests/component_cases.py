@@ -14,9 +14,13 @@ for ClusteredHeatmap — under CI on every supported Python.
 
 from openms_insight import (
     ClusteredHeatmap,
+    DeconvolvedSpectrum,
     Heatmap,
     LinePlot,
     PCAPlot,
+    Plot3D,
+    ProteinSequenceView,
+    SeriesPlot,
     Table,
     VolcanoPlot,
 )
@@ -56,6 +60,37 @@ COMPONENT_CASES = [
         "sample_quantification_data_complete",
         {"id_col": "feature"},
         {"metadata": "sample_quantification_metadata"},
+    ),
+    (
+        SeriesPlot,
+        "sample_series_data",
+        {"x_column": "Score", "y_column": "Density", "series_column": "kind"},
+        {},
+    ),
+    (
+        Plot3D,
+        "sample_plot3d_data",
+        {
+            "x_column": "mass",
+            "y_column": "charge",
+            "z_column": "intensity",
+            "series_column": "kind",
+            "filters": {"scan": "scan_idx", "mass": "mass_idx"},
+            "filter_defaults": {"mass": -1},
+        },
+        {},
+    ),
+    (
+        DeconvolvedSpectrum,
+        "sample_deconvolved_spectra",
+        {"filters": {"scan": "scan_idx"}, "view": "annotated"},
+        {},
+    ),
+    (
+        ProteinSequenceView,
+        "sample_protein_sequence_data",
+        {"filters": {"protein": "hit_index"}},
+        {},
     ),
 ]
 

@@ -13,6 +13,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    // One stylesheet for every view, as before the views became separate
+    // chunks: some views rely on styles another view's component brings
+    cssCodeSplit: false,
     rollupOptions: {
       output: {
         entryFileNames: 'assets/[name].js',

@@ -221,7 +221,7 @@ export default defineComponent({
     /**
      * Generate stick format y values from raw data.
      * Each data point (y) becomes triplet: [-10000000, y, -10000000]
-     * Using large negative value (matching FLASHApp) to avoid visual artifacts.
+     * Using large negative value to avoid visual artifacts.
      */
     yValuesStick(): number[] {
       if (!this.isDataReady || !this.plotData) return []
@@ -274,7 +274,7 @@ export default defineComponent({
 
       if (maxY === 0) return [0, 1]
 
-      // Add headroom for annotations (1.8x like FLASHApp)
+      // Add headroom for annotations (1.8x)
       return [0, maxY * 1.8]
     },
 

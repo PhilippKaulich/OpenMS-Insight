@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openms-insight"
-version = "0.3.1"
+version = "0.4.0.dev0"
 description = "Interactive visualization components for mass spectrometry data in Streamlit"
 readme = "README.md"
 license = "BSD-3-Clause"

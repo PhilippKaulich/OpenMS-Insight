@@ -20,19 +20,26 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, watch, toRaw, type Component } from 'vue'
-import { useStreamlitDataStore } from './stores/streamlit-data'
+import { defineAsyncComponent, defineComponent, watch, toRaw, type Component } from 'vue'
+import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
-import TabulatorTable from './components/tabulator/TabulatorTable.vue'
-import PlotlyLineplot from './components/plotly/PlotlyLineplot.vue'
-import PlotlyHeatmap from './components/plotly/PlotlyHeatmap.vue'
-import PlotlyClusteredHeatmap from './components/plotly/PlotlyClusteredHeatmap.vue'
-import PlotlyMirrorPlot from './components/plotly/PlotlyMirrorPlot.vue'
-import PlotlyVolcano from './components/plotly/PlotlyVolcano.vue'
-import PlotlyPca from './components/plotly/PlotlyPca.vue'
-import SequenceView from './components/sequence/SequenceView.vue'
+// Each view is its own chunk, so a page with several views does not load and
+// run Plotly in every table's frame
+const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
+const PlotlyLineplot = defineAsyncComponent(() => import('./components/plotly/PlotlyLineplot.vue'))
+const PlotlyHeatmap = defineAsyncComponent(() => import('./components/plotly/PlotlyHeatmap.vue'))
+const PlotlyClusteredHeatmap = defineAsyncComponent(() => import('./components/plotly/PlotlyClusteredHeatmap.vue'))
+const PlotlyMirrorPlot = defineAsyncComponent(() => import('./components/plotly/PlotlyMirrorPlot.vue'))
+const PlotlyVolcano = defineAsyncComponent(() => import('./components/plotly/PlotlyVolcano.vue'))
+const PlotlyPca = defineAsyncComponent(() => import('./components/plotly/PlotlyPca.vue'))
+const PlotlySeries = defineAsyncComponent(() => import('./components/plotly/PlotlySeries.vue'))
+const Plotly3D = defineAsyncComponent(() => import('./components/plotly/Plotly3D.vue'))
+const PlotlyDeconvolvedSpectrum = defineAsyncComponent(() => import('./components/plotly/PlotlyDeconvolvedSpectrum.vue'))
+const SequenceView = defineAsyncComponent(() => import('./components/sequence/SequenceView.vue'))
+const ProteinSequenceView = defineAsyncComponent(() => import('./components/protein/ProteinSequenceView.vue'))
+const ProteinStructureView = defineAsyncComponent(() => import('./components/protein/ProteinStructureView.vue'))
 
 export default defineComponent({
   name: 'App',
@@ -44,7 +51,12 @@ export default defineComponent({
     PlotlyMirrorPlot,
     PlotlyVolcano,
     PlotlyPca,
+    PlotlySeries,
+    Plotly3D,
+    PlotlyDeconvolvedSpectrum,
     SequenceView,
+    ProteinSequenceView,
+    ProteinStructureView,
   },
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
@@ -57,6 +69,8 @@ export default defineComponent({
     let lastSentCounter: number | undefined = undefined
     let lastSentHash: string | undefined = undefined
     let lastSentAnnotationsHash: string | undefined = undefined
+    let lastSentRequestedData = false
+    let dataRequests = 0
 
     // Debounce utility for selection state updates
     // This prevents rapid clicks from overwhelming Streamlit with reruns
@@ -73,13 +87,21 @@ export default defineComponent({
         : undefined
 
       // Avoid duplicate sends for same counter+hash+annotations combination
-      if (currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) {
+      const event = streamlitDataStore.event
+      if (event === null && currentCounter === lastSentCounter && currentHash === lastSentHash && annotationsHash === lastSentAnnotationsHash) {
         console.log('[App] sendStateToStreamlit: SKIPPED (duplicate)', {
           timestamp: Date.now(),
           counter: currentCounter,
         })
         return
       }
+      // A new data hash alone is nothing new for Python, which sent that data.
+      // After a data request it is: Streamlit keeps returning the last value
+      // sent, so a value still carrying the request would ask on every run.
+      const reportsNothingNew =
+        annotationsHash === lastSentAnnotationsHash &&
+        !streamlitDataStore.requestData &&
+        !lastSentRequestedData
       lastSentCounter = currentCounter
       lastSentHash = currentHash ?? undefined
       lastSentAnnotationsHash = annotationsHash
@@ -87,6 +109,18 @@ export default defineComponent({
       // Deep clone to remove Vue reactivity proxies before sending to Streamlit
       // This prevents "Proxy object could not be cloned" errors
       const plainState = JSON.parse(JSON.stringify(selectionStore.$state))
+
+      // The selection values are exactly what Python just sent (its counter
+      // moved because Python's did, a view wrote back a value it already had, or
+      // new data arrived): sending them back would only rerun the script, once
+      // per component on the page.
+      if (event === null && reportsNothingNew && stateValues(plainState) === streamlitDataStore.lastPythonState) {
+        console.log('[App] sendStateToStreamlit: SKIPPED (state is Python\'s)', {
+          timestamp: Date.now(),
+          counter: currentCounter,
+        })
+        return
+      }
 
       // Find pagination identifier and value for logging
       const paginationIdentifier = Object.keys(plainState).find(k =>
@@ -111,20 +145,34 @@ export default defineComponent({
         plainState._annotations = JSON.parse(JSON.stringify(currentAnnotations))
       }
       // Signal Python if we need data (cache miss after page navigation)
+      lastSentRequestedData = streamlitDataStore.requestData
       if (streamlitDataStore.requestData) {
-        plainState._requestData = true
+        // A new value per request, so Python can tell it from the kept one
+        plainState._requestData = ++dataRequests
         streamlitDataStore.clearRequestData()
+      }
+      if (event !== null) {
+        plainState._event = JSON.parse(JSON.stringify(event))
+        streamlitDataStore.event = null
       }
       Streamlit.setComponentValue(plainState)
       console.log('[App] setComponentValue CALLED')
     }
 
-    // Debounced version for selection changes - batches rapid clicks
+    // Debounced version for selection changes - batches rapid clicks. A change
+    // after a quiet period is sent at once (a single click should not wait for
+    // the window); changes following it within the window are batched.
+    let lastDebouncedSend = 0
     const debouncedSendState = () => {
       if (sendStateTimeout) {
         clearTimeout(sendStateTimeout)
+      } else if (Date.now() - lastDebouncedSend >= DEBOUNCE_MS) {
+        lastDebouncedSend = Date.now()
+        sendStateToStreamlit()
+        return
       }
       sendStateTimeout = setTimeout(() => {
+        lastDebouncedSend = Date.now()
         sendStateToStreamlit()
         sendStateTimeout = null
       }, DEBOUNCE_MS)
@@ -155,6 +203,14 @@ export default defineComponent({
     // RequestData needs immediate response - flush any pending debounced state first
     watch(() => streamlitDataStore.requestData, (newVal) => {
       if (newVal) {
+        flushPendingState()
+        sendStateToStreamlit()
+      }
+    })
+
+    // A view's action goes out at once, with any pending selection
+    watch(() => streamlitDataStore.event, (newVal) => {
+      if (newVal !== null) {
         flushPendingState()
         sendStateToStreamlit()
       }
@@ -212,8 +268,18 @@ export default defineComponent({
           return PlotlyVolcano
         case 'PlotlyPca':
           return PlotlyPca
+        case 'PlotlySeries':
+          return PlotlySeries
+        case 'Plotly3D':
+          return Plotly3D
+        case 'PlotlyDeconvolvedSpectrum':
+          return PlotlyDeconvolvedSpectrum
         case 'SequenceView':
           return SequenceView
+        case 'ProteinSequenceView':
+          return ProteinSequenceView
+        case 'ProteinStructureView':
+          return ProteinStructureView
         default:
           console.warn(`Unknown component type: ${componentType}`)
           return null

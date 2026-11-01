@@ -46,6 +46,11 @@ class BaseComponent(ABC):
 
     _component_type: str = ""
 
+    # Rows per parquet row group in the cache, or None for the writer's default.
+    # Components that keep large list columns (one row per spectrum) set a small
+    # value so that filtering to one row reads one small row group.
+    _parquet_row_group_size: int | None = None
+
     def __init__(
         self,
         cache_id: str,
@@ -56,6 +61,7 @@ class BaseComponent(ABC):
         interactivity: dict[str, str] | None = None,
         cache_path: str = ".",
         regenerate_cache: bool = False,
+        float_precision: str = "float32",
         **kwargs,
     ):
         """
@@ -102,6 +108,11 @@ class BaseComponent(ABC):
                 When user clicks/selects, sets 'my_selection' to the clicked
                 row's mass value.
             cache_path: Base path for cache storage. Default "." (current dir).
+            float_precision: "float32" (default) stores floating point columns as
+                Float32, which halves what is sent to the browser and is plenty
+                for plotting. "float64" keeps full precision, for data whose
+                values are shown or compared at more than ~7 significant digits
+                (e.g. intact protein masses to four decimals).
             regenerate_cache: If True, rebuild the cache even when one matching this
                 configuration already exists. Needed when the data changed but
                 cache_id and configuration did not.
@@ -111,6 +122,11 @@ class BaseComponent(ABC):
         if data is not None and data_path is not None:
             raise ValueError("Provide either 'data' or 'data_path', not both")
 
+        if float_precision not in ("float32", "float64"):
+            raise ValueError(
+                f"float_precision must be 'float32' or 'float64', got {float_precision!r}"
+            )
+        self._float_precision = float_precision
         self._cache_id = cache_id
         self._cache_dir = get_cache_dir(cache_path, cache_id)
         self._preprocessed_data: dict[str, Any] = {}
@@ -195,6 +211,7 @@ class BaseComponent(ABC):
                         # re-apply the guard and decide otherwise, or regenerate_cache
                         # would silently do nothing on this path.
                         regenerate_cache=True,
+                        float_precision=float_precision,
                         **kwargs,
                     )
                     self._raw_data = None
@@ -266,6 +283,9 @@ class BaseComponent(ABC):
             "interactivity": self._interactivity,
             **self._get_cache_config(),
         }
+        # Only when changed, so default caches keep the hash they always had
+        if getattr(self, "_float_precision", "float32") != "float32":
+            config_dict["float_precision"] = self._float_precision
         config_str = json.dumps(config_dict, sort_keys=True, default=str)
         return hashlib.sha256(config_str.encode()).hexdigest()
 
@@ -442,9 +462,12 @@ class BaseComponent(ABC):
                 else:
                     # Apply streaming-safe optimization (Float64→Float32 only)
                     # Int64 bounds checking would require collect(), breaking streaming
-                    value = optimize_for_transfer_lazy(value)
+                    if self._float_precision == "float32":
+                        value = optimize_for_transfer_lazy(value)
                     with atomic_write(filepath) as tmp:
-                        value.sink_parquet(tmp, compression="zstd")
+                        value.sink_parquet(
+                            tmp, compression="zstd", **self._row_group_kwargs()
+                        )
                     manifest["data_files"][key] = filename
             elif isinstance(value, pl.DataFrame):
                 filename = f"{key}.parquet"
@@ -455,9 +478,13 @@ class BaseComponent(ABC):
                     manifest["data_files"][key] = filename
                 else:
                     # Full optimization including Int64→Int32 with bounds checking
-                    value = optimize_for_transfer(value)
+                    value = optimize_for_transfer(
+                        value, downcast_floats=self._float_precision == "float32"
+                    )
                     with atomic_write(filepath) as tmp:
-                        value.write_parquet(tmp, compression="zstd")
+                        value.write_parquet(
+                            tmp, compression="zstd", **self._row_group_kwargs()
+                        )
                     manifest["data_files"][key] = filename
             elif self._is_json_serializable(value):
                 manifest["data_values"][key] = value
@@ -482,6 +509,12 @@ class BaseComponent(ABC):
             return True
         except (TypeError, ValueError):
             return False
+
+    def _row_group_kwargs(self) -> dict[str, int]:
+        """Parquet writer arguments for the cache's row group size, if one is set."""
+        if self._parquet_row_group_size is None:
+            return {}
+        return {"row_group_size": self._parquet_row_group_size}
 
     def _get_row_group_size(self) -> int:
         """
@@ -538,6 +571,30 @@ class BaseComponent(ABC):
             Dict with component configuration for Vue
         """
         pass
+
+    def _get_render_key(self) -> str | None:
+        """
+        Identity of data the component is given per render rather than read
+        from its cache (None: there is none).
+
+        The payload sent to Vue is cached per selection state, so a component
+        whose ``_prepare_vue_data`` also depends on something set per render
+        returns a key here that changes with it; a changed key makes the
+        cached payload stale.
+        """
+        return None
+
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        """
+        Apply an action the view sent (once per action).
+
+        Args:
+            event: The action, as the view sent it (with its ``nonce``).
+
+        Returns:
+            True if the page should rerun to show its effect.
+        """
+        return False
 
     def get_filters_mapping(self) -> dict[str, str]:
         """Return the filters identifier-to-column mapping."""

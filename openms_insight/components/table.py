@@ -119,7 +119,16 @@ class Table(BaseComponent):
         pagination: bool = True,
         page_size: int = 100,
         pagination_identifier: str | None = None,
+        toggle_filters: list[dict[str, Any]] | None = None,
+        range_filters: dict[str, list[str]] | None = None,
+        on_select: dict[str, Any] | None = None,
+        reclick: str = "keep",
+        default_row_selects: bool = True,
+        scroll_position: str = "center",
         hidden_columns: list[str] | None = None,
+        column_menu: bool = True,
+        reset_sort: bool = False,
+        reset_sort_on: list[str] | None = None,
         **kwargs,
     ):
         """
@@ -162,16 +171,56 @@ class Table(BaseComponent):
             pagination: Enable pagination for large tables (default: True).
                 When enabled, uses server-side pagination where only the current
                 page of data is sent to the frontend, dramatically reducing browser
-                memory usage for large datasets.
+                memory usage for large datasets. Without it every row is sent,
+                and the browser sorts, filters and exports them itself.
             page_size: Number of rows per page when pagination is enabled (default: 100)
             pagination_identifier: State key for storing pagination state (page, sort,
                 filters). Default: "{cache_id}_page". Used by StateManager to track
                 pagination state across reruns.
+            toggle_filters: Checkboxes shown in the title row, each restricting the
+                table to rows where a boolean column is true. Each entry is a dict:
+                - label: Checkbox label
+                - column: Boolean column the checkbox filters on
+                - default: Initial state (default: True)
+                - group_column: Optional column. When ticking the box hides the
+                  selected row, the selection moves to the first remaining row
+                  sharing its value in this column (e.g. the best hit of the
+                  same spectrum) instead of to the first row of the table.
+                - color: Optional checkbox colour (default: the theme's primary)
+                Example: [{'label': 'Best per spectrum', 'column': 'is_best',
+                'group_column': 'scan'}]
+            range_filters: Mapping of identifier names to [start_column, end_column]
+                pairs. While the identifier has a selection, only rows with
+                start_column <= value <= end_column are shown; without one the
+                table is not restricted. Example: {'residue': ['start', 'end']}
+            on_select: Selections to set whenever the user clicks a row, in addition
+                to those in ``interactivity``. A value of None clears the
+                identifier. Example: {'peak': None} clears a dependent selection.
+                Not applied to the automatic default-row selection.
+            reclick: What clicking the highlighted row again does: "keep" (the
+                default) keeps it selected and highlighted, "unhighlight" only
+                removes the highlight (the selection stays until another row is
+                clicked), "deselect" clears the ``interactivity`` selections. With
+                "deselect" the default row is not selected again until the
+                table's filter values change.
+            default_row_selects: If False, the default row is only highlighted
+                while nothing is selected, and no selection is set for it.
+            scroll_position: Where a row selected from elsewhere is scrolled to:
+                "center" (the default), "top", "bottom" or "nearest". Other than
+                "center", a clicked row that is cut off is scrolled there too.
             hidden_columns: Fields of ``column_definitions`` to hide until the
                 viewer turns them on in the column menu. Use it for optional
                 columns that most viewers do not need. A column definition with
                 ``"visible": False`` is treated the same way. The viewer's
                 choice is kept in their browser, per table.
+            column_menu: Show the toolbar button that lists the columns to show
+                or hide.
+            reset_sort: Without pagination, sort new rows (e.g. after a filter
+                value changed) by ``initial_sort`` again instead of keeping the
+                viewer's sort.
+            reset_sort_on: Identifiers whose selection, when it changes, sorts
+                the rows by ``initial_sort`` again, whether or not the rows
+                change (e.g. a table of the tags of the selected protein).
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -185,8 +234,26 @@ class Table(BaseComponent):
         self._page_size = page_size
         # Display-only, so not part of the cache config
         self._hidden_columns = list(hidden_columns or [])
+        self._column_menu = bool(column_menu)
+        self._reset_sort = bool(reset_sort)
+        self._reset_sort_on = list(reset_sort_on or [])
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
+        self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
+        self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
+        self._on_select = dict(on_select) if on_select else {}
+        if reclick not in ("keep", "unhighlight", "deselect"):
+            raise ValueError(
+                f"reclick must be 'keep', 'unhighlight' or 'deselect', not {reclick!r}"
+            )
+        self._reclick = reclick
+        self._default_row_selects = bool(default_row_selects)
+        if scroll_position not in ("center", "top", "bottom", "nearest"):
+            raise ValueError(
+                "scroll_position must be 'center', 'top', 'bottom' or 'nearest', "
+                f"not {scroll_position!r}"
+            )
+        self._scroll_position = scroll_position
 
         super().__init__(
             cache_id=cache_id,
@@ -208,8 +275,37 @@ class Table(BaseComponent):
             pagination=pagination,
             page_size=page_size,
             pagination_identifier=self._pagination_identifier,
+            toggle_filters=toggle_filters,
+            range_filters=range_filters,
+            on_select=on_select,
+            reclick=reclick,
+            default_row_selects=default_row_selects,
+            scroll_position=scroll_position,
+            column_menu=column_menu,
+            reset_sort=reset_sort,
+            reset_sort_on=reset_sort_on,
             **kwargs,
         )
+
+    @staticmethod
+    def _normalize_toggle_filters(
+        toggle_filters: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """Validate toggle filter entries and fill in their defaults."""
+        normalized = []
+        for entry in toggle_filters or []:
+            if "column" not in entry:
+                raise ValueError(f"toggle_filters entry needs a 'column': {entry}")
+            normalized.append(
+                {
+                    "label": entry.get("label", entry["column"]),
+                    "column": entry["column"],
+                    "default": bool(entry.get("default", True)),
+                    "group_column": entry.get("group_column"),
+                    **({"color": entry["color"]} if entry.get("color") else {}),
+                }
+            )
+        return normalized
 
     def _get_cache_config(self) -> dict[str, Any]:
         """
@@ -229,6 +325,23 @@ class Table(BaseComponent):
             "pagination": self._pagination,
             "page_size": self._page_size,
             "pagination_identifier": self._pagination_identifier,
+            # Only present when used, so tables that do not use them keep the
+            # configuration hash (and with it the cache) they had before.
+            **(
+                {"toggle_filters": self._toggle_filters} if self._toggle_filters else {}
+            ),
+            **({"range_filters": self._range_filters} if self._range_filters else {}),
+            **({"on_select": self._on_select} if self._on_select else {}),
+            **({"reclick": self._reclick} if self._reclick != "keep" else {}),
+            **({"default_row_selects": False} if not self._default_row_selects else {}),
+            **(
+                {"scroll_position": self._scroll_position}
+                if self._scroll_position != "center"
+                else {}
+            ),
+            **({"column_menu": False} if not self._column_menu else {}),
+            **({"reset_sort": True} if self._reset_sort else {}),
+            **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -245,6 +358,28 @@ class Table(BaseComponent):
         self._pagination_identifier = config.get(
             "pagination_identifier", f"{self._cache_id}_page"
         )
+        self._toggle_filters = config.get("toggle_filters", [])
+        self._range_filters = config.get("range_filters", {})
+        self._on_select = config.get("on_select", {})
+        self._reclick = config.get("reclick", "keep")
+        self._default_row_selects = config.get("default_row_selects", True)
+        self._scroll_position = config.get("scroll_position", "center")
+        self._column_menu = config.get("column_menu", True)
+        self._reset_sort = config.get("reset_sort", False)
+        self._reset_sort_on = config.get("reset_sort_on") or []
+        # These are passed on to Vue explicitly; keep them out of the extra options
+        for key in (
+            "toggle_filters",
+            "range_filters",
+            "on_select",
+            "reclick",
+            "default_row_selects",
+            "scroll_position",
+            "column_menu",
+            "reset_sort",
+            "reset_sort_on",
+        ):
+            self._config.pop(key, None)
 
     def get_state_dependencies(self) -> list[str]:
         """
@@ -259,11 +394,25 @@ class Table(BaseComponent):
             List of state identifier keys
         """
         deps = list(self._filters.keys()) if self._filters else []
+        deps.extend(k for k in self._range_filters if k not in deps)
         deps.append(self._pagination_identifier)
         # Include interactivity identifiers for page navigation
         if self._interactivity:
             deps.extend(self._interactivity.keys())
         return deps
+
+    def auto_selection_scope(self, state: dict[str, Any]) -> tuple | None:
+        """
+        What the default row is selected for: the table and its filter values.
+
+        Only with reclick="deselect" (else None, and the default row is selected
+        whenever nothing is). A row the user deselected is then not selected again
+        until the scope changes, e.g. the table is filtered to another spectrum.
+        """
+        if self._reclick != "deselect":
+            return None
+        identifiers = [*self._filters, *self._range_filters]
+        return (self._cache_id, *(repr(state.get(i)) for i in identifiers))
 
     def get_initial_selection(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """
@@ -289,7 +438,11 @@ class Table(BaseComponent):
             or None if no initial selection should be set.
         """
         # Skip if no interactivity or default_row disabled
-        if not self._interactivity or self._default_row < 0:
+        if (
+            not self._interactivity
+            or self._default_row < 0
+            or not self._default_row_selects
+        ):
             return None
 
         # Skip if selection already exists for ANY interactivity identifier
@@ -313,6 +466,9 @@ class Table(BaseComponent):
         # Get first page data and extract default row values
         try:
             vue_data = self._prepare_vue_data(state)
+            if not self._pagination:
+                # tableData holds the rows unsorted; the browser sorts them
+                return vue_data.get("_auto_selection") or None
             table_data = vue_data.get("tableData")
             if table_data is None or len(table_data) == 0:
                 return None
@@ -351,10 +507,11 @@ class Table(BaseComponent):
         # Sort by filter columns for efficient predicate pushdown.
         # This clusters identical filter values together, enabling Polars
         # to skip row groups that don't contain the target value when
-        # filtering by selection state.
+        # filtering by selection state. Stable, so the rows of one filter value
+        # keep their order (sorting them again keeps that order on ties).
         if self._filters:
             sort_columns = list(self._filters.values())
-            data = data.sort(sort_columns)
+            data = data.sort(sort_columns, maintain_order=True)
 
         # Collect schema for auto-generating column definitions if needed
         schema = data.collect_schema()
@@ -543,11 +700,14 @@ class Table(BaseComponent):
         if not self._column_definitions:
             return None
 
-        columns_to_select = [
-            col_def["field"]
-            for col_def in self._column_definitions
-            if "field" in col_def
-        ]
+        # Once per field: a field may be shown in more than one column
+        columns_to_select = list(
+            dict.fromkeys(
+                col_def["field"]
+                for col_def in self._column_definitions
+                if "field" in col_def
+            )
+        )
         # Always include index field for row identification
         if self._index_field and self._index_field not in columns_to_select:
             columns_to_select.append(self._index_field)
@@ -653,10 +813,16 @@ class Table(BaseComponent):
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
 
+        data = self._apply_range_filters(data, state)
+
         # Get pagination state
         pagination_state = state.get(self._pagination_identifier)
         if pagination_state is None:
             pagination_state = {}
+
+        # Rows before the toggle filters, for moving a selection a toggle hid
+        # to another row of the same group
+        untoggled_data = data
 
         page = pagination_state.get("page", 1)
         page_size = pagination_state.get("page_size", self._page_size)
@@ -666,7 +832,12 @@ class Table(BaseComponent):
         go_to_request = pagination_state.get("go_to_request")
         download_request = pagination_state.get("download_request")
 
+        data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(data, column_filters)
+        # Without pagination Tabulator sorts the rows itself, starting each sort
+        # from the order they arrive in (it keeps that order on ties), so they
+        # are sent unsorted
+        unsorted_data = data
         data = self._apply_sort(data, sort_column, sort_dir)
 
         # Full-table CSV export: every row that passes the current filters, in the
@@ -684,6 +855,9 @@ class Table(BaseComponent):
 
         # Get total row count (after filters, before pagination)
         total_rows = data.select(pl.len()).collect().item()
+        if not self._pagination:
+            # Every row in one page; Tabulator sorts and filters them itself
+            page, page_size = 1, max(total_rows, 1)
         total_pages = max(1, (total_rows + page_size - 1) // page_size)
 
         # Handle go-to request (server-side search for row by field value)
@@ -763,6 +937,8 @@ class Table(BaseComponent):
                 "sort_dir": sort_dir,
                 "column_filters_json": json.dumps(column_filters, sort_keys=True),
             }
+            if self._toggle_filters:
+                current_sort_filter["toggles"] = self._toggle_states(pagination_state)
 
             # DETECT what changed by comparing current vs previous
             selection_changed = current_selections != last_selections
@@ -849,11 +1025,7 @@ class Table(BaseComponent):
                             target_page = (row_num // page_size) + 1
                             if target_page != page:
                                 # Update pagination state directly (same as Vue would)
-                                from openms_insight.core.state import (
-                                    get_default_state_manager,
-                                )
-
-                                state_manager = get_default_state_manager()
+                                state_manager = self._active_state_manager()
                                 updated_pagination = {
                                     **pagination_state,
                                     "page": target_page,
@@ -868,19 +1040,26 @@ class Table(BaseComponent):
                             # ROW NOT FOUND - it was filtered out
                             # Update selection to first row's value AND set page to 1
                             if sort_filter_changed and not selection_changed:
-                                first_row_result = (
-                                    data.select(pl.col(nav_column)).head(1).collect()
+                                first_row_result = self._group_replacement_row(
+                                    untoggled_data,
+                                    data,
+                                    nav_column,
+                                    selected_value,
+                                    last_sort_filter.get("toggles"),
+                                    current_sort_filter.get("toggles"),
                                 )
+                                if first_row_result is None:
+                                    first_row_result = (
+                                        data.select(pl.col(nav_column))
+                                        .head(1)
+                                        .collect()
+                                    )
                                 if len(first_row_result) > 0:
                                     first_value = first_row_result[nav_column][0]
                                     if hasattr(first_value, "item"):
                                         first_value = first_value.item()
 
-                                    from openms_insight.core.state import (
-                                        get_default_state_manager,
-                                    )
-
-                                    state_manager = get_default_state_manager()
+                                    state_manager = self._active_state_manager()
 
                                     # Update selection to first row
                                     state_manager.set_selection(
@@ -904,9 +1083,21 @@ class Table(BaseComponent):
         # This provides the first row's values for interactivity columns
         # so downstream components can receive initial data when filters change
         auto_selection: dict[str, Any] = {}
-        if self._interactivity and total_rows > 0:
-            # Get the first row of sorted/filtered data
-            first_row = data.head(1).collect()
+        # default_row=-1: nothing is selected until the user clicks a row
+        if (
+            self._interactivity
+            and total_rows > 0
+            and self._default_row >= 0
+            and self._default_row_selects
+        ):
+            # Get the first row of sorted/filtered data. Without pagination the
+            # browser shows every row, sorted, and highlights default_row.
+            if self._pagination:
+                first_row = data.head(1).collect()
+            else:
+                first_row = data.slice(
+                    min(self._default_row, total_rows - 1), 1
+                ).collect()
             if first_row.height > 0:
                 for identifier, column in self._interactivity.items():
                     if column in first_row.columns:
@@ -918,10 +1109,17 @@ class Table(BaseComponent):
 
         # Slice to current page
         offset = (page - 1) * page_size
-        df_polars = data.slice(offset, page_size).collect()
+        if self._pagination:
+            df_polars = data.slice(offset, page_size).collect()
+        else:
+            df_polars = project(unsorted_data).collect()
 
         # Compute hash for change detection
         data_hash = compute_dataframe_hash(df_polars)
+        if download_payload is not None:
+            # A view that holds this page already is only sent data with a new
+            # hash, and the export has to reach it
+            data_hash = f"{data_hash}-download-{download_request}"
 
         # Build result
         result: dict[str, Any] = {
@@ -934,6 +1132,11 @@ class Table(BaseComponent):
                 "total_pages": total_pages,
                 "sort_column": sort_column,
                 "sort_dir": sort_dir,
+                **(
+                    {"toggles": self._toggle_states(pagination_state)}
+                    if self._toggle_filters
+                    else {}
+                ),
             },
             "_auto_selection": auto_selection,
         }
@@ -954,6 +1157,107 @@ class Table(BaseComponent):
             f"[Table._prepare_vue_data] hash={data_hash[:8] if data_hash else 'None'}"
         )
         return result
+
+    def _group_replacement_row(
+        self,
+        untoggled_data: pl.LazyFrame,
+        data: pl.LazyFrame,
+        nav_column: str,
+        selected_value: Any,
+        last_toggles: dict[str, bool] | None,
+        current_toggles: dict[str, bool] | None,
+    ) -> pl.DataFrame | None:
+        """
+        Find the row that takes over a selection hidden by ticking a toggle filter.
+
+        Only toggles with a ``group_column`` do this: the selection moves to the first
+        visible row sharing the hidden row's value in that column. Returns a
+        one-row frame of ``nav_column``, or None to fall back to the first row.
+        """
+        if not current_toggles:
+            return None
+        for toggle in self._toggle_filters:
+            column = toggle["column"]
+            group_column = toggle.get("group_column")
+            switched_on = current_toggles.get(column) and not (
+                (last_toggles or {}).get(column, toggle["default"])
+                if last_toggles is not None
+                else False
+            )
+            if not group_column or not switched_on:
+                continue
+            group = (
+                untoggled_data.filter(pl.col(nav_column) == selected_value)
+                .select(pl.col(group_column))
+                .head(1)
+                .collect()
+            )
+            if group.height == 0:
+                continue
+            replacement = (
+                data.filter(pl.col(group_column) == group[group_column][0])
+                .select(pl.col(nav_column))
+                .head(1)
+                .collect()
+            )
+            if replacement.height > 0:
+                return replacement
+        return None
+
+    def _active_state_manager(self):
+        """The StateManager this table is being rendered with.
+
+        Navigation (moving to the selected row's page, replacing a selection that
+        was filtered out) writes state while preparing data. It must go to the
+        manager the table was rendered with, not the default one, so that tables
+        rendered with their own StateManager work.
+        """
+        from openms_insight.core.state import get_render_state_manager
+
+        return get_render_state_manager()
+
+    def _apply_range_filters(
+        self, data: pl.LazyFrame, state: dict[str, Any]
+    ) -> pl.LazyFrame:
+        """Keep rows whose [start, end] range contains each set range selection."""
+        for identifier, (start_column, end_column) in self._range_filters.items():
+            value = state.get(identifier)
+            if value is None:
+                continue
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            data = data.filter(
+                (pl.col(start_column) <= value) & (pl.col(end_column) >= value)
+            )
+        return data
+
+    def _apply_validation_filters(
+        self, data: pl.LazyFrame, state: dict[str, Any]
+    ) -> pl.LazyFrame:
+        """Restrictions beyond ``filters`` that the bridge validates selections against.
+
+        Range filters hide rows the way a filter does, so a selection outside the
+        range is dropped (and the table's default row takes over). Toggle filters
+        are not included: the table itself moves a selection they hide.
+        """
+        return self._apply_range_filters(data, state)
+
+    def _toggle_states(self, pagination_state: dict[str, Any]) -> dict[str, bool]:
+        """Current on/off state of each toggle filter, keyed by column."""
+        requested = pagination_state.get("toggles") or {}
+        return {
+            toggle["column"]: bool(requested.get(toggle["column"], toggle["default"]))
+            for toggle in self._toggle_filters
+        }
+
+    def _apply_toggle_filters(
+        self, data: pl.LazyFrame, pagination_state: dict[str, Any]
+    ) -> pl.LazyFrame:
+        """Keep rows whose column is true for every ticked toggle filter."""
+        for column, enabled in self._toggle_states(pagination_state).items():
+            if enabled:
+                data = data.filter(pl.col(column))
+        return data
 
     @staticmethod
     def _apply_column_filters(
@@ -1052,8 +1356,10 @@ class Table(BaseComponent):
             if isinstance(selected_value, float) and selected_value.is_integer():
                 selected_value = int(selected_value)
             data = data.filter(pl.col(column) == selected_value)
+        data = self._apply_range_filters(data, state)
 
         pagination_state = state.get(self._pagination_identifier) or {}
+        data = self._apply_toggle_filters(data, pagination_state)
         data = self._apply_column_filters(
             data, pagination_state.get("column_filters", [])
         )
@@ -1106,9 +1412,38 @@ class Table(BaseComponent):
 
         if self._hidden_columns:
             args["hiddenColumns"] = self._hidden_columns
+        if not self._column_menu:
+            args["columnMenu"] = False
+        if self._reset_sort:
+            args["resetSort"] = True
+        if self._reset_sort_on:
+            args["resetSortOn"] = self._reset_sort_on
 
         # Add any extra config options
         args.update(self._config)
+        for key in (
+            "toggle_filters",
+            "range_filters",
+            "on_select",
+            "reclick",
+            "default_row_selects",
+            "scroll_position",
+            "column_menu",
+            "reset_sort",
+            "reset_sort_on",
+        ):
+            args.pop(key, None)
+
+        if self._toggle_filters:
+            args["toggleFilters"] = self._toggle_filters
+        if self._on_select:
+            args["onSelect"] = self._on_select
+        if self._reclick != "keep":
+            args["reclick"] = self._reclick
+        if not self._default_row_selects:
+            args["highlightDefaultRow"] = True
+        if self._scroll_position != "center":
+            args["scrollPosition"] = self._scroll_position
 
         return args
 

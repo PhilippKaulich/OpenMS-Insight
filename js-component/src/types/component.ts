@@ -27,6 +27,7 @@ export interface PaginationState {
   total_pages: number
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
+  toggles?: Record<string, boolean>
 }
 
 /**
@@ -63,8 +64,24 @@ export interface TableComponentArgs extends BaseComponentArgs {
   paginationIdentifier?: string
   /** Column metadata for filter dialogs (precomputed unique values, min/max) */
   columnMetadata?: Record<string, ColumnMetadata>
+  /** Title-row checkboxes that restrict rows to a boolean column */
+  toggleFilters?: Array<{ label: string; column: string; default: boolean; group_column?: string | null }>
+  /** Selections set (null clears) when a row click changes the selection */
+  onSelect?: Record<string, unknown>
+  /** Clicking the selected row again clears the interactivity selections */
+  reclick?: 'unhighlight' | 'deselect'
+  highlightDefaultRow?: boolean
+  // Where a selected row is scrolled to (default 'center'); when set, a
+  // clicked row that is cut off is scrolled there too
+  scrollPosition?: 'top' | 'center' | 'bottom' | 'nearest'
   /** Fields hidden until the viewer turns them on in the column menu */
   hiddenColumns?: string[]
+  /** New rows are sorted by initialSort again (client-side tables) */
+  resetSort?: boolean
+  /** Identifiers whose selection change sorts by initialSort again */
+  resetSortOn?: string[]
+  /** False hides the column menu */
+  columnMenu?: boolean
 }
 
 /**
@@ -114,6 +131,8 @@ export interface LinePlotConfig {
 export interface HeatmapComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyHeatmap'
   title?: string
+  svgFilename?: string
+  scrollZoom?: boolean
   xColumn: string
   yColumn: string
   intensityColumn: string
@@ -307,6 +326,141 @@ export interface MirrorPlotStyling {
 }
 
 /**
+ * Series plot component arguments.
+ */
+export interface SeriesPlotComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlySeries'
+  font?: { family?: string; color?: string; size?: number }
+  xColumn: string
+  yColumn: string
+  seriesColumn?: string | null
+  /** [series value, legend name] pairs, in drawing order */
+  seriesNames?: Array<[string, string]>
+  seriesColors?: Record<string, string>
+  mode?: 'lines' | 'markers' | 'lines+markers'
+  title?: string
+  xLabel?: string
+  yLabel?: string
+  showLegend?: boolean
+  fixedYRange?: boolean
+  svgFilename?: string
+  interactivity?: InteractivityMapping
+  height?: number
+}
+
+/**
+ * 3D plot component arguments.
+ */
+export interface Plot3DComponentArgs extends BaseComponentArgs {
+  componentType: 'Plotly3D'
+  titleBold?: boolean
+  border?: boolean
+  exportFormat?: 'svg' | 'png'
+  xColumn: string
+  yColumn: string
+  zColumn: string
+  mode: 'stems' | 'lines'
+  seriesColumn?: string | null
+  /** [series value, legend name] pairs, in drawing order */
+  seriesNames?: Array<[string, string]>
+  seriesNameTemplate?: string | null
+  seriesColors?: Record<string, string>
+  color: string
+  traceColumn?: string | null
+  title: string
+  /** [identifier, title] pairs: first identifier with a selection sets the title */
+  selectionTitles?: Array<[string, string]>
+  xLabel: string
+  yLabel: string
+  zLabel: string
+  yDtick?: number | null
+  cameraEye?: { x: number; y: number; z: number } | null
+  showLegend?: boolean
+  svgFilename?: string
+  height?: number
+}
+
+/**
+ * Deconvolved spectrum component arguments.
+ */
+export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
+  componentType: 'PlotlyDeconvolvedSpectrum'
+  view: 'deconvolved' | 'annotated' | 'ladder'
+  title: string
+  /** Title while a ladder view shows the raw peaks of a mass */
+  drilldownTitle?: string
+  /** Selection identifier holding the index of the selected mass */
+  massIdentifier?: string | null
+  massColumn: string
+  massIntensityColumn: string
+  peakMzColumn?: string | null
+  peakIntensityColumn?: string | null
+  signalColumn?: string | null
+  styling?: {
+    highlightColor?: string
+    selectedColor?: string
+    unhighlightedColor?: string
+    highlightHiddenColor?: string
+    annotationColors?: Record<string, string>
+  }
+  config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
+  svgFilename?: string
+  /** Sequence tag drawn in the ladder view */
+  ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  height?: number
+}
+
+/**
+ * ProteinStructureView component arguments.
+ */
+export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
+  componentType: 'ProteinStructureView'
+  title?: string
+  /** Identifier holding the selected residue (0-based position in the sequence) */
+  aaIdentifier?: string | null
+  /** Fragment ion types and tolerance (ppm) to match with */
+  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Identifier holding the fragment selected in a sequence view */
+  fragmentIdentifier?: string | null
+  /** Shown while no entry is selected */
+  emptyMessage?: string
+  /** Height of the 3D viewer in pixels */
+  viewerHeight?: number
+  /** Upload and remove buttons (the app stores the files) */
+  structureUploads?: boolean
+}
+
+/**
+ * ProteinSequenceView component arguments.
+ */
+export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
+  componentType: 'ProteinSequenceView'
+  title?: string
+  /** Label of the annotation summary line */
+  annotationTitle?: string
+  /** Identifier holding the selected mass (index into the spectrum's masses) */
+  massIdentifier?: string | null
+  /** Identifier holding the selected residue (0-based position in the sequence) */
+  aaIdentifier?: string | null
+  /** Identifier the change-sequence dialog writes the new sequence to */
+  sequenceIdentifier?: string | null
+  /** Identifier the selected fragment's bounds are written to */
+  fragmentIdentifier?: string | null
+  /** Fragment ion types and tolerance (ppm) to start from */
+  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Sequence tag to mark (0-based residues) */
+  tag?: { startPos: number; endPos: number } | null
+  svgFilename?: string
+  /** Colour of the dialog buttons (default: the theme's primary colour) */
+  accentColor?: string | null
+  /** Heading of an entry's mass summary (default 'Identification') */
+  entryTitle?: string
+  /** Label of the entry's observed mass (default 'Observed mass') */
+  observedMassLabel?: string
+  height?: number
+}
+
+/**
  * Union type for all component arguments.
  */
 export type ComponentArgs =
@@ -318,6 +472,11 @@ export type ComponentArgs =
   | SequenceViewComponentArgs
   | VolcanoPlotComponentArgs
   | MirrorPlotComponentArgs
+  | SeriesPlotComponentArgs
+  | Plot3DComponentArgs
+  | DeconvolvedSpectrumComponentArgs
+  | ProteinSequenceViewComponentArgs
+  | ProteinStructureViewComponentArgs
 
 /**
  * Component layout entry.

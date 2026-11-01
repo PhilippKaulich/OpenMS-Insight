@@ -5,6 +5,7 @@
  * - Scientific notation (exponential format)
  * - Signed numbers (explicit +/- prefix)
  * - Badge/pill display for categorical values
+ * - Fixed decimals with placeholder text for sentinel values
  */
 
 import type { CellComponent } from 'tabulator-tables'
@@ -45,6 +46,22 @@ export interface BadgeFormatterParams extends BaseFormatterParams {
   defaultColor?: string
   /** Text color (default: white) */
   textColor?: string
+}
+
+/**
+ * Parameters for the fixed-decimals formatter.
+ */
+export interface FixedFormatterParams extends BaseFormatterParams {
+  /** Number of decimal places (default: 4) */
+  precision?: number
+  /**
+   * Only round values whose plain string form is longer than this many
+   * characters, so short values such as "12.5" are shown as they are
+   * (default: 0, always round)
+   */
+  minLength?: number
+  /** Text shown instead of a value, keyed by the value as a string (e.g. {"-1": "-"}) */
+  placeholders?: Record<string, string>
 }
 
 /**
@@ -166,6 +183,39 @@ export function badgeFormatter(
 }
 
 /**
+ * Format a number with a fixed number of decimals.
+ *
+ * Example (precision 4, minLength 4): 1234.56789 -> "1234.5679", 12.5 -> "12.5"
+ * Example (placeholders {"-1": "-"}): -1 -> "-"
+ *
+ * @param cell - Tabulator cell component
+ * @param params - Formatter parameters
+ */
+export function fixedFormatter(cell: CellComponent, params: FixedFormatterParams): string {
+  const value = cell.getValue()
+
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  const placeholders = params?.placeholders
+  if (placeholders && String(value) in placeholders) {
+    return placeholders[String(value)]
+  }
+
+  const num = Number(value)
+  if (isNaN(num)) {
+    return String(value)
+  }
+
+  const minLength = params?.minLength ?? 0
+  if (String(value).length <= minLength) {
+    return String(value)
+  }
+  return num.toFixed(params?.precision ?? 4)
+}
+
+/**
  * Map of custom formatter names to their implementations.
  * Use this to resolve string formatter names from Python column definitions.
  */
@@ -173,6 +223,7 @@ export const customFormatters: Record<string, CustomFormatterFunction> = {
   scientific: scientificFormatter,
   signed: signedFormatter,
   badge: badgeFormatter,
+  fixed: fixedFormatter,
 }
 
 /**

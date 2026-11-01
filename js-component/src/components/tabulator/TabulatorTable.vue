@@ -1,5 +1,9 @@
 <template>
-  <div style="padding: 8px; width: 98%">
+  <!-- A table fitted to a few rows stays at least 200 px tall -->
+  <div
+    style="padding: 8px; width: 98%; box-sizing: border-box"
+    :style="isServerSidePagination ? {} : { minHeight: '200px' }"
+  >
     <div class="d-flex">
       <div style="width: 100%; display: grid; grid-template-columns: 1fr 1fr 1fr">
         <div class="d-flex justify-start" style="grid-column: 1 / span 1">
@@ -9,7 +13,7 @@
               size="small"
               icon="mdi-download"
               :loading="pendingDownloadId !== null"
-              title="Download all rows and columns as CSV"
+              :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
               @click="downloadTable"
             />
             <v-btn variant="text" size="small" icon="mdi-filter" @click="openFilterDialog" />
@@ -17,7 +21,7 @@
               {{ activeFilterCount }}
             </div>
           </div>
-          <v-btn variant="text" size="small" icon="mdi-view-column" :title="columnMenuTitle">
+          <v-btn v-if="args.columnMenu !== false" variant="text" size="small" icon="mdi-view-column" :title="columnMenuTitle">
             <v-icon>mdi-view-column</v-icon>
             <v-menu activator="parent" :close-on-content-click="false" location="bottom start">
               <v-card min-width="220">
@@ -52,7 +56,19 @@
         <div class="d-flex justify-center" style="grid-column: 2 / span 1">
           <h4>{{ args.title ?? '' }}</h4>
         </div>
-        <div class="d-flex justify-end" style="grid-column: 3 / span 1"></div>
+        <div class="d-flex justify-end" style="grid-column: 3 / span 1">
+          <v-checkbox
+            v-for="toggle in toggleFilters"
+            :key="toggle.column"
+            :model-value="currentToggles[toggle.column]"
+            :label="toggle.label"
+            hide-details
+            density="compact"
+            :color="toggle.color || 'primary'"
+            class="toggle-filter"
+            @update:model-value="onToggleFilter(toggle.column, $event)"
+          />
+        </div>
       </div>
     </div>
 
@@ -190,12 +206,18 @@ export default defineComponent({
       lastDataHash: '' as string,
       // Flag to skip redundant syncSelectionFromStore calls after manual selection
       skipNextSync: false as boolean,
+      // reclick 'unhighlight': the selection whose row the user unhighlighted.
+      // The row stays unhighlighted until the selection changes.
+      unhighlightedSelection: null as Record<string, unknown> | null,
+      rootResizeObserver: null as ResizeObserver | null,
       // Pending data request for server-side pagination (deferred promise)
       pendingDataRequest: null as { resolve: (data: any) => void; reject: (err: any) => void } | null,
       // Track if we're waiting for server response
       isLoadingServerData: false as boolean,
       // Track current server-side filter state sent to Python
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
+      // On/off state of the title-row toggle filters, keyed by column
+      currentToggles: {} as Record<string, boolean>,
       // Track if table has fired tableBuilt event (DOM ready)
       isTableBuilt: false as boolean,
       // Track if we're in the middle of a user-initiated page navigation
@@ -218,6 +240,9 @@ export default defineComponent({
     }
   },
   computed: {
+    selectionScrollPosition(): 'top' | 'center' | 'bottom' | 'nearest' {
+      return this.args.scrollPosition || 'center'
+    },
     id(): string {
       return this.uniqueId
     },
@@ -228,6 +253,13 @@ export default defineComponent({
         'table-bordered': true,
         'table-sm': true,
       }
+    },
+    toggleFilters(): Array<{ label: string; column: string; default: boolean; color?: string }> {
+      return this.args.toggleFilters || []
+    },
+    /** Toggle state to merge into pagination requests (nothing when the table has none). */
+    togglesPatch(): Record<string, unknown> {
+      return this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}
     },
     tableData(): Record<string, unknown>[] {
       const data = this.streamlitDataStore.allDataForDrawing?.tableData
@@ -478,7 +510,7 @@ export default defineComponent({
         this.isNavigatingPages = true
         console.log(`[TabulatorTable ${this.args.title}] Set pendingTargetRowIndex:`, this.pendingTargetRowIndex)
         // Navigate to the page - selection will happen in paginationState watcher
-        ;(this.tabulator as any).setPage(newPage)
+        ;(this.tabulator as any).setPage(newPage).catch(() => {})
       }
     },
     // Watch pagination state to update table when server sends new data
@@ -531,7 +563,7 @@ export default defineComponent({
           tab.redraw(true)
           // Trigger setPage to refresh pagination counter (Showing X of Y rows)
           // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
-          tab.setPage(newState.page || 1)
+          tab.setPage(newState.page || 1).catch(() => {})
         }
 
         // Sync client's requested state with server's confirmed state
@@ -582,6 +614,13 @@ export default defineComponent({
       deep: true,
     },
   },
+  created() {
+    // Toggle filters start from the state Python last saw, else their defaults
+    const saved = this.paginationState?.toggles || {}
+    for (const toggle of this.toggleFilters) {
+      this.currentToggles[toggle.column] = saved[toggle.column] ?? toggle.default
+    }
+  },
   mounted() {
     // Initialize lastDataHash from store and draw table
     this.lastDataHash = this.currentDataHash
@@ -589,11 +628,49 @@ export default defineComponent({
     this.drawTable()
     this.initializeTeleport()
     this.initializeGoTo()
+    // A new selection of these identifiers starts the rows in the initial order
+    for (const identifier of this.args.resetSortOn || []) {
+      this.$watch(
+        () => this.selectionStore.$state[identifier],
+        () => {
+          if (this.tabulator && !this.isServerSidePagination) {
+            ;(this.tabulator as any).setSort(this.args.initialSort || [])
+            ;(this.tabulator as any).rowManager.element.scrollTop = 0
+          }
+        }
+      )
+    }
+    // A table fitted to its rows resizes with them: the frame follows it
+    if (!this.isServerSidePagination) {
+      this.rootResizeObserver = new ResizeObserver(() => {
+        Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
+      })
+      this.rootResizeObserver.observe(this.$el as HTMLElement)
+    }
   },
   beforeUnmount() {
     this.cleanupTeleport()
+    this.rootResizeObserver?.disconnect()
   },
   methods: {
+    /**
+     * Tick or untick a title-row toggle filter. The filtering happens in Python,
+     * so this requests page 1 of the re-filtered data.
+     */
+    onToggleFilter(column: string, value: boolean | null): void {
+      this.currentToggles[column] = !!value
+      const paginationIdentifier = this.args.paginationIdentifier
+      if (!paginationIdentifier) return
+      this.isLoadingServerData = true
+      this.selectionStore.updateSelection(paginationIdentifier, {
+        page: 1,
+        page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+        sort_column: this.paginationState?.sort_column,
+        sort_dir: this.paginationState?.sort_dir || 'asc',
+        column_filters: this.currentColumnFilters,
+        ...this.togglesPatch,
+      })
+    },
     drawTable(): void {
       // Reset table built flag - new table being created
       this.isTableBuilt = false
@@ -639,6 +716,11 @@ export default defineComponent({
           if (colDef.headerTooltip === undefined) {
             colDef.headerTooltip = true
           }
+          // A missing number arrives as NaN; the CSV leaves it empty
+          if (colDef.accessorDownload === undefined) {
+            colDef.accessorDownload = (value: unknown) =>
+              typeof value === 'number' && Number.isNaN(value) ? '' : value
+          }
           // Resolve custom formatter names to their implementations
           // Python sends formatter as a string (e.g., "scientific", "signed", "badge")
           // We replace it with the actual formatter function
@@ -678,6 +760,10 @@ export default defineComponent({
       } else {
         // For non-paginated tables, set data directly
         tabulatorOptions.data = this.preparedTableData
+        // The table is as tall as its rows, up to the height it was given
+        delete tabulatorOptions.height
+        tabulatorOptions.minHeight = 50
+        tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
         // Only use virtual DOM if pagination is disabled and dataset is large
         const useVirtualDom = this.preparedTableData.length > 100
         tabulatorOptions.renderVertical = useVirtualDom ? 'virtual' : 'basic'
@@ -711,8 +797,12 @@ export default defineComponent({
         // Update Streamlit iframe height after table is rendered
         // Use specified height if provided, otherwise auto-calculate
         this.$nextTick(() => {
-          if (this.args.height) {
+          if (this.args.height && this.isServerSidePagination) {
             Streamlit.setFrameHeight(this.args.height)
+          } else if (!this.isServerSidePagination) {
+            // The table's own height: while Tabulator lays out new rows, the
+            // document is briefly taller than the table
+            Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
           } else {
             Streamlit.setFrameHeight()
           }
@@ -724,10 +814,11 @@ export default defineComponent({
               const selectedRows = this.tabulator.getSelectedRows()
               if (selectedRows.length > 0) {
                 // scrollToRow forces virtual DOM to calculate and render visible rows
-                this.tabulator.scrollToRow(selectedRows[0], 'center', false)
-              } else {
+                // (rejects when the row is not rendered, e.g. on a collapsed table)
+                this.tabulator.scrollToRow(selectedRows[0], this.selectionScrollPosition, false).catch(() => {})
+              } else if (this.tabulator.getRows().length > 0) {
                 // No selection - scroll to top to trigger render
-                this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false)
+                this.tabulator.scrollToRow(this.tabulator.getRows()[0], 'top', false).catch(() => {})
               }
             }
           }, 50)
@@ -790,6 +881,7 @@ export default defineComponent({
               sort_column: sortColumn,
               sort_dir: sortDir,
               column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
             })
           }
         })
@@ -871,6 +963,7 @@ export default defineComponent({
             sort_column: sortColumn,
             sort_dir: sortDir,
             column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
           })
         }
 
@@ -901,6 +994,7 @@ export default defineComponent({
           sort_column: sortColumn,
           sort_dir: sortDir,
           column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
         })
       }
 
@@ -1092,7 +1186,7 @@ export default defineComponent({
       if (rows && rows[targetIndex]) {
         this.tabulator.deselectRow()
         rows[targetIndex].select()
-        rows[targetIndex].scrollTo('center', false)
+        rows[targetIndex].scrollTo(this.selectionScrollPosition, false).catch(() => {})
         console.log(`[TabulatorTable ${this.args.title}] selectPendingTargetRow: SUCCESS - selected row ${targetIndex}`)
       }
     },
@@ -1108,6 +1202,17 @@ export default defineComponent({
       if (!this.tabulator) return
 
       const interactivity = this.args.interactivity || {}
+
+      if (this.unhighlightedSelection) {
+        const unchanged = Object.entries(this.unhighlightedSelection).every(
+          ([identifier, value]) => this.selectionStore.$state[identifier] === value
+        )
+        if (unchanged) {
+          this.tabulator.deselectRow()
+          return
+        }
+        this.unhighlightedSelection = null
+      }
 
       // For server-side pagination, Python handles navigation to the correct page
       // via the navigate_to_page hint. We only need to select the row if it's
@@ -1136,22 +1241,25 @@ export default defineComponent({
               if (row) {
                 this.tabulator.deselectRow()
                 row.select()
-                row.scrollTo('center', false)
+                row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
               }
             } else {
               // Store as pending - row may be on different page awaiting navigation
               this.pendingSelection = { [identifier]: selectedValue }
             }
-            break
+            return
           }
         }
+        this.highlightDefaultRow()
         return
       }
 
       // Client-side sync (for non-streaming tables)
+      let anySelected = false
       for (const [identifier, column] of Object.entries(interactivity)) {
         const selectedValue = this.selectionStore.$state[identifier]
         if (selectedValue !== undefined && selectedValue !== null) {
+          anySelected = true
           // Check if the currently selected row already matches
           const currentlySelected = this.tabulator.getSelectedRows()[0]
           if (currentlySelected) {
@@ -1178,10 +1286,10 @@ export default defineComponent({
               // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
               if (this.tabulator.options.pagination) {
                 this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                  row.scrollTo('center', false)
-                })
+                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
+                }).catch(() => {})
               } else {
-                row.scrollTo('center', false)
+                row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
               }
               // Successfully selected, clear any pending selection
               this.pendingSelection = null
@@ -1198,6 +1306,20 @@ export default defineComponent({
           break
         }
       }
+      if (!anySelected) this.highlightDefaultRow()
+    },
+
+    /** Nothing is selected: with highlightDefaultRow, mark the default row
+     * without selecting it (the selection store is left as it is). */
+    highlightDefaultRow(): void {
+      if (!this.args.highlightDefaultRow || !this.tabulator) return
+      const defaultRow = this.args.defaultRow ?? 0
+      // In display order: after Tabulator's own sort
+      const rows = this.tabulator.getRows('display')
+      if (defaultRow < 0 || defaultRow >= rows.length) return
+      if (this.tabulator.getSelectedRows()[0] === rows[defaultRow]) return
+      this.tabulator.deselectRow()
+      rows[defaultRow].select()
     },
 
     selectDefaultRow(): void {
@@ -1241,10 +1363,10 @@ export default defineComponent({
                 // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
                 if (this.tabulator?.options.pagination) {
                   this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                    row.scrollTo('center', false)
-                  })
+                    row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
+                  }).catch(() => {})
                 } else {
-                  row.scrollTo('center', false)
+                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                 }
                 selectedFromState = true
                 // Clear pending selection since we successfully applied it
@@ -1277,10 +1399,10 @@ export default defineComponent({
                 // Use setPageToRow() for pagination (navigates to correct page), then scroll within page
                 if (this.tabulator?.options.pagination) {
                   this.tabulator.setPageToRow(rowId as string | number).then(() => {
-                    row.scrollTo('center', false)
-                  })
+                    row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
+                  }).catch(() => {})
                 } else {
-                  row.scrollTo('center', false)
+                  row.scrollTo(this.selectionScrollPosition, false).catch(() => {})
                 }
                 // KEY: Don't call updateSelection - Python already set it
                 selectedFromState = true
@@ -1295,30 +1417,10 @@ export default defineComponent({
         }
       }
 
-      // If no selection exists in state AND default_row is enabled,
-      // this is a fallback for edge cases (e.g., client-side pagination)
-      // For server-side pagination, Python pre-computes initial selection
+      // Python selects the default row (and sends the selection with the
+      // data); without a selection only the highlight is left to do here
       if (!selectedFromState && !this.isServerSidePagination) {
-        const defaultRow = this.args.defaultRow ?? 0
-        if (defaultRow >= 0) {
-          // Use setTimeout to ensure Tabulator has fully rendered rows
-          setTimeout(() => {
-            const visibleRows = this.tabulator?.getRows('active')
-            if (visibleRows && visibleRows.length > 0 && defaultRow < visibleRows.length) {
-              const row = visibleRows[defaultRow]
-              row.select()
-              // For client-side only: update selection store
-              const rowData = row.getData()
-              if (rowData) {
-                const interactivity = this.args.interactivity || {}
-                for (const [identifier, column] of Object.entries(interactivity)) {
-                  const value = rowData[column as string]
-                  this.selectionStore.updateSelection(identifier, value)
-                }
-              }
-            }
-          }, 0)
-        }
+        this.highlightDefaultRow()
       }
     },
 
@@ -1365,11 +1467,48 @@ export default defineComponent({
       // Get the row data directly from Tabulator's row object
       const rowData = row.getData()
       const rowIndex = row.getIndex()
+      const interactivity = this.args.interactivity || {}
+
+      // Clicking the highlighted row again only removes the highlight
+      if (this.args.reclick === 'unhighlight' && row.isSelected()) {
+        row.deselect()
+        this.unhighlightedSelection = Object.fromEntries(
+          Object.keys(interactivity).map((identifier) => [
+            identifier,
+            this.selectionStore.$state[identifier],
+          ])
+        )
+        return
+      }
+      this.unhighlightedSelection = null
+
+      // Clicking the selected row again clears its selections
+      if (
+        this.args.reclick === 'deselect' && rowData && Object.keys(interactivity).length > 0 &&
+        Object.entries(interactivity).every(
+          ([identifier, column]) => this.selectionStore.$state[identifier] === rowData[column as string]
+        )
+      ) {
+        this.tabulator?.deselectRow()
+        this.skipNextSync = true
+        for (const identifier of Object.keys(interactivity)) {
+          this.selectionStore.updateSelection(identifier, null)
+        }
+        this.$nextTick(() => {
+          this.skipNextSync = false
+        })
+        return
+      }
 
       // FIRST: Immediately select the row visually (before any async operations)
       // This ensures instant visual feedback regardless of Streamlit round-trip
       this.tabulator?.deselectRow()
       row.select()
+      // A clicked row that is cut off is brought into view when the table
+      // asks for a scroll position of its own
+      if (this.args.scrollPosition) {
+        row.scrollTo(this.args.scrollPosition, false).catch(() => {})
+      }
 
       this.$emit('rowSelected', rowIndex)
 
@@ -1380,9 +1519,21 @@ export default defineComponent({
 
       // THEN: Update selection store (which triggers Streamlit.setComponentValue)
       // The visual selection is already done, so user sees instant feedback
-      const interactivity = this.args.interactivity || {}
 
       if (rowData) {
+        // Side effects first, so a selection set by both on_select and
+        // interactivity ends up with the clicked row's value
+        const onSelect = this.args.onSelect || {}
+        const selectionChanges = Object.entries(interactivity).some(
+          ([identifier, column]) => this.selectionStore.$state[identifier] !== rowData[column as string]
+        )
+        if (selectionChanges) {
+          for (const [identifier, value] of Object.entries(onSelect)) {
+            if (!(identifier in interactivity) && this.selectionStore.$state[identifier] !== value) {
+              this.selectionStore.updateSelection(identifier, value)
+            }
+          }
+        }
         for (const [identifier, column] of Object.entries(interactivity)) {
           const value = rowData[column as string]
           this.selectionStore.updateSelection(identifier, value)
@@ -1401,6 +1552,8 @@ export default defineComponent({
      * This is much faster than destroying and recreating the table.
      */
     updateTableData(): void {
+      // New rows: the row the user unhighlighted is highlighted again
+      this.unhighlightedSelection = null
       console.log('[TabulatorTable] updateTableData called', {
         hasTabulator: !!this.tabulator,
         isServerSidePagination: this.isServerSidePagination,
@@ -1430,8 +1583,13 @@ export default defineComponent({
         size: tab.modules?.page?.size,
       })
 
-      // replaceData silently replaces all data without updating scroll position, sort or filtering
-      this.tabulator.replaceData(this.preparedTableData).then(() => {
+      // replaceData silently replaces all data without updating scroll position, sort or filtering.
+      // A table that resets its sort on new rows also starts them at the top (setData)
+      const resetRows = this.args.resetSort && !this.isServerSidePagination
+      const loaded = resetRows
+        ? this.tabulator.setData(this.preparedTableData)
+        : this.tabulator.replaceData(this.preparedTableData)
+      loaded.then(() => {
         console.log('[TabulatorTable] After replaceData - Tabulator internal state:', {
           hasPageModule: !!tab.modules?.page,
           maxPage: tab.modules?.page?.max,
@@ -1484,7 +1642,7 @@ export default defineComponent({
               tab.redraw(true)
               // Trigger setPage to refresh pagination counter (Showing X of Y rows)
               // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
-              tab.setPage(targetPage || tab.getPage() || 1)
+              tab.setPage(targetPage || tab.getPage() || 1).catch(() => {})
             } catch (error) {
               console.error('[TabulatorTable] Error setting pagination limits:', error)
             }
@@ -1496,7 +1654,12 @@ export default defineComponent({
         // Even for page 1, this is necessary because replaceData() + the initial AJAX resolution
         // leaves Tabulator in an inconsistent state without this explicit setPage() call.
         if (this.isServerSidePagination && targetPage && this.isNavigatingPages) {
-          ;(this.tabulator as any).setPage(targetPage)
+          ;(this.tabulator as any).setPage(targetPage).catch(() => {})
+        }
+
+        // New rows start in the initial order again when the table asks so
+        if (this.args.resetSort && !this.isServerSidePagination) {
+          ;(this.tabulator as any)?.setSort(this.args.initialSort || [])
         }
 
         // Only sync selection if not navigating pages
@@ -1508,8 +1671,12 @@ export default defineComponent({
 
         // Update Streamlit frame height - use specified height if provided
         this.$nextTick(() => {
-          if (this.args.height) {
+          if (this.args.height && this.isServerSidePagination) {
             Streamlit.setFrameHeight(this.args.height)
+          } else if (!this.isServerSidePagination) {
+            // The table's own height: while Tabulator lays out new rows, the
+            // document is briefly taller than the table
+            Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
           } else {
             Streamlit.setFrameHeight()
           }
@@ -1580,6 +1747,7 @@ export default defineComponent({
           sort_column: this.requestedSortColumn || undefined,
           sort_dir: this.requestedSortDir,
           column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
           download_request: requestId,
         })
         return
@@ -1786,6 +1954,7 @@ export default defineComponent({
             sort_column: this.requestedSortColumn || undefined,
             sort_dir: this.requestedSortDir,
             column_filters: serverFilters,
+              ...this.togglesPatch,
           })
         }
         return
@@ -1939,6 +2108,12 @@ export default defineComponent({
         border-radius: 4px;
       `
       closeBtn.addEventListener('click', () => this.closeTeleportDialog())
+      closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.backgroundColor = '#f5f5f5'
+      })
+      closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.backgroundColor = 'transparent'
+      })
 
       header.appendChild(title)
       header.appendChild(closeBtn)
@@ -1977,6 +2152,12 @@ export default defineComponent({
         font-size: 14px;
       `
       closeFooterBtn.addEventListener('click', () => this.closeTeleportDialog())
+      closeFooterBtn.addEventListener('mouseenter', () => {
+        closeFooterBtn.style.backgroundColor = '#1565c0'
+      })
+      closeFooterBtn.addEventListener('mouseleave', () => {
+        closeFooterBtn.style.backgroundColor = '#1976d2'
+      })
 
       footer.appendChild(closeFooterBtn)
 
@@ -2029,13 +2210,86 @@ export default defineComponent({
           this.toggleColumnSelection(column.field)
           this.refreshTeleportDialog()
         })
+        chip.addEventListener('mouseenter', () => {
+          if (!isSelected) chip.style.backgroundColor = '#f5f5f5'
+        })
+        chip.addEventListener('mouseleave', () => {
+          if (!isSelected) chip.style.backgroundColor = 'white'
+        })
 
         chipsContainer.appendChild(chip)
       })
 
+      const actionsContainer = this.parentDocument.createElement('div')
+      actionsContainer.style.cssText = `
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid #e0e0e0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      `
+
+      const selectionInfo = this.parentDocument.createElement('span')
+      selectionInfo.textContent = `${this.selectedColumns.length} of ${this.columnNames.length} columns selected`
+      selectionInfo.style.cssText = 'color: #666; font-size: 14px;'
+
+      const buttonsDiv = this.parentDocument.createElement('div')
+      buttonsDiv.appendChild(
+        this.createActionButton('Select All', () => {
+          this.selectAllColumns()
+          this.refreshTeleportDialog()
+        })
+      )
+      buttonsDiv.appendChild(
+        this.createActionButton('Clear All', () => {
+          this.clearColumnSelection()
+          this.refreshTeleportDialog()
+        })
+      )
+
+      actionsContainer.appendChild(selectionInfo)
+      actionsContainer.appendChild(buttonsDiv)
+
       columnSection.appendChild(columnTitle)
       columnSection.appendChild(chipsContainer)
+      columnSection.appendChild(actionsContainer)
       content.appendChild(columnSection)
+    },
+
+    createActionButton(text: string, onClick: () => void): HTMLElement {
+      const btn = this.parentDocument!.createElement('button')
+      btn.textContent = text
+      btn.style.cssText = `
+        background: white;
+        color: #1976d2;
+        border: 1px solid #1976d2;
+        padding: 6px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-left: 8px;
+      `
+      btn.addEventListener('click', onClick)
+      btn.addEventListener('mouseenter', () => {
+        btn.style.backgroundColor = '#f5f5f5'
+      })
+      btn.addEventListener('mouseleave', () => {
+        btn.style.backgroundColor = 'white'
+      })
+      return btn
+    },
+
+    selectAllColumns(): void {
+      this.selectedColumns = this.columnNames.map((column) => column.field)
+    },
+
+    clearColumnSelection(): void {
+      this.selectedColumns = []
+      this.filterValues = {}
+      this.filterTypes = {}
+      this.columnAnalysis = {}
+      this.applyFilters()
     },
 
     renderFilterControls(content: HTMLElement): void {
@@ -2324,6 +2578,7 @@ export default defineComponent({
             sort_column: this.requestedSortColumn || undefined,
             sort_dir: this.requestedSortDir,
             column_filters: this.currentColumnFilters,
+              ...this.togglesPatch,
             go_to_request: {
               field: this.selectedGoToField,
               value: this.goToInputValue.trim(),
@@ -2342,7 +2597,7 @@ export default defineComponent({
         const rowId = this.preparedTableData[rowIndex][indexField]
         const row = this.tabulator?.getRow(rowId)
         if (row) {
-          row.scrollTo('top', false)
+          row.scrollTo('top', false).catch(() => {})
           this.tabulator?.deselectRow()
           row.select()
           // Update selection store
@@ -2381,6 +2636,15 @@ export default defineComponent({
 .tabulator-col-title,
 .tabulator-cell {
   font-size: 14px;
+}
+
+.v-checkbox.v-input.toggle-filter,
+.toggle-filter .v-selection-control {
+  flex: 1 1 auto;
+}
+
+.toggle-filter .v-label {
+  opacity: 0.6;
 }
 
 .filter-badge {

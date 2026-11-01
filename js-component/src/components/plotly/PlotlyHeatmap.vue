@@ -33,6 +33,8 @@ export default defineComponent({
         return (data as HeatmapData[]) || []
       },
       title: computed(() => props.args.title),
+      svgFilename: computed(() => props.args.svgFilename as string | undefined),
+      scrollZoom: computed(() => props.args.scrollZoom as boolean | undefined),
     })
 
     return {
@@ -475,6 +477,9 @@ export default defineComponent({
           // react() preserves WebGL context and event handlers
           console.debug('[PlotlyHeatmap] renderPlot: using Plotly.react() (update)')
           await Plotly.react(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
+          // The points under a hover label may be gone (e.g. after a zoom
+          // reset); clear it as a new plot would
+          ;(Plotly as unknown as { Fx: { unhover: (id: string) => void } }).Fx.unhover(this.id)
           // Note: No need to re-setup event handlers - they persist with react()
         }
 
@@ -644,6 +649,9 @@ export default defineComponent({
             margin: {
               r: this.effectiveColorbarVisible ? 120 : 20,
             },
+            // Keep the height: the frame is as tall as the plot, so an autosize
+            // here would measure the plot's own collapsing container
+            height: plotElement._fullLayout?.height ?? this.args.height ?? 400,
           })
         } catch (error) {
           // Silently handle errors

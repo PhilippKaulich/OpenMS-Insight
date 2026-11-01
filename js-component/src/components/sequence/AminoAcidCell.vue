@@ -40,7 +40,7 @@
       </svg>
     </div>
 
-    <!-- Modification marker with dotted pattern (like FLASHApp) -->
+    <!-- Modification marker with dotted pattern -->
     <div v-if="modification !== null" class="rounded-lg mod-marker mod-start"></div>
     <div v-if="modification !== null" class="rounded-lg mod-marker mod-end"></div>
 
@@ -286,7 +286,7 @@ export default defineComponent({
   font-weight: 500;
 }
 
-/* Modification marker with dotted pattern background (like FLASHApp) */
+/* Modification marker with dotted pattern background */
 .mod-marker {
   position: absolute;
   width: 100%;

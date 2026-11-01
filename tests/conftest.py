@@ -290,3 +290,69 @@ def sample_quantification_data_complete() -> pl.LazyFrame:
             "s6": [2.9, 5.0, 2.0, 3.3, 1.2],
         }
     )
+
+
+@pytest.fixture
+def sample_series_data() -> pl.LazyFrame:
+    """Create sample data for SeriesPlot (two density curves)."""
+    return pl.LazyFrame(
+        {
+            "Score": [0.1, 0.5, 0.9, 0.1, 0.5, 0.9],
+            "Density": [0.2, 1.0, 0.4, 0.8, 0.3, 0.05],
+            "kind": ["target"] * 3 + ["decoy"] * 3,
+        }
+    )
+
+
+@pytest.fixture
+def sample_plot3d_data() -> pl.LazyFrame:
+    """Create sample data for Plot3D: one row per mass, peaks as list columns."""
+    return pl.LazyFrame(
+        {
+            "scan_idx": [0, 0, 0, 1],
+            "mass_idx": [-1, 0, 0, 0],
+            "kind": ["Signal", "Signal", "Noise", "Signal"],
+            "mass": [[1000.0, 1001.0], [1000.0], [1000.5, 1002.0], [2000.0]],
+            "charge": [[5.0, 6.0], [5.0], [5.0, 7.0], [10.0]],
+            "intensity": [[10.0, 20.0], [10.0], [1.0, 2.0], [100.0]],
+        }
+    )
+
+
+@pytest.fixture
+def sample_deconvolved_spectra() -> pl.LazyFrame:
+    """Create sample data for DeconvolvedSpectrum: one row per scan."""
+    return pl.LazyFrame(
+        {
+            "scan_idx": [0, 1],
+            "masses": [[1000.0, 2000.123456], [1500.0]],
+            "intensities": [[10.0, 20.0], [5.0]],
+            "peak_mz": [[201.0, 251.0, 401.0], [301.0]],
+            "peak_intensity": [[1.0, 2.0, 3.0], [4.0]],
+            "signal_peaks": [
+                [[[0.0, 201.0, 1.0, 5.0]], [[2.0, 401.0, 3.0, 5.0]]],
+                [[[0.0, 301.0, 4.0, 5.0]]],
+            ],
+        }
+    )
+
+
+@pytest.fixture
+def sample_protein_sequence_data() -> pl.LazyFrame:
+    """Create sample data for ProteinSequenceView: one row per identification."""
+    return pl.LazyFrame(
+        {
+            "hit_index": [0, 1],
+            "sequence": [list("PEPTIDE"), list("ACDK")],
+            "theoretical_mass": [799.36, 435.2],
+            "coverage": [[0.0] * 7, [1.0, 1.0, 0.5, 0.0]],
+            "maxCoverage": [0.0, 2.0],
+            "fragment_masses_b": [[[98.06]] * 7, [[72.04]] * 4],
+            "fragment_masses_y": [[[148.06]] * 7, [[147.11]] * 4],
+            "start_position": [0, 1],
+            "end_position": [6, -1],
+            "observed_mass": [float("nan"), 435.21],
+            "masses": [[98.06, 148.06], [72.04]],
+            "precursor_mass": [799.4, 435.2],
+        }
+    )

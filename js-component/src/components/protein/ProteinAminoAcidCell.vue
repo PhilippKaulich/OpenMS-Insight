@@ -1,0 +1,748 @@
+<template>
+  <div
+   :id="id"
+   class="d-flex justify-center align-center rounded-lg"
+   :class="[aminoAcidCellClass, { highlighted: isHighlighted }, { 'regex-highlighted': isRegexHighlighted }, { truncated: isTruncated }, { 'internal-span': inInternalSpan }]"
+   :style="aminoAcidCellStyles"
+   @click="selectCell"
+   @contextmenu.prevent="toggleMenuOpen"
+   >
+    <div v-if="showFragments && sequenceObject.aIon" class="frag-marker-container-a">
+      <svg viewBox="0 0 10 10">
+        <path stroke="green" d="M7, 1 L9, 3 L9, 7 L9, 3 L7, 1 z" stroke-width="1.5" />
+      </svg>
+    </div>
+    <div v-if="showFragments && sequenceObject.bIon" class="frag-marker-container-b">
+      <svg viewBox="0 0 10 10">
+        <path stroke="blue" d="M10, 0 V5 M10, 0 H5 z" stroke-width="3" />
+      </svg>
+    </div>
+    <div v-if="showFragments && sequenceObject.cIon" class="frag-marker-container-c">
+      <svg viewBox="0 0 10 10">
+        <path stroke="red" d="M4, 1 L9, 3 L9, 7 L9, 3 L4, 1 z" stroke-width="1.5" />
+      </svg>
+    </div>
+    <div v-if="showFragments && sequenceObject.xIon" class="frag-marker-container-x">
+      <svg viewBox="0 0 10 10">
+        <path stroke="green" d="M1, 3 L1, 7 L3, 9 L1, 7 L1, 3 z" stroke-width="1.5" />
+      </svg>
+    </div>
+    <div v-if="showFragments && sequenceObject.yIon" class="frag-marker-container-y">
+      <svg viewBox="0 0 10 10">
+        <path stroke="blue" d="M0, 10 V5 M0, 10 H5 z" stroke-width="3" />
+      </svg>
+    </div>
+    <div v-if="showFragments && sequenceObject.zIon" class="frag-marker-container-z">
+      <svg viewBox="0 0 10 10">
+        <path stroke="red" d="M1, 3 L1, 7 L6, 9 L1, 7 L1, 3 z" stroke-width="1.5" />
+      </svg>
+    </div>
+    <!-- internal fragments: depth strip along the bottom, brackets where pieces start/end -->
+    <div v-if="showInternal && internalDepth > 0" class="internal-depth" :style="internalDepthStyles"></div>
+    <div v-if="showInternal && sequenceObject.internalStart" class="internal-bracket internal-bracket-start"></div>
+    <div v-if="showInternal && sequenceObject.internalEnd" class="internal-bracket internal-bracket-end"></div>
+    <div v-if="showTags && sequenceObject.tagStart" class="rounded-lg tag-marker tag-start"></div>
+    <div v-if="showTags && sequenceObject.tagEnd" class="rounded-lg tag-marker tag-end"></div>
+    <div v-if="showModifications && (sequenceObject.modStart||isThisAAmodified)" class="rounded-lg mod-marker mod-start"></div>
+    <div v-if="showModifications && (sequenceObject.modEnd||isThisAAmodified)" class="rounded-lg mod-marker mod-end"></div>
+    <div v-if="showModifications && sequenceObject.modStart && !sequenceObject.modEnd" class="mod-marker mod-start-cont"></div>
+    <div v-if="showModifications && !sequenceObject.modStart && sequenceObject.modEnd" class="mod-marker mod-end-cont"></div>
+    <div v-if="showModifications && sequenceObject.modCenter" class="mod-marker mod-center-cont"></div>
+    <div v-if="showModifications && (sequenceObject.modEnd||isThisAAmodified)" class="rounded-lg mod-mass">{{ modMass }}
+      <v-tooltip activator="parent" class="foreground">
+        {{ `Modification Mass: ${modMass} Da` }}
+        <br />
+        {{ `Possible Modifications: ${sequenceObject.modLabels}` }}
+        <br />
+      </v-tooltip>
+    </div>
+    <div v-if="showFragments && showModifications && sequenceObject.modEnd && sequenceObject.aIon && !sequenceObject.bIon" class="rounded-lg mod-mass-a">{{ sequenceObject.modMass }}</div>
+    <div v-if="showFragments && showModifications && sequenceObject.modEnd && sequenceObject.bIon" class="rounded-lg mod-mass-b">{{ sequenceObject.modMass }}</div>
+    <div v-if="showFragments && showModifications && sequenceObject.modEnd && sequenceObject.cIon && !sequenceObject.bIon" class="rounded-lg mod-mass-c">{{ sequenceObject.modMass }}</div>
+
+    
+    <div v-if="showModifications && DoesThisAAHaveExtraFragTypes" class="frag-marker-extra-type">
+      <svg viewBox="0 0 10 10">
+        <circle cx="5" cy="5" r="0.5" stroke="black" stroke-width="0.3" fill="gold" />
+      </svg>
+    </div>
+    <div class="aa-text">
+      {{ aminoAcid }}
+    </div>
+    <v-menu
+      v-model="menuOpen"
+      activator="parent"
+      location="end"
+      :open-on-click="false"
+      :close-on-content-click="false"
+      width="200px"
+    >
+      <v-list>
+        <v-list-item>
+          <v-select
+            v-model="selectedModification"
+            clearable
+            label="Modification"
+            density="compact"
+            :items="modificationsForSelect"
+            @update:model-value="updateSelectedModification"
+            @click:clear="selectedModification = undefined"
+          >
+          </v-select>
+        </v-list-item>
+        <v-list-item v-if="customSelected">
+          <v-form @submit.prevent>
+            <v-text-field
+              v-model="customModMass"
+              hide-details
+              label="Monoisotopic mass in Da"
+              type="number"
+            />
+            <v-btn type="submit" block class="mt-2" @click="updateCustomModification"
+              >Submit</v-btn
+            >
+          </v-form>
+        </v-list-item>
+      </v-list>
+    </v-menu>
+    <v-tooltip activator="parent">
+      <div>
+        {{ `Protein Position: ${protein_position}` }}
+      </div>
+      <template v-if="prefix !== undefined">
+        {{ `Prefix: ${prefix}` }}
+        <br />
+      </template>
+      <template v-if="truncated_prefix !== undefined">
+        {{ `Truncated Prefix: ${truncated_prefix}` }}
+        <br />
+      </template>
+      <template v-if="suffix !== undefined">
+        {{ `Suffix: ${suffix}` }}
+        <br />
+      </template>
+      <template v-if="truncated_suffix !== undefined">
+        {{ `Truncated Suffix: ${truncated_suffix}` }}
+        <br />
+      </template>
+      <div v-if="DoesThisAAHaveExtraFragTypes">
+        {{ sequenceObject.extraTypes.join(', ') }}
+      </div>
+      <div v-if="showInternal && internalDepth > 0">
+        {{ `Internal fragments covering: ${internalDepth}` }}
+      </div>
+    </v-tooltip>
+  </div>
+</template>
+
+<script lang="ts">
+import { useStreamlitDataStore } from '@/stores/streamlit-data'
+import { useModificationStore } from '@/stores/variable-modification'
+import type { SequenceObject } from '@/types/protein-sequence-object'
+import type { SequenceData } from '@/types/protein-sequence-data'
+import type { Theme } from 'streamlit-component-lib'
+import type { PropType } from 'vue'
+import { defineComponent } from 'vue'
+import {
+  potentialModificationMap,
+  type KnownModification,
+  modificationMassMap,
+} from '@/components/sequence/modification'
+
+// Provided by ProteinSequenceView. The defaults let the legend's example
+// cells render outside a view.
+interface SequenceViewContext {
+  entry: () => SequenceData | undefined
+  selectedAA: () => number | undefined
+  setSelectedAA: (position?: number) => void
+}
+
+export default defineComponent({
+  name: 'ProteinAminoAcidCell',
+  inject: {
+    sequenceView: {
+      default: (): SequenceViewContext => ({
+        entry: () => undefined,
+        selectedAA: () => undefined,
+        setSelectedAA: () => undefined,
+      }),
+    },
+  },
+  props: {
+    sequenceObject: {
+      type: Object as PropType<SequenceObject>,
+      required: true,
+    },
+    index: {
+      type: Number,
+      required: true,
+    },
+    fixedModification: {
+      type: Boolean,
+      default: false,
+    },
+    disableVariableModificationSelection: {
+      type: Boolean,
+      default: false,
+    },
+    showTags: {
+      type: Boolean,
+      default: false,
+    },
+    showModifications: {
+      type: Boolean,
+      default: true,
+    },
+    showFragments: {
+      type: Boolean,
+      default: true,
+    },
+    fontSize: {
+      type: Number,
+      default: 12,
+    },
+    isRegexHighlighted: {
+      type: Boolean,
+      default: false,
+    },
+    showInternal: {
+      type: Boolean,
+      default: false,
+    },
+    // largest internalDepth of the sequence, scales the depth strip
+    maxInternalDepth: {
+      type: Number,
+      default: 0,
+    },
+    // residue lies in the selected internal fragment
+    inInternalSpan: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  emits: ['selected'],
+  setup() {
+    const streamlitData = useStreamlitDataStore()
+    const variableModData = useModificationStore()
+    return { streamlitData, variableModData }
+  },
+  data() {
+    return {
+      menuOpen: false,
+      selectedModification: undefined as KnownModification | undefined,
+      customSelected: false,
+      customModMass: '0' as string,
+    }
+  },
+  computed: {
+    id(): string {
+      return `${this.aminoAcid}${this.index}`
+    },
+    theme(): Theme | undefined {
+      return this.streamlitData.theme
+    },
+    aminoAcid(): string {
+      return this.sequenceObject.aminoAcid
+    },
+    start(): number | undefined {
+      const start = this.view.entry()?.start_position
+      if (start === undefined) {
+        return start
+      }
+      if (start < 0) {
+        return 0
+      }
+      return start
+    },
+    end(): number | undefined {
+      const end = this.view.entry()?.end_position
+      if (end === undefined) {
+        return end
+      }
+      if ((end < 0) && (this.length !== undefined)) {
+        return this.length - 1
+      }
+      return end
+    },
+    length(): number | undefined {
+      return this.view.entry()?.sequence.length
+    },
+    prefix(): number | undefined {
+      if ((this.start === undefined) && (this.end === undefined)) {
+        return this.index + 1
+      }
+      else if ((this.end !== undefined) && (this.index > this.end)) {
+        return undefined
+      }
+      else if ((this.start !== undefined) && (this.index >= this.start)) {
+        return this.index + 1 - this.start
+      }
+      return undefined
+    },
+    protein_position(): number {
+      return this.index + 1
+    },
+    truncated_prefix(): number | undefined {
+      if ((this.start === undefined) || (this.index >= this.start)) {
+        return undefined
+      }
+      return this.index + 1
+    },
+    suffix(): number | undefined {
+      if ((this.start === undefined) && (this.end === undefined)) {
+        return (this.length ?? 0) - this.index
+      }
+      else if ((this.start !== undefined) && (this.index < this.start)) {
+        return undefined
+      }
+      else if ((this.end !== undefined) && (this.index <= this.end)) {
+        return this.end + 1 - this.index
+      }
+      return undefined
+    },
+    truncated_suffix(): number | undefined {
+      const end = this.view.entry()?.end_position
+      const length = this.view.entry()?.sequence.length
+      if ((end == undefined) || (this.index <= end)) {
+        return undefined
+      }
+      return (length ?? 0) - this.index
+    },
+    modificationsForSelect(): string[] {
+      return ['None', 'Custom', ...this.potentialModifications]
+    },
+    aminoAcidCellStyles(): Record<string, string> {
+      // Get coverage and scale between 0.1 and 1.0
+      let alpha = this.coverage
+
+      if (alpha < 0) {
+        return {
+          '--amino-acid-cell-color': this.theme?.textColor ?? '#fff',
+          '--amino-acid-cell-bg-color': this.theme?.secondaryBackgroundColor ?? '#000',
+          '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#fff',
+          '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#000',
+          '--amino-acid-font-size': `${this.fontSize}px`,
+          position: 'relative',
+        }
+      }
+
+      if (!this.showTags) {
+        alpha = 0
+      }
+      else if (alpha !== 0) {
+        alpha = (alpha * 0.9) + 0.1
+      }
+      
+      return {
+        '--amino-acid-cell-color': this.theme?.textColor ?? '#fff',
+        '--amino-acid-cell-bg-color': `rgba(228, 87, 46, ${alpha})`,
+        '--amino-acid-cell-hover-color': this.theme?.textColor ?? '#fff',
+        '--amino-acid-cell-hover-bg-color': this.theme?.backgroundColor ?? '#000',
+        '--amino-acid-font-size': `${this.fontSize}px`,
+        position: 'relative',
+      }
+    },
+    aminoAcidCellClass(): Record<string, boolean> {
+      return {
+        'sequence-amino-acid': !this.fixedModification,
+        'sequence-amino-acid-highlighted': this.fixedModification,
+      }
+    },
+    potentialModifications(): KnownModification[] {
+      return potentialModificationMap[this.aminoAcid] ?? []
+    },
+    isThisAAmodified(): boolean {
+      const variableModifications = this.variableModData.variableModifications ?? {}
+      if (this.selectedModification !== undefined) return true
+      return (
+        variableModifications[this.index] !== undefined && variableModifications[this.index] !== 0
+      )
+    },
+    DoesThisAAHaveMatchingFragments(): boolean {
+      return (
+        this.sequenceObject.aIon ||
+        this.sequenceObject.bIon ||
+        this.sequenceObject.cIon ||
+        this.sequenceObject.xIon ||
+        this.sequenceObject.yIon ||
+        this.sequenceObject.zIon
+      )
+    },
+    internalDepth(): number {
+      return this.sequenceObject.internalDepth ?? 0
+    },
+    internalDepthStyles(): Record<string, string> {
+      const alpha = this.maxInternalDepth > 0 ? 0.25 + 0.75 * (this.internalDepth / this.maxInternalDepth) : 0
+      return { background: `rgba(142, 68, 173, ${alpha})` }
+    },
+    DoesThisAAHaveExtraFragTypes(): boolean {
+      return this.sequenceObject.extraTypes.length > 0
+    },
+    view(): SequenceViewContext {
+      return this.sequenceView as SequenceViewContext
+    },
+    coverage(): number {
+      if (this.sequenceObject.coverage !== undefined) 
+      {
+        return this.sequenceObject.coverage
+      }
+      return -1
+    },
+    isHighlighted(): boolean {
+      return (this.index === this.view.selectedAA())
+    },
+    isTruncated(): boolean {
+      return this.sequenceObject.truncated
+    },
+    DoesThisAAHaveSequenceTags() : boolean {
+      return this.coverage > 0
+    },
+    modMass() : string | undefined {
+      if (this.customModMass !== '0') {
+        return parseFloat(this.customModMass).toLocaleString('en-US', { signDisplay: 'always' })
+      }
+      return this.sequenceObject.modMass
+    }
+  },
+  watch: {
+    selectedModification() {
+      if ((this.selectedModification !== undefined) && (modificationMassMap[this.selectedModification] !== undefined)) {
+        this.sequenceObject.modMass = parseFloat(modificationMassMap[this.selectedModification].toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      }
+    },
+    showTags() {
+      if (!this.showTags) {
+        this.view.setSelectedAA(undefined)
+      }
+    },
+  },
+  methods: {
+    toggleMenuOpen(): void {
+      if (this.disableVariableModificationSelection) {
+        return
+      }
+      this.menuOpen = !this.menuOpen
+    },
+    selectCell(): void {
+      if (this.DoesThisAAHaveSequenceTags && this.showTags) {
+        if ((this.view.selectedAA() === this.index)){
+          this.view.setSelectedAA(undefined)
+        }
+        else {
+          this.view.setSelectedAA(this.index)
+        }
+      }
+      if (this.DoesThisAAHaveMatchingFragments || (this.showInternal && this.internalDepth > 0)) {
+        this.$emit('selected', this.index)
+      }
+    },
+    updateSelectedModification(modification: 'None' | 'Custom' | KnownModification) {
+      if (modification === 'None') {
+        this.selectedModification = undefined
+      } else if (modification === 'Custom') {
+        this.customSelected = true
+        return
+      } else {
+        this.selectedModification = modification as KnownModification
+      }
+      this.toggleMenuOpen()
+      this.customSelected = false
+      this.variableModData.updateVariableModifications(
+        this.index,
+        this.selectedModification ? modificationMassMap[this.selectedModification] : 0
+      )
+    },
+    updateCustomModification() {
+      this.variableModData.updateVariableModifications(this.index, parseFloat(this.customModMass))
+      this.toggleMenuOpen()
+    },
+  },
+})
+</script>
+
+<style scoped lang="scss">
+
+.foreground {
+  position: relative;
+  z-index: 1000; 
+}
+
+.sequence-amino-acid-highlighted, .sequence-amino-acid.highlighted {
+  /* New style for highlighted state */
+  background-color: #F3A712; /* Gold background for highlighted state */
+  color: #000000; /* Black text for highlighted state */
+  outline: 3px solid #29335C; /* Thicker border for highlighted state */
+  font-weight: bold;
+}
+
+.sequence-amino-acid.regex-highlighted {
+  /* Style for regex highlighting */
+  background-color: #E3F2FD !important; /* Light blue background for regex highlighting */
+  color: #1565C0 !important; /* Dark blue text for regex highlighting */
+  outline: 2px solid #1976D2 !important; /* Blue border for regex highlighting */
+  font-weight: bold;
+}
+
+/* When both highlighted and regex-highlighted, prioritize normal highlighting */
+.sequence-amino-acid.highlighted.regex-highlighted {
+  background-color: #F3A712 !important;
+  color: #000000 !important;
+  outline: 3px solid #29335C !important;
+}
+
+.sequence-amino-acid-truncated, .sequence-amino-acid.truncated .aa-text {
+  color: rgba(128, 128, 128, 0.3);
+  outline: rgba(128, 128, 128, 0.3);
+  text-decoration: line-through !important;
+}
+
+.sequence-amino-acid {
+  background-color: var(--amino-acid-cell-bg-color);
+  color: var(--amino-acid-cell-color);
+
+  &:hover {
+    background-color: var(--amino-acid-cell-hover-bg-color);
+    color: var(--amino-acid-cell-hover-color);
+  }
+}
+
+.sequence-amino-acid-highlighted {
+  background-color: var(--amino-acid-cell-bg-color);
+  color: #F3A712;
+
+  &:hover {
+    background-color: var(--amino-acid-cell-hover-bg-color);
+  }
+}
+
+.sequence-amino-acid-modified {
+  background-color: #a79c91;
+
+  &:hover {
+    background-color: #C5BAAF;
+  }
+}
+
+.frag-marker-container {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  z-index: 1000;
+}
+
+.frag-marker-container-a {
+  @extend .frag-marker-container;
+  top: -28%;
+  left: 15%;
+}
+
+.frag-marker-container-b {
+  @extend .frag-marker-container;
+  top: -8%;
+  left: 13%;
+}
+
+.frag-marker-container-c {
+  @extend .frag-marker-container;
+  top: -28%;
+  left: 15%;
+}
+
+.frag-marker-container-x {
+  @extend .frag-marker-container;
+  bottom: -32%;
+  left: -10%;
+}
+
+.frag-marker-container-y {
+  @extend .frag-marker-container;
+  bottom: -8%;
+  left: -10%;
+}
+
+.frag-marker-container-z {
+  @extend .frag-marker-container;
+  bottom: -32%;
+  left: -10%;
+}
+
+.frag-marker-extra-type {
+  @extend .frag-marker-container;
+  top: -30%;
+}
+
+.aa-text {
+  position: absolute;
+  font-size: var(--amino-acid-font-size, 12px);
+}
+
+.tag-marker {
+  position: absolute;
+  top: -7.5%;
+  left: -7.5%;
+  width: 115%;
+  height: 115%;
+  display: flex;
+  align-items: center;
+  justify-content: right;
+  border-top: 0.3em solid black;
+  border-right: 0.3em solid black;
+  border-bottom: 0.3em solid black;
+  border-left: 0.3em solid black;
+  z-index: 1100;
+}
+
+.tag-start {
+  clip-path: inset(0 50% 0 0);
+}
+
+.tag-end {
+  clip-path: inset(0 0 0 50%);
+}
+
+.mod-marker {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: right;
+  background-image:  radial-gradient(#676a9c 0.5px, transparent 0.5px), radial-gradient(#444cf7 0.5px, #e5e5f7 0.5px);
+  background-size: 15px 15px;
+  background-position: 0 0,10px 10px;
+  background-repeat: repeat;
+}
+
+.mod-mass {
+  background-color: white;
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  justify-content: right;
+  border-top: 0.1em solid #a79c91;
+  border-right: 0.1em solid #a79c91;
+  border-bottom: 0.1em solid #a79c91;
+  border-left: 0.1em solid #a79c91;
+  font-size: 0.7em;
+  padding: 0.0em 0.2em 0.0em 0.2em;
+  z-index: 1100;
+}
+
+.mod-mass-a {
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  border-top: 0.2em solid green;
+  border-right: 0.2em solid green;
+  border-bottom: 0.2em solid green;
+  border-top-right-radius: 0.5rem; /* Ensure the pseudo-element also has rounded corners */
+  border-top-left-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+  border-bottom-left-radius: 0.5rem;
+  padding: 0.0em 0.2em 0.0em 0.2em;
+  z-index: 1200;
+  font-size: 0.7em;
+  color: rgba(0, 0, 0, 0);
+}
+
+.mod-mass-b {
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  border-top: 0.2em solid blue;
+  border-right: 0.2em solid blue;
+  border-bottom: 0.2em solid blue;
+  border-top-right-radius: 0.5rem; /* Ensure the pseudo-element also has rounded corners */
+  border-top-left-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+  border-bottom-left-radius: 0.5rem;
+  z-index: 1200;
+  padding: 0.0em 0.2em 0.0em 0.2em;
+  font-size: 0.7em;
+  color: rgba(0, 0, 0, 0);
+}
+
+.mod-mass-c {
+  display: inline-block;
+  position: absolute;
+  top: -15%;
+  right: -25%;
+  display: flex;
+  align-items: center;
+  border-top: 0.2em solid red;
+  border-right: 0.2em solid red;
+  border-bottom: 0.2em solid red;
+  border-top-right-radius: 0.5rem; /* Ensure the pseudo-element also has rounded corners */
+  border-top-left-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+  border-bottom-left-radius: 0.5rem;
+  z-index: 1200;
+  font-size: 0.7em;
+  padding: 0.0em 0.2em 0.0em 0.2em;
+  color: rgba(0, 0, 0, 0);
+}
+
+.internal-depth {
+  position: absolute;
+  left: 6%;
+  bottom: 4%;
+  width: 88%;
+  height: 12%;
+  border-radius: 2px;
+  z-index: 900;
+}
+
+/* a piece starts left of / ends right of this residue */
+.internal-bracket {
+  position: absolute;
+  bottom: 2%;
+  width: 22%;
+  height: 34%;
+  border-bottom: 2px solid #8E44AD;
+  z-index: 950;
+}
+
+.internal-bracket-start {
+  left: -4%;
+  border-left: 2px solid #8E44AD;
+}
+
+.internal-bracket-end {
+  right: -4%;
+  border-right: 2px solid #8E44AD;
+}
+
+.sequence-amino-acid.internal-span {
+  outline: 2px dashed #8E44AD;
+}
+
+.mod-start {
+  clip-path: inset(0 50% 0 0);
+}
+
+.mod-end {
+  clip-path: inset(0 0 0 50%);
+}
+
+.mod-start-cont {
+  clip-path: inset(0 0 0 50%);
+}
+
+.mod-end-cont {
+  clip-path: inset(0 50% 0 0);
+}
+
+.mod-center-cont {
+  width: 125%;
+}
+
+</style>
