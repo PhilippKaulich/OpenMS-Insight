@@ -267,6 +267,7 @@ mirror(state_manager=state_manager, height=600)
 - `highlight_column`, `annotation_column`: Shared schema for highlights and label text
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
+- `svg_filename`: File name for the modebar's "Download as SVG" button (default: `title`, then `mirror_plot`)
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)

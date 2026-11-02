@@ -302,6 +302,8 @@ export type VolcanoData = Record<string, unknown>
 export interface MirrorPlotComponentArgs extends BaseComponentArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string
+  /** File name (without extension) for the SVG download. */
+  svgFilename?: string
   /** Label shown inside the top half of the figure. */
   titleTop?: string
   /** Label shown inside the bottom half of the figure. */

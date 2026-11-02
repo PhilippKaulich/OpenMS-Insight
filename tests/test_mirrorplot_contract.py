@@ -231,6 +231,24 @@ class TestMirrorPlotComponentArgs:
         assert "highlightColor" in args["styling"]
         assert "selectedColor" in args["styling"]
 
+    def test_svg_filename_reaches_vue_and_survives_cache(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        """svg_filename reaches Vue, also when loaded from the cache, and a plot
+        without it keeps its old cache config (no hash change)."""
+        plain = self._make(temp_cache_dir, sample_lineplot_data, cache_id="plain")
+        assert "svgFilename" not in plain._get_component_args()
+        assert "svg_filename" not in plain._get_cache_config()
+
+        self._make(
+            temp_cache_dir,
+            sample_lineplot_data,
+            cache_id="named",
+            svg_filename="psm_scan_42",
+        )
+        loaded = MirrorPlot(cache_id="named", cache_path=str(temp_cache_dir))
+        assert loaded._get_component_args()["svgFilename"] == "psm_scan_42"
+
 
 class TestMirrorPlotDynamicAnnotations:
     def _make(self, temp_cache_dir, data, **overrides):

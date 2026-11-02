@@ -64,6 +64,7 @@ class MirrorPlot(BaseComponent):
         title_bottom: str | None = None,
         x_label: str | None = None,
         y_label: str | None = None,
+        svg_filename: str | None = None,
         # Visuals
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
@@ -108,6 +109,8 @@ class MirrorPlot(BaseComponent):
             title_bottom: Label shown below the bottom spectrum (above the x-axis).
             x_label: X-axis label (defaults to x_column).
             y_label: Y-axis label (defaults to y_column).
+            svg_filename: File name (without extension) for the "Download as
+                SVG" modebar button. Defaults to the title, then "mirror_plot".
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
@@ -138,6 +141,7 @@ class MirrorPlot(BaseComponent):
         self._title_bottom = title_bottom
         self._x_label = x_label or x_column
         self._y_label = y_label or y_column
+        self._svg_filename = svg_filename
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -177,6 +181,7 @@ class MirrorPlot(BaseComponent):
             title_bottom=title_bottom,
             x_label=x_label,
             y_label=y_label,
+            svg_filename=svg_filename,
             styling=styling,
             config=config,
             **kwargs,
@@ -332,6 +337,9 @@ class MirrorPlot(BaseComponent):
             "y_label": self._y_label,
             "styling": self._styling,
             "plot_config": self._plot_config,
+            # Only when set, so caches built without it keep their hash; stored
+            # so a component loaded from its cache keeps it
+            **({"svg_filename": self._svg_filename} if self._svg_filename else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -351,6 +359,7 @@ class MirrorPlot(BaseComponent):
         self._y_label = config.get("y_label", self._y_column)
         self._styling = config.get("styling", {})
         self._plot_config = config.get("plot_config", {})
+        self._svg_filename = config.get("svg_filename")
         # Dynamic state (not cached) — reset to None
         self._top_dynamic_annotations = None
         self._bottom_dynamic_annotations = None
@@ -555,6 +564,8 @@ class MirrorPlot(BaseComponent):
             "styling": styling,
             "config": self._plot_config,
         }
+        if self._svg_filename:
+            args["svgFilename"] = self._svg_filename
         # Defensive: inject any unrecognised user **kwargs forwarded via super().__init__
         # without overwriting explicitly set args. All current MirrorPlot kwargs are
         # already covered above, so this loop is a no-op for normal usage.

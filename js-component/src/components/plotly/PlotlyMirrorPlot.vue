@@ -513,7 +513,25 @@ export default defineComponent({
       const element = document.getElementById(this.id)
       if (!element) return
 
-      await Plotly.newPlot(element, traces, layout, { responsive: true })
+      await Plotly.newPlot(element, traces, layout, {
+        responsive: true,
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        modeBarButtonsToAdd: [
+          {
+            title: 'Download as SVG',
+            name: 'toImageSvg',
+            icon: Plotly.Icons.camera,
+            click: (plotElement: HTMLElement) => {
+              Plotly.downloadImage(plotElement, {
+                filename: this.args.svgFilename || this.args.title || 'mirror_plot',
+                height: this.args.height || 400,
+                width: 1200,
+                format: 'svg',
+              })
+            },
+          },
+        ],
+      })
       this.isInitialized = true
 
       // Wire click handler for interactivity
