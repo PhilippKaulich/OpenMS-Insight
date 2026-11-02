@@ -1509,24 +1509,27 @@ export default defineComponent({
   }
 }
 
+/* Columns may shrink below their content (minmax(0, 1fr)): with plain 1fr a
+   row number wider than its column widened the grid past its container, so
+   the last column ran under the coverage scale */
 .grid-width-20 {
-  grid-template-columns: repeat(22, 1fr);
+  grid-template-columns: repeat(22, minmax(0, 1fr));
 }
 
 .grid-width-25 {
-  grid-template-columns: repeat(27, 1fr);
+  grid-template-columns: repeat(27, minmax(0, 1fr));
 }
 
 .grid-width-30 {
-  grid-template-columns: repeat(32, 1fr);
+  grid-template-columns: repeat(32, minmax(0, 1fr));
 }
 
 .grid-width-35 {
-  grid-template-columns: repeat(37, 1fr);
+  grid-template-columns: repeat(37, minmax(0, 1fr));
 }
 
 .grid-width-40 {
-  grid-template-columns: repeat(42, 1fr);
+  grid-template-columns: repeat(42, minmax(0, 1fr));
 }
 
 .sequence-and-scale {
@@ -1534,10 +1537,13 @@ export default defineComponent({
     align-items: center;
   }
 
+  /* Never narrower than its scale, and clear of the row numbers */
   .scale-container {
     display: flex;
     flex-direction: column;
     align-items: center;
+    flex-shrink: 0;
+    margin-left: 8px;
   }
 
   .sequence-part {
