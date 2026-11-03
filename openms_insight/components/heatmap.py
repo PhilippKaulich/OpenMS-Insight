@@ -207,6 +207,9 @@ class Heatmap(BaseComponent):
         self._intensity_label = intensity_label
         self._use_streaming = use_streaming
         self._categorical_filters = categorical_filters or []
+        self._boxes: pl.DataFrame | None = None
+        self._boxes_config: dict[str, Any] = {}
+        self._boxes_key: str | None = None
 
         super().__init__(
             cache_id=cache_id,
@@ -1125,7 +1128,9 @@ class Heatmap(BaseComponent):
             if not levels:
                 # No levels available
                 print("[HEATMAP] No levels available", file=sys.stderr)
-                return {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}
+                return self._add_boxes(
+                    {"heatmapData": pl.DataFrame().to_pandas(), "_hash": ""}, zoom
+                )
 
             data = levels[0]
             using_cat = self._preprocessed_data.get("has_categorical_filters", False)
@@ -1194,10 +1199,13 @@ class Heatmap(BaseComponent):
             data_hash = compute_dataframe_hash(df_polars)
             df_pandas = df_polars.to_pandas()
 
-        return {
-            "heatmapData": df_pandas,
-            "_hash": data_hash,
-        }
+        return self._add_boxes(
+            {
+                "heatmapData": df_pandas,
+                "_hash": data_hash,
+            },
+            zoom,
+        )
 
     def _get_component_args(self) -> dict[str, Any]:
         """
@@ -1237,10 +1245,108 @@ class Heatmap(BaseComponent):
         if self._intensity_label:
             args["intensityLabel"] = self._intensity_label
 
+        if self._boxes is not None:
+            args["boxes"] = self._boxes_config
+
         # Add any extra config options
         args.update(self._config)
 
         return args
+
+    # ------------------------------------------------------------------
+    # Boxes drawn over the points (e.g. features on a peak map)
+    # ------------------------------------------------------------------
+
+    def set_boxes(
+        self,
+        boxes: pl.DataFrame | pl.LazyFrame | None,
+        x_range: tuple[str, str] = ("x0", "x1"),
+        y_range: tuple[str, str] = ("y0", "y1"),
+        id_column: str | None = None,
+        selection: str | None = None,
+        label: str | None = None,
+        color: str = "#2ca02c",
+        max_boxes: int = 5000,
+    ) -> "Heatmap":
+        """
+        Draw rectangles over the points, e.g. the extent of LC-MS features.
+
+        Boxes are given per render and are not part of the cache: call this
+        before every render (None removes them). Only boxes that overlap the
+        visible range are sent, at most ``max_boxes`` of them in the given
+        order, so put the important ones first.
+
+        Args:
+            boxes: One row per box.
+            x_range: Columns with the left and right edge of each box.
+            y_range: Columns with the bottom and top edge of each box.
+            id_column: Column identifying a box. Needed for ``selection``.
+            selection: Identifier set to a box's id when a point inside it is
+                clicked (the smallest box wins); the box with the selected id
+                is drawn highlighted, also when it was selected elsewhere.
+            label: Legend name of the boxes (default: no legend entry).
+            color: Line colour of the boxes.
+            max_boxes: Most boxes sent per render.
+
+        Returns:
+            Self for method chaining
+        """
+        if boxes is None:
+            self._boxes, self._boxes_config, self._boxes_key = None, {}, None
+            return self
+        if selection is not None and id_column is None:
+            raise ValueError("selection= needs id_column=")
+        columns = {
+            x_range[0]: "x0",
+            x_range[1]: "x1",
+            y_range[0]: "y0",
+            y_range[1]: "y1",
+        }
+        if id_column is not None:
+            columns[id_column] = "id"
+        frame = boxes.lazy() if isinstance(boxes, pl.DataFrame) else boxes
+        frame = frame.select(
+            [pl.col(src).alias(dst) for src, dst in columns.items()]
+        ).collect()
+        self._boxes = frame.with_columns(
+            pl.col(c).cast(pl.Float64) for c in ("x0", "x1", "y0", "y1")
+        )
+        self._boxes_config = {
+            "selection": selection,
+            "label": label,
+            "color": color,
+            "maxBoxes": max_boxes,
+        }
+        self._boxes_key = (
+            f"{self._boxes.hash_rows().sum()}:{self._boxes.height}:{self._boxes_config}"
+        )
+        return self
+
+    def _get_render_key(self) -> str | None:
+        return self._boxes_key
+
+    def _add_boxes(
+        self, result: dict[str, Any], zoom: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Add the boxes overlapping the visible range to the payload."""
+        if self._boxes is None:
+            return result
+        boxes = self._boxes
+        if not self._is_no_zoom(zoom):
+            x_lo, x_hi = sorted(zoom.get("xRange", [-1, -1]))
+            y_lo, y_hi = sorted(zoom.get("yRange", [-1, -1]))
+            boxes = boxes.filter(
+                (pl.col("x1") >= x_lo)
+                & (pl.col("x0") <= x_hi)
+                & (pl.col("y1") >= y_lo)
+                & (pl.col("y0") <= y_hi)
+            )
+        boxes = boxes.head(self._boxes_config.get("maxBoxes", 5000))
+        result["boxData"] = boxes.to_pandas()
+        result["_hash"] = (
+            f"{result.get('_hash', '')}:{compute_dataframe_hash(boxes)}:{self._boxes_key}"
+        )
+        return result
 
     def with_styling(
         self,

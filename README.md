@@ -382,6 +382,24 @@ Heatmap(
 )
 ```
 
+**Boxes (e.g. LC-MS features):**
+`set_boxes()` draws rectangles over the points. Boxes are given per render, so
+call it before each render; only boxes in the visible range are sent. With
+`selection=`, clicking a point inside a box sets that identifier to the box's
+id, and the selected box is drawn with a thicker outline.
+
+```python
+heatmap.set_boxes(
+    features_df,
+    x_range=("rt_start", "rt_end"),
+    y_range=("mz_start", "mz_end"),
+    id_column="feature_id",
+    selection="feature",
+    label="Features",
+)
+heatmap(key="peak_map", state_manager=state_manager)
+```
+
 ### ClusteredHeatmap
 
 Grid heatmap for categorical axes (e.g. proteins against samples), with optional

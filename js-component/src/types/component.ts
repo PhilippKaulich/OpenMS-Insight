@@ -177,6 +177,24 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   logScale?: boolean
   /** Custom label for the colorbar (default: "Intensity") */
   intensityLabel?: string
+  /** Rectangles drawn over the points, set by Heatmap.set_boxes() */
+  boxes?: {
+    /** Identifier the id of a clicked box is written to */
+    selection?: string | null
+    /** Legend entry of the outlines */
+    label?: string | null
+    color?: string
+    maxBoxes?: number
+  }
+}
+
+/** One rectangle of Heatmap.set_boxes(), in data coordinates. */
+export interface HeatmapBox {
+  x0: number
+  x1: number
+  y0: number
+  y1: number
+  id?: unknown
 }
 
 /**
