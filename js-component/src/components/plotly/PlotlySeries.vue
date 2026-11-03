@@ -89,8 +89,34 @@ export default defineComponent({
         return trace as Plotly.Data
       })
     },
+    /** x positions of the points selected through this plot's interactivity
+     * identifiers, also when the selection was made in another component. */
+    selectedX(): number[] {
+      const interactivity = this.args.interactivity || {}
+      const xs = (this.columns[this.args.xColumn] as number[]) || []
+      const out: number[] = []
+      for (const [identifier, column] of Object.entries(interactivity)) {
+        const selected = this.selectionStore.$state[identifier]
+        const values = this.columns[column] as unknown[] | undefined
+        if (selected === undefined || selected === null || !values) continue
+        for (let i = 0; i < values.length; i++) {
+          if (values[i] === selected) out.push(xs[i])
+        }
+      }
+      return out
+    },
     layout(): Partial<Plotly.Layout> {
       return {
+        shapes: this.selectedX.map((x) => ({
+          type: 'line',
+          xref: 'x',
+          yref: 'paper',
+          x0: x,
+          x1: x,
+          y0: 0,
+          y1: 1,
+          line: { color: '#d62728', width: 1.5, dash: 'dash' },
+        })) as Partial<Plotly.Shape>[],
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: this.args.showLegend !== false,
         height: this.args.height || 400,
@@ -120,6 +146,9 @@ export default defineComponent({
         this.requestRender()
       },
       deep: true,
+    },
+    selectedX(next: number[], previous: number[]) {
+      if (JSON.stringify(next) !== JSON.stringify(previous)) this.requestRender()
     },
     // By value: the arguments arrive as a new object on every rerun
     argsKey() {
