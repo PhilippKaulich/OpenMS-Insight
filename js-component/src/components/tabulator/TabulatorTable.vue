@@ -16,7 +16,13 @@
             @click="downloadTable"
           />
           <div style="position: relative; display: inline-flex">
-            <v-btn variant="text" size="small" icon="mdi-filter" @click="openFilterDialog" />
+            <v-btn
+              variant="text"
+              size="small"
+              icon="mdi-filter"
+              :title="activeFilterCount > 0 ? `Filters (${activeFilterCount} active)` : 'Filters'"
+              @click="openFilterDialog"
+            />
             <div v-if="activeFilterCount > 0" class="filter-badge">
               {{ activeFilterCount }}
             </div>
@@ -52,6 +58,21 @@
             @click="toggleGoTo"
             color="default"
           />
+          <v-text-field
+            v-if="args.search"
+            :model-value="searchInput"
+            density="compact"
+            variant="outlined"
+            hide-details
+            single-line
+            clearable
+            prepend-inner-icon="mdi-magnify"
+            :placeholder="args.searchPlaceholder || 'Search'"
+            :title="searchTitle"
+            class="table-search"
+            @update:model-value="onSearchInput"
+            @keyup.enter="commitSearch"
+          />
         </div>
         <div class="table-toolbar-title">
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
@@ -70,6 +91,30 @@
           />
         </div>
       </div>
+    </div>
+
+    <!-- The filters in force, each removable -->
+    <div v-if="activeFilterChips.length > 0" class="table-filter-chips">
+      <v-chip
+        v-for="chip in activeFilterChips"
+        :key="chip.key"
+        size="small"
+        closable
+        :title="chip.kind === 'search' ? searchTitle : 'Click to edit, × to remove'"
+        @click="chip.kind !== 'search' && openFilterDialog()"
+        @click:close="removeFilterChip(chip)"
+      >
+        {{ chip.label }}
+      </v-chip>
+      <v-btn
+        v-if="activeFilterChips.length > 1"
+        size="x-small"
+        variant="text"
+        color="primary"
+        @click="clearAllFilters"
+      >
+        Clear all
+      </v-btn>
     </div>
 
     <!-- Go To interface -->
@@ -144,11 +189,39 @@ import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 
 import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { TableComponentArgs, PaginationState, ColumnMetadata } from '@/types/component'
+import type {
+  TableComponentArgs,
+  PaginationState,
+  ColumnMetadata,
+  ColumnFilter,
+  NumericFilterConfig,
+} from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
+
+type NumericOp = 'between' | '>=' | '<='
+type FilterValue = {
+  categorical?: string[]
+  // A bound left null is open
+  numeric?: { op: NumericOp; min: number | null; max: number | null }
+  text?: string
+}
+interface FilterChip {
+  key: string
+  kind: 'search' | 'categorical' | 'numeric' | 'text'
+  field?: string
+  label: string
+}
+
+/** A number as people write it: no exponent, at most 6 significant digits. */
+function formatNumber(value: number): string {
+  return value.toLocaleString('en-US', { maximumSignificantDigits: 6, useGrouping: false })
+}
+
+// How long typing in the search box waits before the table is searched
+const SEARCH_DELAY_MS = 400
 
 export default defineComponent({
   name: 'TabulatorTable',
@@ -174,14 +247,7 @@ export default defineComponent({
       // Columns the viewer showed or hid in the column menu (field -> visible)
       columnVisibility: {} as Record<string, boolean>,
       selectedColumns: [] as string[],
-      filterValues: {} as Record<
-        string,
-        {
-          categorical?: string[]
-          numeric?: { min: number; max: number }
-          text?: string
-        }
-      >,
+      filterValues: {} as Record<string, FilterValue>,
       filterTypes: {} as Record<string, 'categorical' | 'numeric' | 'text'>,
       columnAnalysis: {} as Record<
         string,
@@ -218,6 +284,10 @@ export default defineComponent({
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
       // On/off state of the title-row toggle filters, keyed by column
       currentToggles: {} as Record<string, boolean>,
+      // Text in the search box, and the search last sent to Python
+      searchInput: '' as string,
+      currentSearch: '' as string,
+      searchTimer: null as ReturnType<typeof setTimeout> | null,
       // Track if table has fired tableBuilt event (DOM ready)
       isTableBuilt: false as boolean,
       // Track if we're in the middle of a user-initiated page navigation
@@ -257,9 +327,51 @@ export default defineComponent({
     toggleFilters(): Array<{ label: string; column: string; default: boolean; color?: string }> {
       return this.args.toggleFilters || []
     },
-    /** Toggle state to merge into pagination requests (nothing when the table has none). */
-    togglesPatch(): Record<string, unknown> {
-      return this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}
+    /**
+     * Toggle state and search to merge into pagination requests (nothing for a
+     * table that has neither, so its requests stay as they were).
+     */
+    viewFiltersPatch(): Record<string, unknown> {
+      return {
+        ...(this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}),
+        ...(this.args.search ? { search: this.currentSearch } : {}),
+      }
+    },
+    numericFilterConfig(): Record<string, NumericFilterConfig> {
+      return this.args.numericFilters || {}
+    },
+    searchTitle(): string {
+      const titles = (this.args.searchColumns || []).map((field) => this.columnTitle(field))
+      const where = titles.length > 0 ? ` in ${titles.join(', ')}` : ''
+      return `Rows with every word${where}. Not case sensitive.`
+    },
+    /** One chip per filter in force: the search, then the dialog's filters. */
+    activeFilterChips(): FilterChip[] {
+      const chips: FilterChip[] = []
+      if (this.currentSearch) {
+        chips.push({ key: 'search', kind: 'search', label: `Search: ${this.currentSearch}` })
+      }
+      for (const field of this.selectedColumns) {
+        const value = this.filterValues[field]
+        if (!value || !this.isFilterActive(field)) continue
+        const title = this.columnTitle(field)
+        const type = this.filterTypes[field]
+        if (type === 'numeric' && value.numeric) {
+          const { op, min, max } = value.numeric
+          let label: string
+          if (op === '>=' || (op === 'between' && max === null)) label = `${title} ≥ ${formatNumber(min as number)}`
+          else if (op === '<=' || min === null) label = `${title} ≤ ${formatNumber(max as number)}`
+          else label = `${title} ${formatNumber(min)} – ${formatNumber(max as number)}`
+          chips.push({ key: `n:${field}`, kind: 'numeric', field, label })
+        } else if (type === 'categorical' && value.categorical) {
+          const shown = value.categorical.slice(0, 3).join(', ')
+          const more = value.categorical.length > 3 ? ` +${value.categorical.length - 3}` : ''
+          chips.push({ key: `c:${field}`, kind: 'categorical', field, label: `${title}: ${shown}${more}` })
+        } else if (type === 'text' && value.text) {
+          chips.push({ key: `t:${field}`, kind: 'text', field, label: `${title} ~ ${value.text}` })
+        }
+      }
+      return chips
     },
     tableData(): Record<string, unknown>[] {
       const data = this.streamlitDataStore.allDataForDrawing?.tableData
@@ -293,34 +405,7 @@ export default defineComponent({
       return `openms-insight:columns:${this.args.paginationIdentifier || this.args.title || ''}`
     },
     activeFilterCount(): number {
-      let count = 0
-      for (const columnField of this.selectedColumns) {
-        const filterValue = this.filterValues[columnField]
-        if (!filterValue) continue
-
-        const filterType = this.filterTypes[columnField]
-        let hasActiveFilter = false
-
-        switch (filterType) {
-          case 'categorical':
-            hasActiveFilter = !!(filterValue.categorical && filterValue.categorical.length > 0)
-            break
-          case 'numeric':
-            if (filterValue.numeric) {
-              const dataMin = this.getMinValue(columnField)
-              const dataMax = this.getMaxValue(columnField)
-              hasActiveFilter =
-                filterValue.numeric.min !== dataMin || filterValue.numeric.max !== dataMax
-            }
-            break
-          case 'text':
-            hasActiveFilter = !!(filterValue.text && filterValue.text.trim() !== '')
-            break
-        }
-
-        if (hasActiveFilter) count++
-      }
-      return count
+      return this.selectedColumns.filter((field) => this.isFilterActive(field)).length
     },
     preparedTableData(): Record<string, unknown>[] {
       const indexField = this.args.tableIndexField || 'id'
@@ -460,8 +545,19 @@ export default defineComponent({
     // Watch for height changes in args
     'args.height'(newHeight: number | undefined) {
       if (this.tabulator && newHeight) {
-        const newMaxHeight = newHeight - 56 - (this.showGoTo ? 58 : 0)
-        this.tabulator.setHeight(Math.max(newMaxHeight, 50))
+        this.tabulator.setHeight(Math.max(this.tableMaxHeight(), 50))
+      }
+    },
+    // The chip row takes room from the rows of a table of fixed height
+    'activeFilterChips.length'(count: number, previous: number) {
+      if ((count > 0) !== (previous > 0) && this.tabulator && this.isServerSidePagination) {
+        this.tabulator.setHeight(Math.max(this.tableMaxHeight(), 150))
+      }
+    },
+    // Another table drawn in this view: show its filters, not the last table's
+    'args.paginationIdentifier'(identifier: string | undefined, previous: string | undefined) {
+      if (identifier !== previous) {
+        this.restoreFilters()
       }
     },
     selectedColumns: {
@@ -620,6 +716,8 @@ export default defineComponent({
     for (const toggle of this.toggleFilters) {
       this.currentToggles[toggle.column] = saved[toggle.column] ?? toggle.default
     }
+    // So do the search and the dialog's filters, e.g. when the page is opened again
+    this.restoreFilters()
   },
   mounted() {
     // Initialize lastDataHash from store and draw table
@@ -649,10 +747,168 @@ export default defineComponent({
     }
   },
   beforeUnmount() {
+    if (this.searchTimer) clearTimeout(this.searchTimer)
     this.cleanupTeleport()
     this.rootResizeObserver?.disconnect()
   },
   methods: {
+    /** Height left for the rows: the component's height less toolbar, go-to bar and filter chips. */
+    tableMaxHeight(): number {
+      const passedHeight = this.args.height
+      const defaultHeight = this.args.title ? 320 : 310
+      const baseHeight = passedHeight ? passedHeight - 56 : defaultHeight
+      const goToHeight = this.showGoTo ? 58 : 0
+      const chipsHeight = this.activeFilterChips.length > 0 ? 34 : 0
+      return baseHeight - goToHeight - chipsHeight
+    },
+
+    columnTitle(field: string): string {
+      const column = (this.args.columnDefinitions || []).find((col) => col.field === field)
+      return (column?.title as string) || field
+    },
+
+    /** Whether the dialog's filter on this column restricts the rows. */
+    isFilterActive(field: string): boolean {
+      const value = this.filterValues[field]
+      if (!value) return false
+      switch (this.filterTypes[field]) {
+        case 'categorical':
+          return !!value.categorical && value.categorical.length > 0
+        case 'numeric':
+          return this.numericBounds(field).length > 0
+        case 'text':
+          return !!value.text && value.text.trim() !== ''
+      }
+      return false
+    },
+
+    /** The '>=' and '<=' bounds a numeric filter sets (none while open). */
+    numericBounds(field: string): Array<{ type: '>=' | '<='; value: number }> {
+      const numeric = this.filterValues[field]?.numeric
+      if (!numeric) return []
+      const bounds: Array<{ type: '>=' | '<='; value: number }> = []
+      if (numeric.op !== '<=' && numeric.min !== null && Number.isFinite(numeric.min)) {
+        bounds.push({ type: '>=', value: numeric.min })
+      }
+      if (numeric.op !== '>=' && numeric.max !== null && Number.isFinite(numeric.max)) {
+        bounds.push({ type: '<=', value: numeric.max })
+      }
+      return bounds
+    },
+
+    /**
+     * Take the search and the dialog's filters from the state Python echoes,
+     * the filters in force for this table. Columns with a numeric filter
+     * option are always offered in the dialog.
+     */
+    restoreFilters(): void {
+      const state = this.paginationState
+      const filters: ColumnFilter[] = Array.isArray(state?.column_filters) ? state!.column_filters! : []
+      this.filterValues = {}
+      this.filterTypes = {}
+      this.columnAnalysis = {}
+      const selected = new Set<string>(Object.keys(this.numericFilterConfig))
+      for (const filter of filters) {
+        if (!filter?.field) continue
+        selected.add(filter.field)
+        const value: FilterValue = this.filterValues[filter.field] || {}
+        if (filter.type === 'in' && Array.isArray(filter.value)) {
+          value.categorical = filter.value.map((v) => String(v))
+          this.filterTypes[filter.field] = 'categorical'
+        } else if ((filter.type === '>=' || filter.type === '<=') && typeof filter.value === 'number') {
+          const numeric = value.numeric || { op: filter.type, min: null, max: null }
+          if (filter.type === '>=') numeric.min = filter.value
+          else numeric.max = filter.value
+          numeric.op = numeric.min !== null && numeric.max !== null ? 'between' : filter.type
+          value.numeric = numeric
+          this.filterTypes[filter.field] = 'numeric'
+        } else if (filter.type === 'regex' && typeof filter.value === 'string') {
+          value.text = filter.value
+          this.filterTypes[filter.field] = 'text'
+        }
+        this.filterValues[filter.field] = value
+      }
+      this.selectedColumns = this.columnNames.map((col) => col.field).filter((field) => selected.has(field))
+      this.currentColumnFilters = filters.map((f) => ({ field: f.field, type: f.type, value: f.value }))
+      this.currentSearch = typeof state?.search === 'string' ? state.search : ''
+      this.searchInput = this.currentSearch
+    },
+
+    /** Ask Python for page 1 of the rows under the current filters and search. */
+    requestFilteredRows(): void {
+      const paginationIdentifier = this.args.paginationIdentifier
+      if (!paginationIdentifier) return
+      this.isLoadingServerData = true
+      this.selectionStore.updateSelection(paginationIdentifier, {
+        page: 1,
+        page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+        sort_column: this.requestedSortColumn || undefined,
+        sort_dir: this.requestedSortDir,
+        column_filters: this.currentColumnFilters,
+        ...this.viewFiltersPatch,
+      })
+    },
+
+    onSearchInput(value: string | null): void {
+      this.searchInput = value ?? ''
+      if (this.searchTimer) clearTimeout(this.searchTimer)
+      // Cleared with the × button: at once
+      if (!this.searchInput) {
+        this.commitSearch()
+        return
+      }
+      this.searchTimer = setTimeout(() => this.commitSearch(), SEARCH_DELAY_MS)
+    },
+
+    /** Search the whole table (in Python) for the text in the search box. */
+    commitSearch(): void {
+      if (this.searchTimer) {
+        clearTimeout(this.searchTimer)
+        this.searchTimer = null
+      }
+      const text = this.searchInput.split(/\s+/).filter(Boolean).join(' ')
+      if (text === this.currentSearch) return
+      this.currentSearch = text
+      this.requestFilteredRows()
+    },
+
+    removeFilterChip(chip: FilterChip): void {
+      if (chip.kind === 'search') {
+        this.searchInput = ''
+        this.commitSearch()
+        return
+      }
+      const value = chip.field ? this.filterValues[chip.field] : undefined
+      if (!chip.field || !value) return
+      if (chip.kind === 'numeric' && value.numeric) {
+        value.numeric = { ...value.numeric, min: null, max: null }
+      } else if (chip.kind === 'categorical') {
+        value.categorical = []
+      } else if (chip.kind === 'text') {
+        value.text = ''
+      }
+      this.applyFilters()
+      this.refreshTeleportDialog()
+    },
+
+    /** Remove the search and every filter of the dialog (not the title-row toggles). */
+    clearAllFilters(): void {
+      if (this.searchTimer) clearTimeout(this.searchTimer)
+      this.searchInput = ''
+      const hadSearch = this.currentSearch !== ''
+      this.currentSearch = ''
+      for (const field of Object.keys(this.filterValues)) {
+        const value = this.filterValues[field]
+        if (value.numeric) value.numeric = { ...value.numeric, min: null, max: null }
+        if (value.categorical) value.categorical = []
+        if (value.text) value.text = ''
+      }
+      // Server-side tables send the search along with the filters
+      this.applyFilters()
+      if (hadSearch && !this.isServerSidePagination) this.requestFilteredRows()
+      this.refreshTeleportDialog()
+    },
+
     /**
      * Tick or untick a title-row toggle filter. The filtering happens in Python,
      * so this requests page 1 of the re-filtered data.
@@ -668,7 +924,7 @@ export default defineComponent({
         sort_column: this.paginationState?.sort_column,
         sort_dir: this.paginationState?.sort_dir || 'asc',
         column_filters: this.currentColumnFilters,
-        ...this.togglesPatch,
+        ...this.viewFiltersPatch,
       })
     },
     drawTable(): void {
@@ -686,11 +942,7 @@ export default defineComponent({
       const indexField = this.args.tableIndexField || 'id'
       // Use passed height if available, otherwise use default
       // Subtract space for title bar (~40px) and padding (~16px)
-      const passedHeight = this.args.height
-      const defaultHeight = this.args.title ? 320 : 310
-      const baseHeight = passedHeight ? passedHeight - 56 : defaultHeight
-      const goToHeight = this.showGoTo ? 58 : 0
-      const tableMaxHeight = baseHeight - goToHeight
+      const tableMaxHeight = this.tableMaxHeight()
 
       // Build Tabulator options
       // Note: For server-side pagination, we must NOT set the data option.
@@ -881,7 +1133,7 @@ export default defineComponent({
               sort_column: sortColumn,
               sort_dir: sortDir,
               column_filters: this.currentColumnFilters,
-              ...this.togglesPatch,
+              ...this.viewFiltersPatch,
             })
           }
         })
@@ -947,7 +1199,9 @@ export default defineComponent({
         this.paginationState.page === page &&
         this.paginationState.page_size === pageSize &&
         sortMatch &&
-        this.tableData.length > 0
+        // A filter that leaves no rows is an answer too: without it the page
+        // counter kept the previous count
+        (this.tableData.length > 0 || this.paginationState.total_rows === 0)
       ) {
         console.log(`[TabulatorTable ${this.args.title}] handleRemoteRequest: using cached data (page=${page}, sortCol=${cachedSortCol})`)
 
@@ -963,7 +1217,7 @@ export default defineComponent({
             sort_column: sortColumn,
             sort_dir: sortDir,
             column_filters: this.currentColumnFilters,
-              ...this.togglesPatch,
+              ...this.viewFiltersPatch,
           })
         }
 
@@ -994,7 +1248,7 @@ export default defineComponent({
           sort_column: sortColumn,
           sort_dir: sortDir,
           column_filters: this.currentColumnFilters,
-              ...this.togglesPatch,
+              ...this.viewFiltersPatch,
         })
       }
 
@@ -1747,7 +2001,7 @@ export default defineComponent({
           sort_column: this.requestedSortColumn || undefined,
           sort_dir: this.requestedSortDir,
           column_filters: this.currentColumnFilters,
-              ...this.togglesPatch,
+              ...this.viewFiltersPatch,
           download_request: requestId,
         })
         return
@@ -1798,10 +2052,11 @@ export default defineComponent({
           ) as (string | number)[],
           minValue: meta.min,
           maxValue: meta.max,
-          dataType: meta.type,
+          // A threshold, however few values the column has
+          dataType: this.numericFilterConfig[columnField] ? ('numeric' as const) : meta.type,
         }
         this.columnAnalysis[columnField] = analysis
-        this.filterTypes[columnField] = meta.type
+        this.filterTypes[columnField] = analysis.dataType
         return analysis
       }
 
@@ -1832,6 +2087,9 @@ export default defineComponent({
         }
       } else {
         dataType = uniqueValues.length <= 50 ? 'categorical' : 'text'
+      }
+      if (this.numericFilterConfig[columnField]) {
+        dataType = 'numeric'
       }
 
       const analysis = {
@@ -1874,20 +2132,18 @@ export default defineComponent({
     initializeFilterValue(columnField: string): void {
       if (!this.filterValues[columnField]) {
         const filterType = this.getFilterType(columnField)
-        const newFilterValue: {
-          categorical?: string[]
-          numeric?: { min: number; max: number }
-          text?: string
-        } = {}
+        const newFilterValue: FilterValue = {}
 
         switch (filterType) {
           case 'categorical':
             newFilterValue.categorical = []
             break
           case 'numeric':
+            // Open until the viewer sets a bound
             newFilterValue.numeric = {
-              min: this.getMinValue(columnField),
-              max: this.getMaxValue(columnField),
+              op: this.numericFilterConfig[columnField]?.op || 'between',
+              min: null,
+              max: null,
             }
             break
           case 'text':
@@ -1929,9 +2185,8 @@ export default defineComponent({
               }
               break
             case 'numeric':
-              if (filterValue.numeric) {
-                serverFilters.push({ field: columnField, type: '>=', value: filterValue.numeric.min })
-                serverFilters.push({ field: columnField, type: '<=', value: filterValue.numeric.max })
+              for (const bound of this.numericBounds(columnField)) {
+                serverFilters.push({ field: columnField, type: bound.type, value: bound.value })
               }
               break
             case 'text':
@@ -1942,21 +2197,9 @@ export default defineComponent({
           }
         })
 
-        // Store filters and trigger server request
+        // Store filters and request page 1 of the re-filtered rows
         this.currentColumnFilters = serverFilters
-
-        // Send pagination request with new filters (reset to page 1)
-        const paginationIdentifier = this.args.paginationIdentifier
-        if (paginationIdentifier) {
-          this.selectionStore.updateSelection(paginationIdentifier, {
-            page: 1, // Reset to first page when filters change
-            page_size: this.paginationState?.page_size || this.args.pageSize || 100,
-            sort_column: this.requestedSortColumn || undefined,
-            sort_dir: this.requestedSortDir,
-            column_filters: serverFilters,
-              ...this.togglesPatch,
-          })
-        }
+        this.requestFilteredRows()
         return
       }
 
@@ -1988,9 +2231,8 @@ export default defineComponent({
             }
             break
           case 'numeric':
-            if (filterValue.numeric) {
-              this.tabulator?.addFilter(columnField, '>=', filterValue.numeric.min)
-              this.tabulator?.addFilter(columnField, '<=', filterValue.numeric.max)
+            for (const bound of this.numericBounds(columnField)) {
+              this.tabulator?.addFilter(columnField, bound.type, bound.value)
             }
             break
           case 'text':
@@ -2127,8 +2369,14 @@ export default defineComponent({
         min-height: 0;
       `
 
-      this.renderColumnSelection(content)
-      this.renderFilterControls(content)
+      // A table with suggested thresholds opens on them; the column choice follows
+      if (Object.keys(this.numericFilterConfig).length > 0) {
+        this.renderFilterControls(content)
+        this.renderColumnSelection(content)
+      } else {
+        this.renderColumnSelection(content)
+        this.renderFilterControls(content)
+      }
 
       // Footer
       const footer = this.parentDocument.createElement('div')
@@ -2296,6 +2544,7 @@ export default defineComponent({
       if (this.selectedColumns.length === 0 || !this.parentDocument) return
 
       const filterSection = this.parentDocument.createElement('div')
+      filterSection.style.cssText = 'margin-bottom: 24px;'
 
       const filterTitle = this.parentDocument.createElement('h6')
       filterTitle.textContent = 'Filter Settings:'
@@ -2411,80 +2660,136 @@ export default defineComponent({
       if (!this.parentDocument) {
         throw new Error('Parent document not available')
       }
-
-      const container = this.parentDocument.createElement('div')
-      container.style.cssText = 'padding: 8px 0;'
-
-      const minValue = Math.floor(this.getMinValue(columnField))
-      const maxValue = Math.ceil(this.getMaxValue(columnField))
-      const currentFilter = this.filterValues[columnField]?.numeric
-
-      const range = maxValue - minValue
-      const step = range > 1 ? 1 : 0.01
-
-      // Values display
-      const valuesDisplay = this.parentDocument.createElement('div')
-      valuesDisplay.style.cssText =
-        'display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #333;'
-
-      const minValueDisplay = this.parentDocument.createElement('span')
-      minValueDisplay.textContent = String(currentFilter?.min || minValue)
-      minValueDisplay.style.cssText =
-        'font-weight: 500; padding: 4px 8px; background: #f0f0f0; border-radius: 4px;'
-
-      const maxValueDisplay = this.parentDocument.createElement('span')
-      maxValueDisplay.textContent = String(currentFilter?.max || maxValue)
-      maxValueDisplay.style.cssText =
-        'font-weight: 500; padding: 4px 8px; background: #f0f0f0; border-radius: 4px;'
-
-      valuesDisplay.appendChild(minValueDisplay)
-      valuesDisplay.appendChild(maxValueDisplay)
-
-      // Simple min/max inputs
-      const inputsContainer = this.parentDocument.createElement('div')
-      inputsContainer.style.cssText = 'display: flex; gap: 8px; align-items: center;'
-
-      const minInput = this.parentDocument.createElement('input')
-      minInput.type = 'number'
-      minInput.value = String(currentFilter?.min || minValue)
-      minInput.min = String(minValue)
-      minInput.max = String(maxValue)
-      minInput.step = String(step)
-      minInput.style.cssText = 'width: 100px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;'
-
-      const toLabel = this.parentDocument.createElement('span')
-      toLabel.textContent = 'to'
-
-      const maxInput = this.parentDocument.createElement('input')
-      maxInput.type = 'number'
-      maxInput.value = String(currentFilter?.max || maxValue)
-      maxInput.min = String(minValue)
-      maxInput.max = String(maxValue)
-      maxInput.step = String(step)
-      maxInput.style.cssText = 'width: 100px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;'
-
-      const updateFilter = () => {
-        const minVal = parseFloat(minInput.value) || minValue
-        const maxVal = parseFloat(maxInput.value) || maxValue
-
-        if (!this.filterValues[columnField]) {
-          this.filterValues[columnField] = {}
+      const doc = this.parentDocument
+      const config = this.numericFilterConfig[columnField]
+      const dataMin = this.getMinValue(columnField)
+      const dataMax = this.getMaxValue(columnField)
+      if (!this.filterValues[columnField]?.numeric) {
+        this.filterValues[columnField] = {
+          ...(this.filterValues[columnField] || {}),
+          numeric: { op: config?.op || 'between', min: null, max: null },
         }
-        this.filterValues[columnField].numeric = { min: minVal, max: maxVal }
-        minValueDisplay.textContent = String(minVal)
-        maxValueDisplay.textContent = String(maxVal)
-        this.applyFilters()
+      }
+      const numeric = this.filterValues[columnField].numeric!
+
+      const container = doc.createElement('div')
+      container.style.cssText = 'display: flex; flex-direction: column; gap: 8px;'
+
+      const inputStyle =
+        'width: 120px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;'
+      const row = doc.createElement('div')
+      row.style.cssText = 'display: flex; gap: 8px; align-items: center; flex-wrap: wrap;'
+
+      // Which side the threshold keeps: at least, at most, or a range
+      const opSelect = doc.createElement('select')
+      opSelect.style.cssText = 'padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;'
+      for (const [op, text] of [
+        ['>=', '≥ at least'],
+        ['<=', '≤ at most'],
+        ['between', 'between'],
+      ] as const) {
+        const option = doc.createElement('option')
+        option.value = op
+        option.textContent = text
+        option.selected = numeric.op === op
+        opSelect.appendChild(option)
       }
 
-      minInput.addEventListener('change', updateFilter)
-      maxInput.addEventListener('change', updateFilter)
+      const makeInput = (value: number | null, placeholder: number): HTMLInputElement => {
+        const input = doc.createElement('input')
+        input.type = 'number'
+        input.step = 'any'
+        input.value = value === null ? '' : String(value)
+        input.placeholder = formatNumber(placeholder)
+        input.style.cssText = inputStyle
+        return input
+      }
+      const minInput = makeInput(numeric.min, dataMin)
+      const maxInput = makeInput(numeric.max, dataMax)
+      const toLabel = doc.createElement('span')
+      toLabel.textContent = 'to'
 
-      inputsContainer.appendChild(minInput)
-      inputsContainer.appendChild(toLabel)
-      inputsContainer.appendChild(maxInput)
+      const range = doc.createElement('span')
+      range.textContent = `values ${formatNumber(dataMin)} – ${formatNumber(dataMax)}`
+      range.style.cssText = 'font-size: 12px; color: #888;'
 
-      container.appendChild(valuesDisplay)
-      container.appendChild(inputsContainer)
+      const layout = () => {
+        const op = numeric.op
+        minInput.style.display = op === '<=' ? 'none' : ''
+        maxInput.style.display = op === '>=' ? 'none' : ''
+        toLabel.style.display = op === 'between' ? '' : 'none'
+      }
+      const parse = (input: HTMLInputElement): number | null => {
+        if (input.value.trim() === '') return null
+        const value = parseFloat(input.value)
+        return Number.isFinite(value) ? value : null
+      }
+      const update = () => {
+        numeric.op = opSelect.value as NumericOp
+        numeric.min = parse(minInput)
+        numeric.max = parse(maxInput)
+        layout()
+        this.applyFilters()
+        markSuggestions()
+      }
+      opSelect.addEventListener('change', update)
+      minInput.addEventListener('change', update)
+      maxInput.addEventListener('change', update)
+
+      row.appendChild(opSelect)
+      row.appendChild(minInput)
+      row.appendChild(toLabel)
+      row.appendChild(maxInput)
+      row.appendChild(range)
+      layout()
+      container.appendChild(row)
+
+      // One-click thresholds offered by the app, and "Any" to remove the filter
+      const buttons: Array<{ button: HTMLButtonElement; value: number | null }> = []
+      const markSuggestions = () => {
+        const bound = numeric.op === '>=' ? numeric.min : numeric.op === '<=' ? numeric.max : undefined
+        const open = numeric.min === null && numeric.max === null
+        for (const { button, value } of buttons) {
+          const active = value === null ? open : numeric.op === config?.op && bound === value
+          button.style.background = active ? '#1976d2' : 'white'
+          button.style.color = active ? 'white' : '#1976d2'
+        }
+      }
+      if (config) {
+        const chips = doc.createElement('div')
+        chips.style.cssText = 'display: flex; gap: 6px; flex-wrap: wrap; align-items: center;'
+        const symbol = config.op === '>=' ? '≥' : '≤'
+        const choices: Array<{ value: number | null; text: string; tip: string }> = [
+          { value: null, text: 'Any', tip: 'No filter on this column' },
+          ...(config.suggestions || []).map((s) => ({
+            value: s.value,
+            text: s.label || `${symbol} ${formatNumber(s.value)}`,
+            tip: `${this.columnTitle(columnField)} ${symbol} ${formatNumber(s.value)}`,
+          })),
+        ]
+        for (const choice of choices) {
+          const button = doc.createElement('button')
+          button.textContent = choice.text
+          button.title = choice.tip
+          button.style.cssText =
+            'border: 1px solid #1976d2; border-radius: 14px; padding: 2px 10px; font-size: 13px; cursor: pointer;'
+          button.addEventListener('click', () => {
+            opSelect.value = config.op
+            numeric.op = config.op
+            numeric.min = config.op === '>=' ? choice.value : null
+            numeric.max = config.op === '<=' ? choice.value : null
+            minInput.value = numeric.min === null ? '' : String(numeric.min)
+            maxInput.value = numeric.max === null ? '' : String(numeric.max)
+            layout()
+            this.applyFilters()
+            markSuggestions()
+          })
+          buttons.push({ button, value: choice.value })
+          chips.appendChild(button)
+        }
+        container.appendChild(chips)
+        markSuggestions()
+      }
       return container
     },
 
@@ -2578,7 +2883,7 @@ export default defineComponent({
             sort_column: this.requestedSortColumn || undefined,
             sort_dir: this.requestedSortDir,
             column_filters: this.currentColumnFilters,
-              ...this.togglesPatch,
+              ...this.viewFiltersPatch,
             go_to_request: {
               field: this.selectedGoToField,
               value: this.goToInputValue.trim(),
@@ -2698,6 +3003,44 @@ export default defineComponent({
 
 .toggle-filter .v-label {
   opacity: 0.6;
+}
+
+/* Toolbar search box: as tall as the buttons beside it */
+.table-search {
+  flex: 0 1 240px;
+  min-width: 140px;
+  margin-left: 8px;
+}
+
+.table-search .v-field {
+  font-size: 14px;
+  --v-field-padding-start: 8px;
+}
+
+.table-search .v-field__input {
+  min-height: 32px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.table-search .v-field__prepend-inner > .v-icon,
+.table-search .v-field__clearable > .v-icon {
+  font-size: 18px;
+}
+
+/* The filters in force, under the toolbar */
+.table-filter-chips {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin: 2px 0 2px 4px;
+}
+
+.table-filter-chips .v-chip {
+  flex: 0 0 auto;
 }
 
 .filter-badge {

@@ -161,6 +161,30 @@ Table(
 - `pagination`: Enable server-side pagination (default: True). Only the current page of data is sent to the browser, dramatically reducing memory usage for large datasets.
 - `page_size`: Rows per page (default: 100)
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
+- `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
+- `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+
+**Filters.** The filter button opens a dialog with a filter per column: values to
+keep, a text pattern, or for numbers "at least", "at most" or a range. Every
+filter, and the search, runs in Python over the whole table. The filters in force
+show as chips under the toolbar, each removable, with "Clear all"; they are kept
+when the table is drawn again.
+
+```python
+Table(
+    cache_id="proteins",
+    data=proteins,
+    search=True,  # or ["accession", "gene", "description"]
+    search_placeholder="Accession, gene or protein name",
+    numeric_filters={
+        "q_value": {
+            "op": "<=",
+            "suggestions": [{"value": 0.01, "label": "1 % (run)"}, 0.001],
+        },
+        "peptides": {"op": ">=", "suggestions": [2, 3], "default": 2},
+    },
+)
+```
 
 **Custom formatters:**
 In addition to Tabulator's built-in formatters, these custom formatters are available:

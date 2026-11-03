@@ -28,6 +28,24 @@ export interface PaginationState {
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
   toggles?: Record<string, boolean>
+  /** The filter dialog's filters in force (sent only when there are any) */
+  column_filters?: ColumnFilter[]
+  /** The search in force (sent only when there is one) */
+  search?: string
+}
+
+/** One condition of the filter dialog, as Python applies it. */
+export interface ColumnFilter {
+  field: string
+  type: 'in' | '>=' | '<=' | 'regex' | string
+  value: unknown
+}
+
+/** A numeric column offered in the filter dialog as a one-sided threshold. */
+export interface NumericFilterConfig {
+  op: '<=' | '>='
+  suggestions?: Array<{ value: number; label?: string }>
+  default?: number
 }
 
 /**
@@ -82,6 +100,13 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSortOn?: string[]
   /** False hides the column menu */
   columnMenu?: boolean
+  /** Show the toolbar search box */
+  search?: boolean
+  /** Columns the search box looks in */
+  searchColumns?: string[]
+  searchPlaceholder?: string
+  /** Numeric columns offered as thresholds in the filter dialog */
+  numericFilters?: Record<string, NumericFilterConfig>
 }
 
 /**
