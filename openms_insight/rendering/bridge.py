@@ -112,6 +112,16 @@ _HANDLED_EVENTS_KEY = "_svc_handled_events"
 _RENDER_KEY = "__render_key__"
 
 
+def _render_key(component: Any) -> str | None:
+    """Per-render data key, or None for components that do not define one.
+
+    SequenceView is rendered through the bridge without subclassing
+    BaseComponent, so the method cannot be assumed.
+    """
+    getter = getattr(component, "_get_render_key", None)
+    return getter() if callable(getter) else None
+
+
 def _payload_cache_key(
     component: "BaseComponent",
     state: dict[str, Any],
@@ -139,7 +149,7 @@ def _payload_cache_key(
         sorted(
             [(k, _make_hashable(state.get(k))) for k in state_keys]
             + [(_CACHE_GENERATION_KEY, getattr(component, "_cache_generation", ""))]
-            + [(_RENDER_KEY, component._get_render_key())]
+            + [(_RENDER_KEY, _render_key(component))]
         )
     )
 

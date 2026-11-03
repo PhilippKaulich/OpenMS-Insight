@@ -174,3 +174,29 @@ class TestSequenceViewEmptyState:
         assert sequence == "", (
             "Should return empty when any filter with None default is None"
         )
+
+
+class TestSequenceViewBridge:
+    """SequenceView is rendered by the bridge without subclassing BaseComponent."""
+
+    def test_payload_cache_key_without_render_key(
+        self,
+        temp_cache_dir: Path,
+        sample_sequence_data: pl.LazyFrame,
+        sample_peaks_data: pl.LazyFrame,
+    ):
+        """Building the payload cache key must not require _get_render_key."""
+        from openms_insight.components.sequenceview import SequenceView
+        from openms_insight.rendering.bridge import _payload_cache_key
+
+        sv = SequenceView(
+            cache_id="test_sv_bridge_key",
+            sequence_data=sample_sequence_data,
+            peaks_data=sample_peaks_data,
+            cache_path=str(temp_cache_dir),
+            filters={"spectrum": "scan_id"},
+        )
+        assert not hasattr(sv, "_get_render_key")
+        state_keys = set(sv.get_state_dependencies())
+        key = _payload_cache_key(sv, {"spectrum": 1}, state_keys)
+        assert ("__render_key__", None) in key
