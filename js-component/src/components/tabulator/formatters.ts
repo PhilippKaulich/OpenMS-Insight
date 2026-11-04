@@ -95,7 +95,8 @@ export function scientificFormatter(
 
   const num = Number(value)
   if (isNaN(num)) {
-    return String(value)
+    // Missing values arrive as NaN
+    return String(value) === 'NaN' ? '' : String(value)
   }
 
   const precision = params.precision ?? 3
@@ -125,7 +126,8 @@ export function signedFormatter(
 
   const num = Number(value)
   if (isNaN(num)) {
-    return String(value)
+    // Missing values arrive as NaN
+    return String(value) === 'NaN' ? '' : String(value)
   }
 
   const precision = params.precision ?? 3
@@ -205,7 +207,8 @@ export function fixedFormatter(cell: CellComponent, params: FixedFormatterParams
 
   const num = Number(value)
   if (isNaN(num)) {
-    return String(value)
+    // Missing values arrive as NaN
+    return String(value) === 'NaN' ? '' : String(value)
   }
 
   const minLength = params?.minLength ?? 0

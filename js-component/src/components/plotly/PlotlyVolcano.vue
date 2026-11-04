@@ -1,5 +1,27 @@
 <template>
-  <div :id="id" class="volcano-container"></div>
+  <div>
+    <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
+      <span class="volcano-select-label">Select</span>
+      <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
+        {{ presetLabel('changed') }} ({{ presetCounts.changed }})
+      </button>
+      <button type="button" class="volcano-select-button" :disabled="!presetCounts.up" @click="selectPreset('up')">
+        <span class="volcano-swatch" :style="{ background: args.upColor || '#E74C3C' }"></span>
+        {{ presetLabel('up') }} ({{ presetCounts.up }})
+      </button>
+      <button type="button" class="volcano-select-button" :disabled="!presetCounts.down" @click="selectPreset('down')">
+        <span class="volcano-swatch" :style="{ background: args.downColor || '#3498DB' }"></span>
+        {{ presetLabel('down') }} ({{ presetCounts.down }})
+      </button>
+      <button type="button" class="volcano-select-button" :disabled="!selectedCount" @click="clearSelection">
+        {{ presetLabel('clear') }}
+      </button>
+      <span v-if="selectedCount" class="volcano-select-hint">{{ selectedCount }} selected</span>
+    </div>
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -7,6 +29,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 
 /**
@@ -53,14 +76,28 @@ export default defineComponent({
       title: computed(() => props.args.title),
     })
 
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
+
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      multiSelectionKey: multi.selectionKey,
+      isRowSelected: multi.isRowSelected,
+      applySelectedRows: multi.applyRows,
+      clearSelection: multi.clear,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
+      // Box or lasso select when several points can be selected, else zoom;
+      // kept across re-renders when the user switches in the mode bar
+      dragmode: (this.args.multiSelect && Object.keys(this.args.multiSelect).length > 0
+        ? 'select'
+        : 'zoom') as string,
+      shiftHeld: false as boolean,
     }
   },
   computed: {
@@ -151,6 +188,24 @@ export default defineComponent({
       return { up, down, ns }
     },
 
+    /** Number of points each selection button selects. */
+    presetCounts(): { changed: number; up: number; down: number } {
+      const { up, down } = this.categorizedData
+      return { changed: up.x.length + down.x.length, up: up.x.length, down: down.x.length }
+    },
+
+    /** Row indices of the selected points (empty when nothing is selected). */
+    selectedRowIndices(): Set<number> {
+      const selected = new Set<number>()
+      if (!this.multiSelectEnabled) return selected
+      // Depend on the selection itself, not only on the data
+      void this.multiSelectionKey
+      this.volcanoData.forEach((row, idx) => {
+        if (this.isRowSelected(row as Record<string, unknown>)) selected.add(idx)
+      })
+      return selected
+    },
+
     /**
      * Build Plotly data traces.
      */
@@ -179,6 +234,7 @@ export default defineComponent({
           text: ns.text,
           hoverinfo: 'text',
           customdata: ns.indices,
+          ...this.selectionStyle(ns.indices),
         })
       }
 
@@ -197,6 +253,7 @@ export default defineComponent({
           text: down.text,
           hoverinfo: 'text',
           customdata: down.indices,
+          ...this.selectionStyle(down.indices),
         })
       }
 
@@ -215,7 +272,22 @@ export default defineComponent({
           text: up.text,
           hoverinfo: 'text',
           customdata: up.indices,
+          ...this.selectionStyle(up.indices),
         })
+      }
+
+      if (this.multiSelectEnabled && this.selectedRowIndices.size > 0) {
+        const x: number[] = []
+        const y: number[] = []
+        for (const group of [ns, down, up]) {
+          group.indices.forEach((rowIndex, i) => {
+            if (this.selectedRowIndices.has(rowIndex)) {
+              x.push(group.x[i])
+              y.push(group.y[i])
+            }
+          })
+        }
+        traces.push(...selectionOverlay(x, y, 8))
       }
 
       return traces
@@ -356,6 +428,8 @@ export default defineComponent({
           x: 1,
         },
         height: this.args.height || 400,
+        dragmode: this.dragmode as Plotly.Layout['dragmode'],
+        ...SELECTION_LAYOUT,
         xaxis: {
           title: { text: this.args.xLabel || 'log2 Fold Change' },
           zeroline: true,
@@ -409,6 +483,13 @@ export default defineComponent({
         this.renderPlot()
       }
     },
+
+    // The selected set changed (here or in another component)
+    multiSelectionKey() {
+      if (this.isInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
   },
 
   mounted() {
@@ -434,8 +515,12 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig())
+        await Plotly.newPlot(
+          this.id, this.plotData, this.layout,
+          this.getPlotConfig(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+        )
         this.setupClickHandler()
+        this.setupSelectHandlers()
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
@@ -445,6 +530,72 @@ export default defineComponent({
         console.error('PlotlyVolcano: Error rendering plot:', error)
         this.renderFallback()
       }
+    },
+
+    /** Plotly's selection styling for a trace whose points are rows `indices`. */
+    selectionStyle(indices: number[]): Record<string, unknown> {
+      const selected = this.selectedRowIndices
+      if (!this.multiSelectEnabled || selected.size === 0) return {}
+      const points: number[] = []
+      indices.forEach((rowIndex, pointIndex) => {
+        if (selected.has(rowIndex)) points.push(pointIndex)
+      })
+      return {
+        selectedpoints: points,
+        selected: { marker: { opacity: 1 } },
+        unselected: { marker: { opacity: 0.15 } },
+      }
+    },
+
+    presetLabel(name: string): string {
+      const defaults: Record<string, string> = {
+        changed: 'All changed', up: 'Up', down: 'Down', clear: 'Clear',
+      }
+      return this.args.presetLabels?.[name] || defaults[name] || name
+    },
+
+    /** Select every significant (changed), up- or down-regulated point. */
+    selectPreset(preset: 'changed' | 'up' | 'down'): void {
+      const { up, down } = this.categorizedData
+      const indices = preset === 'up' ? up.indices : preset === 'down' ? down.indices : [...up.indices, ...down.indices]
+      const rows = indices.map((i) => this.volcanoData[i] as Record<string, unknown>)
+      this.applySelectedRows(rows, 'replace')
+    },
+
+    setupSelectHandlers(): void {
+      if (!this.multiSelectEnabled) return
+      const element = document.getElementById(this.id) as Plotly.PlotlyHTMLElement | null
+      if (!element) return
+      // Whether Shift was held while dragging: then the points are added
+      if (!element.dataset.shiftListener) {
+        element.dataset.shiftListener = '1'
+        element.addEventListener('mousedown', (e: MouseEvent) => {
+          this.shiftHeld = e.shiftKey
+        }, true)
+      }
+      element.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
+      element.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        // A click without dragging also ends in plotly_selected, without points
+        if (!eventData || !eventData.points) return
+        const rows: Record<string, unknown>[] = []
+        for (const point of eventData.points) {
+          const rowIndex = (point as unknown as { customdata?: unknown }).customdata
+          if (typeof rowIndex === 'number' && this.volcanoData[rowIndex]) {
+            rows.push(this.volcanoData[rowIndex] as Record<string, unknown>)
+          }
+        }
+        if (rows.length === 0 && !this.shiftHeld) {
+          this.clearSelection()
+          return
+        }
+        this.applySelectedRows(rows, this.shiftHeld ? 'add' : 'replace')
+      })
+      element.on('plotly_deselect', () => {
+        this.clearSelection()
+      })
     },
 
     getFallbackData(): Plotly.Data[] {
@@ -482,6 +633,47 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.volcano-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 2px;
+  font-size: 13px;
+}
+.volcano-select-label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+.volcano-select-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.volcano-select-button:hover:not(:disabled) {
+  border-color: rgba(128, 128, 128, 0.9);
+  background: rgba(128, 128, 128, 0.12);
+}
+.volcano-select-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.volcano-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.volcano-select-hint {
+  opacity: 0.65;
+  font-size: 12px;
+}
 .volcano-container {
   position: relative;
   width: 100%;

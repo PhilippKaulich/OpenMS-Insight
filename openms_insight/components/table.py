@@ -7,6 +7,12 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.multi_select import (
+    combine,
+    match_selection,
+    normalize_multi_select,
+    selection_values,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import compute_dataframe_hash
 
@@ -72,6 +78,9 @@ _VUE_OPTION_KEYS = (
     "search",
     "search_placeholder",
     "numeric_filters",
+    "fill_height",
+    "row_overview",
+    "multi_select",
 )
 
 # Session state key for tracking last rendered selection per table component
@@ -146,6 +155,9 @@ class Table(BaseComponent):
         column_menu: bool = True,
         reset_sort: bool = False,
         reset_sort_on: list[str] | None = None,
+        fill_height: bool = False,
+        row_overview: bool | str = False,
+        multi_select: dict[str, str] | None = None,
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
@@ -241,6 +253,22 @@ class Table(BaseComponent):
             reset_sort_on: Identifiers whose selection, when it changes, sorts
                 the rows by ``initial_sort`` again, whether or not the rows
                 change (e.g. a table of the tags of the selected protein).
+            row_overview: Add a button to each row that opens the whole row
+                as an overview: every column of ``column_definitions``, the
+                hidden ones included, as title and value. Lets a table show a
+                few essential columns and keep the rest one click away. True
+                titles the overview "Row details"; a string is the title
+                itself, with ``{field}`` replaced by that column's value in
+                the row, e.g. ``"{accession}, scan {scan}"``.
+            fill_height: Without pagination, keep the table at the height it is
+                rendered with instead of shrinking it to its rows, so tables
+                rendered side by side with one height line up.
+            multi_select: Mapping of identifier names to column names for
+                selecting several rows at once with a check box column (Shift
+                selects a range; the header box selects or unselects every row
+                passing the table's filters, on all pages). The identifier holds
+                the sorted distinct values of the column over the checked rows,
+                or None. Independent of the clicked row (``interactivity``).
             search: Show a search box in the toolbar. True searches the text
                 columns of ``column_definitions``; a list of column names
                 searches those columns instead (they need not be shown, e.g. a
@@ -277,6 +305,12 @@ class Table(BaseComponent):
         self._column_menu = bool(column_menu)
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
+        self._fill_height = bool(fill_height)
+        self._row_overview = (
+            row_overview
+            if isinstance(row_overview, str) and row_overview
+            else bool(row_overview)
+        )
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -300,6 +334,7 @@ class Table(BaseComponent):
                 f"not {scroll_position!r}"
             )
         self._scroll_position = scroll_position
+        self._multi_select = normalize_multi_select(multi_select)
 
         super().__init__(
             cache_id=cache_id,
@@ -330,11 +365,15 @@ class Table(BaseComponent):
             column_menu=column_menu,
             reset_sort=reset_sort,
             reset_sort_on=reset_sort_on,
+            fill_height=fill_height,
+            row_overview=row_overview,
+            multi_select=multi_select,
             search=search,
             search_placeholder=search_placeholder,
             numeric_filters=numeric_filters,
             **kwargs,
         )
+        self._config.pop("multi_select", None)
 
     @staticmethod
     def _normalize_toggle_filters(
@@ -426,6 +465,9 @@ class Table(BaseComponent):
             **({"column_menu": False} if not self._column_menu else {}),
             **({"reset_sort": True} if self._reset_sort else {}),
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
+            **({"fill_height": True} if self._fill_height else {}),
+            **({"row_overview": self._row_overview} if self._row_overview else {}),
+            **({"multi_select": self._multi_select} if self._multi_select else {}),
             **({"search": self._search} if self._search else {}),
             **(
                 {"search_placeholder": self._search_placeholder}
@@ -465,6 +507,9 @@ class Table(BaseComponent):
         self._search = config.get("search", False)
         self._search_placeholder = config.get("search_placeholder")
         self._numeric_filters = config.get("numeric_filters") or {}
+        self._fill_height = config.get("fill_height", False)
+        self._row_overview = config.get("row_overview", False)
+        self._multi_select = dict(config.get("multi_select") or {})
         # These are passed on to Vue explicitly; keep them out of the extra options
         for key in _VUE_OPTION_KEYS:
             self._config.pop(key, None)
@@ -809,6 +854,9 @@ class Table(BaseComponent):
             for col in self._interactivity.values():
                 if col not in columns_to_select:
                     columns_to_select.append(col)
+        for col in self._multi_select.values():
+            if col not in columns_to_select:
+                columns_to_select.append(col)
         # Include columns needed for filtering
         if self._filters:
             for col in self._filters.values():
@@ -901,10 +949,7 @@ class Table(BaseComponent):
                     "_auto_selection": {},  # No data = no auto-selection
                 }
 
-            # Convert float to int for integer columns (JS numbers come as floats)
-            if isinstance(selected_value, float) and selected_value.is_integer():
-                selected_value = int(selected_value)
-            data = data.filter(pl.col(column) == selected_value)
+            data = data.filter(match_selection(column, selected_value))
 
         data = self._apply_range_filters(data, state)
 
@@ -1503,6 +1548,28 @@ class Table(BaseComponent):
         rest = [c for c in df.columns if c not in shown]
         return df.select(shown + rest)
 
+    def _handle_event(self, event: dict[str, Any]) -> bool:
+        """The header check box: select (or unselect) every row passing the
+        table's filters, on all pages."""
+        if event.get("type") != "multi_select_all" or not self._multi_select:
+            return False
+        from ..core.state import get_render_state_manager
+
+        state_manager = get_render_state_manager()
+        state = state_manager.get_all_selections()
+        mode = "remove" if event.get("mode") == "remove" else "add"
+        rows = self.export_data(state)
+        changed = False
+        for identifier, column in self._multi_select.items():
+            if column not in rows.columns:
+                continue
+            picked = selection_values(rows[column].to_list())
+            if state_manager.set_selection(
+                identifier, combine(state.get(identifier), picked, mode)
+            ):
+                changed = True
+        return changed
+
     def export_data(self, state: dict[str, Any] | None = None) -> pl.DataFrame:
         """
         Return the table's full data for export.
@@ -1536,9 +1603,7 @@ class Table(BaseComponent):
                 selected_value = self._filter_defaults.get(identifier)
             if selected_value is None:
                 continue
-            if isinstance(selected_value, float) and selected_value.is_integer():
-                selected_value = int(selected_value)
-            data = data.filter(pl.col(column) == selected_value)
+            data = data.filter(match_selection(column, selected_value))
         data = self._apply_range_filters(data, state)
 
         pagination_state = state.get(self._pagination_identifier) or {}
@@ -1602,6 +1667,14 @@ class Table(BaseComponent):
             args["resetSort"] = True
         if self._reset_sort_on:
             args["resetSortOn"] = self._reset_sort_on
+        if self._fill_height:
+            args["fillHeight"] = True
+        if self._row_overview:
+            args["rowOverview"] = True
+            if isinstance(self._row_overview, str):
+                args["rowOverviewTitle"] = self._row_overview
+        if self._multi_select:
+            args["multiSelect"] = self._multi_select
 
         # Add any extra config options
         args.update(self._config)

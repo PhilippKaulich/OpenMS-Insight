@@ -13,6 +13,8 @@ import pandas as pd
 import polars as pl
 import streamlit as st
 
+from ..core.multi_select import match_selection
+
 # Configure debug logging for hash tracking
 _DEBUG_HASH_TRACKING = os.environ.get("SVC_DEBUG_HASH", "").lower() == "true"
 # Debug logging for page navigation / state sync issues
@@ -653,11 +655,7 @@ def _validate_interactivity_selections(
                 # Awaiting filter - no data to validate against
                 return False
 
-            # Convert float to int for integer columns (type mismatch handling)
-            if isinstance(selected_value, float) and selected_value.is_integer():
-                selected_value = int(selected_value)
-
-            term = pl.col(column) == selected_value
+            term = match_selection(column, selected_value)
             predicate = term if predicate is None else (predicate & term)
 
         if predicate is not None:

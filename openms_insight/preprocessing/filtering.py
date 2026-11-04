@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
+from ..core.multi_select import match_selection, selection_key
+
 
 def optimize_for_transfer(
     df: pl.DataFrame, downcast_floats: bool = True
@@ -122,7 +124,7 @@ def _make_cache_key(
         # Apply default if value is None and default exists
         if value is None and filter_defaults and identifier in filter_defaults:
             value = filter_defaults[identifier]
-        relevant_state.append((identifier, value))
+        relevant_state.append((identifier, selection_key(value)))
     return tuple(relevant_state)
 
 
@@ -345,11 +347,8 @@ def _filter_and_collect(
             df_pandas = df_polars.to_pandas()
             return (df_pandas, data_hash)
 
-        # Convert float to int for integer columns to handle JSON number parsing
-        # (JavaScript numbers come back as floats, but Polars Int64 needs int comparison)
-        if isinstance(selected_value, float) and selected_value.is_integer():
-            selected_value = int(selected_value)
-        data = data.filter(pl.col(column) == selected_value)
+        # One value, or any value of a multi-selection
+        data = data.filter(match_selection(column, selected_value))
 
     # Collect to Polars DataFrame
     # Note: Type optimization (Int64→Int32, Float64→Float32) is applied at cache
@@ -438,7 +437,7 @@ def filter_by_selection(
     for identifier, column in interactivity.items():
         selected_value = state.get(identifier)
         if selected_value is not None:
-            data = data.filter(pl.col(column) == selected_value)
+            data = data.filter(match_selection(column, selected_value))
 
     return data
 

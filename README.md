@@ -330,6 +330,25 @@ Heatmap(
 - `log_scale`: Use log10 color mapping (default: True). Set to False for linear.
 - `low_values_on_top`: Prioritize low values during downsampling and display them on top (default: False). Use for scores where lower = better (e.g., e-values, PEP, q-values).
 - `intensity_label`: Custom colorbar label (default: 'Intensity')
+- `hover_column`: Column whose text is shown when hovering a point, above its intensity
+- `on_select`: Selections a click sets besides `interactivity`, as Table's `on_select` (None clears one)
+- `highlight`: Mapping of identifier names to column names. The points whose column value is the identifier's selected value are ringed, whichever component selected it (looked up in the full data, so a point the current level dropped is still marked)
+
+**Marking a selection made elsewhere:**
+```python
+Heatmap(
+    cache_id="identifications",
+    data=hits,  # one row per identified spectrum
+    x_column="rt",
+    y_column="mass",
+    intensity_column="score",
+    log_scale=False,
+    intensity_label="Score",
+    hover_column="name",
+    interactivity={"hit": "hit_id"},  # a click selects the hit ...
+    highlight={"hit": "hit_id"},  # ... and the selected hit is ringed,
+)  # also when a table selected it
+```
 
 **Linear scale example:**
 ```python
@@ -723,6 +742,40 @@ All components accept these common arguments:
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
 | `height` | `int` | `400` | Component height in pixels (render-time parameter) |
 
+### Selecting several entries (`multi_select`)
+
+`Table`, `VolcanoPlot`, `Heatmap` and `ClusteredHeatmap` take
+`multi_select={identifier: column}`. The user then picks several rows or points at
+once, and the identifier holds the sorted distinct values of `column` over them
+(None when nothing is picked). Components with the same identifier show and change
+the same set, so any page can read it with `state_manager.get_selection(identifier)`.
+
+A multi-selection is a selection level like any other. In `filters` it keeps the rows
+whose column is in the set, so `Table(..., filters={"proteins": "accession"})` lists the
+picked proteins, and the same works for masses, scans or any other column.
+
+| Component | How the user selects |
+|-----------|----------------------|
+| `Table` | A check mark button in the toolbar shows a check box per row (hidden until then); Shift-click ticks a range; the header box ticks every row passing the filters (on a paginated table, in Python over all pages). Selected rows are marked by a bar on the left whether or not the boxes are shown |
+| `VolcanoPlot` | Box or lasso select in Plotly's mode bar (Shift adds). With `selection_presets=True`, buttons above the plot select **All changed**, **Up** or **Down** at the plot's cut-offs; `preset_labels={"up": ..., "down": ..., "changed": ..., "clear": ...}` renames them |
+| `Heatmap` | Box or lasso select in Plotly's mode bar (Shift adds); the region is resolved in Python on the full data, not the downsampled level shown; every point of the picked entries is marked |
+| `ClusteredHeatmap` | Box or lasso select over rows (the column must be `id_col`); selected rows are outlined |
+
+Each plot's mode bar gets a **Clear selection** button (the eraser).
+
+```python
+volcano = VolcanoPlot(
+    ...,
+    label_column="name",
+    multi_select={"proteins": "accession"},
+    selection_presets=True,
+    preset_labels={"up": "Higher in treated", "down": "Lower in treated"},
+)
+table = Table(..., multi_select={"proteins": "accession"})
+picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
+picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
+```
+
 ## Memory-Efficient Preprocessing
 
 When working with large datasets (especially heatmaps with millions of points), use `data_path` instead of `data` to enable subprocess preprocessing:
@@ -946,7 +999,22 @@ if status == "success":
 ```
 
 `status` is `"success"`, `"insufficient_proteins"` (fewer than 3 proteins pass the
-cutoffs) or `"empty_data"`. This function needs the `analysis` extra:
+cutoffs) or `"empty_data"`.
+
+For a set the user picked (see `multi_select`), `go_enrichment` takes the
+foreground and background directly, and the annotations from
+`fetch_go_annotations`, so an app can cache them per protein:
+
+```python
+from openms_insight.analysis.enrichment import fetch_go_annotations, go_enrichment
+
+annotations = fetch_go_annotations(background)  # query, BP_terms, CC_terms, MF_terms
+result = go_enrichment(annotations, foreground=picked, background=background)
+result["categories"]["BP"]  # GO_Term, Count, Background, GeneRatio, BgRatio,
+# FoldEnrichment, p_value, -log10(p), p_adj, Proteins
+```
+
+These functions need the `analysis` extra:
 
 ```bash
 pip install "openms-insight[analysis]"

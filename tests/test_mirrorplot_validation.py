@@ -1,5 +1,6 @@
 """Constructor validation tests for MirrorPlot."""
 
+import polars as pl
 import pytest
 
 from openms_insight import MirrorPlot
@@ -32,19 +33,31 @@ class TestMirrorPlotValidation:
                 y_column="intensity",
             )
 
-    def test_overlapping_identifier_names_raises(
-        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    def test_shared_identifier_filters_each_half_by_its_column(
+        self, mock_streamlit, temp_cache_dir
     ):
-        with pytest.raises(ValueError, match="disjoint"):
-            MirrorPlot(
-                cache_id="test_overlap",
-                data=sample_lineplot_data,
-                cache_path=str(temp_cache_dir),
-                filters_top={"spectrum": "scan_id"},
-                filters_bottom={"spectrum": "scan_id"},
-                x_column="mass",
-                y_column="intensity",
-            )
+        """Both halves may follow one selection, each through its own column
+        (e.g. observed and theoretical peaks of the selected spectrum)."""
+        data = pl.LazyFrame(
+            {
+                "observed_scan": [1, 1, None, None, 2],
+                "theoretical_scan": [None, None, 1, 1, None],
+                "mass": [100.0, 101.0, 100.0, 101.0, 200.0],
+                "intensity": [10.0, 5.0, 9.0, 6.0, 1.0],
+            }
+        )
+        mirror = MirrorPlot(
+            cache_id="test_shared_identifier",
+            data=data,
+            cache_path=str(temp_cache_dir),
+            filters_top={"spectrum": "observed_scan"},
+            filters_bottom={"spectrum": "theoretical_scan"},
+            x_column="mass",
+            y_column="intensity",
+        )
+        vue_data = mirror._prepare_vue_data({"spectrum": 1})
+        assert list(vue_data["plotDataTop"]["intensity"]) == [10.0, 5.0]
+        assert list(vue_data["plotDataBottom"]["intensity"]) == [9.0, 6.0]
 
     def test_invalid_x_column_raises(
         self, mock_streamlit, temp_cache_dir, sample_lineplot_data

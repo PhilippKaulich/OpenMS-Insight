@@ -1,7 +1,13 @@
 <template>
   <!-- At least as wide as the residue grid: a narrow frame scrolls sideways
        instead of squeezing the header and the fragment table -->
-  <div class="sequence-view-row">
+  <!-- The Change sequence dialog is drawn inside this frame, which fits the
+       view: while it is open, the view is at least as tall as the dialog and
+       the fixed-modification list below its field -->
+  <div
+    class="sequence-view-row"
+    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT}px` } : undefined"
+  >
   <div class="sequence-view-column">
   <div v-if="args.title" class="d-flex justify-center">
     <h4>{{ args.title }}</h4>
@@ -109,6 +115,16 @@
                   </div>
                 </v-list-item>
                 <v-list-item>
+                  <v-list-item-title>Fragmentation method</v-list-item-title>
+                  <v-select
+                    v-model="fragmentationMethod"
+                    :items="fragmentationMethodItems"
+                    density="compact"
+                    hide-details
+                    :disabled="!showFragments"
+                  ></v-select>
+                </v-list-item>
+                <v-list-item>
                   <v-list-item-title>Fragment ion types</v-list-item-title>
                   <div class="d-flex justify-space-evenly">
                     <v-checkbox
@@ -120,6 +136,18 @@
                       :label="category.text"
                       :disabled="!showFragments"
                       @click="toggleIonTypeSelected(ionIndex)"
+                    >
+                    </v-checkbox>
+                  </div>
+                  <div v-if="!usesAnnotator" class="d-flex justify-space-evenly">
+                    <v-checkbox
+                      v-for="variant in ionTypeVariants"
+                      :key="variant.text"
+                      v-model="variant.selected"
+                      hide-details
+                      density="comfortable"
+                      :label="variant.text"
+                      :disabled="!showFragments"
                     >
                     </v-checkbox>
                   </div>
@@ -138,14 +166,31 @@
                 </v-list-item>
                 <v-list-item>
                   <v-list-item-title>Fragment mass tolerance</v-list-item-title>
-                  <v-text-field
-                    v-model="fragmentMassTolerance"
-                    type="number"
-                    hide-details="auto"
-                    label="mass tolerance in ppm"
-                    :disabled="!showFragments"
-                    @change="updateMassTolerance"
-                  ></v-text-field>
+                  <div class="d-flex align-center ga-2">
+                    <v-text-field
+                      style="min-width: 0"
+                      v-model="fragmentMassTolerance"
+                      type="number"
+                      :step="toleranceUnit === 'Da' ? 0.01 : 1"
+                      min="0"
+                      hide-details="auto"
+                      :label="`mass tolerance in ${toleranceUnit}`"
+                      :disabled="!showFragments"
+                      @change="updateMassTolerance"
+                    ></v-text-field>
+                    <v-btn-toggle
+                      v-model="toleranceUnit"
+                      mandatory
+                      class="flex-shrink-0"
+                      density="compact"
+                      variant="outlined"
+                      divided
+                      :disabled="!showFragments"
+                    >
+                      <v-btn value="ppm" size="small" class="text-none">ppm</v-btn>
+                      <v-btn value="Da" size="small" class="text-none">Da</v-btn>
+                    </v-btn-toggle>
+                  </div>
                   <!-- TODO: add "required" -->
                 </v-list-item>
               </v-list>
@@ -284,7 +329,7 @@
   </v-snackbar>
 
   <!-- Sequence Input Dialog -->
-  <v-dialog v-model="sequenceDialog" max-width="600" persistent>
+  <v-dialog v-model="sequenceDialog" max-width="600" persistent scrollable>
     <v-card>
       <v-card-title class="text-h6">
         Enter Custom Sequence
@@ -297,7 +342,7 @@
           :placeholder="sequenceInputFocused ? 'Enter amino acid sequence (e.g., MKFLVNVALVF...)' : undefined"
           @update:focused="sequenceInputFocused = $event"
           :error-messages="sequenceInputError"
-          rows="6"
+          :rows="modificationItems.length > 0 ? 3 : 6"
           auto-grow
           counter
           hint="Enter single-letter amino acid codes only"
@@ -307,6 +352,22 @@
             <v-icon>mdi-dna</v-icon>
           </template>
         </v-textarea>
+        <v-autocomplete
+          v-if="modificationItems.length > 0"
+          v-model="customModifications"
+          :items="modificationItems"
+          item-title="title"
+          item-value="value"
+          label="Fixed modifications"
+          placeholder="Search by name or mass, e.g. Carbamidomethyl or 57.02"
+          hint="Each goes on every residue of its kind, or on the terminus"
+          persistent-hint
+          multiple
+          chips
+          closable-chips
+          clearable
+          class="mt-4"
+        ></v-autocomplete>
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
@@ -354,8 +415,27 @@ import SvgScreenshot from './SvgScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
+import {
+  CUSTOM_METHOD,
+  FRAGMENTATION_METHODS,
+  ION_VARIANTS,
+  canonicalIonName,
+  ionSeries,
+  isPrefixIon,
+  isSuffixIon,
+  methodForIons,
+  methodIons,
+  toleranceDa,
+  toleranceUnit,
+  type IonSeries,
+  type ToleranceUnit,
+} from './fragment-ions'
 
 // Fixed decimals for long numbers in the fragment tables
+// Height (px) the Change sequence dialog needs: title, the sequence field,
+// the fixed-modification picker with its open list, and the buttons
+const SEQUENCE_DIALOG_HEIGHT = 640
+
 const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => unknown }) => {
   const value = cell.getValue()
   if (value === null || value === undefined) return ''
@@ -427,7 +507,13 @@ export default defineComponent({
         'ammonium loss': false,
         'proton loss/addition': false,
       } as Record<ExtraFragmentType, boolean>,
+      // Radical / hydrogen-shifted series (ETD/ECD, UVPD): offsets of a base series
+      ionTypeVariants: ION_VARIANTS.map((variant) => ({ text: variant.name, selected: false })) as {
+        text: string
+        selected: boolean
+      }[],
       fragmentMassTolerance: 10 as number,
+      toleranceUnit: 'ppm' as ToleranceUnit,
       visibilityOptions: [
         { text: 'Fragments', selected: true },
         { text: 'Modifications', selected: true },
@@ -520,12 +606,38 @@ export default defineComponent({
       regexHighlightedIndices: new Set<number>(),
       // Sequence change dialog properties
       sequenceDialog: false as boolean,
+      SEQUENCE_DIALOG_HEIGHT,
+      // Modification ids picked in the change-sequence dialog
+      customModifications: [] as string[],
       customSequenceInput: '' as string,
       sequenceInputError: '' as string,
       sequenceInputFocused: false,
     }
   },
   computed: {
+    fragmentationMethodItems(): string[] {
+      return [...FRAGMENTATION_METHODS.map((m) => m.name), CUSTOM_METHOD]
+    },
+    // The method whose ion series are the selected ones ('Custom' otherwise);
+    // picking a method selects its series
+    fragmentationMethod: {
+      get(): string {
+        return methodForIons(this.selectedIonSeries.map((series) => series.name))
+      },
+      set(method: string) {
+        const ions = methodIons(method)
+        if (ions === undefined) return
+        this.selectIons(ions)
+      },
+    },
+    // Selected ion series: the base types and, without an annotation, the variants
+    selectedIonSeries(): IonSeries[] {
+      const names = this.ionTypes.filter((t) => t.selected).map((t) => t.text)
+      if (!this.usesAnnotator) {
+        this.ionTypeVariants.filter((t) => t.selected).forEach((t) => names.push(t.text))
+      }
+      return names.map((name) => ionSeries(name)).filter((series): series is IonSeries => series !== undefined)
+    },
     accentColor(): string {
       return this.args.accentColor ?? 'primary'
     },
@@ -537,6 +649,9 @@ export default defineComponent({
     },
     spectrum(): MatchedSpectrum | undefined {
       return (this.streamlitDataStore.allDataForDrawing.spectrumData as MatchedSpectrum | null) ?? undefined
+    },
+    spectrumFragmentation(): string | undefined {
+      return this.spectrum?.fragmentation ?? undefined
     },
     settings(): FragmentSettings | undefined {
       return this.args.settings ?? undefined
@@ -744,6 +859,12 @@ export default defineComponent({
       return false
     },
     // Sequence change button computed properties
+    modificationItems(): { title: string; value: string }[] {
+      return (this.args.modificationLibrary ?? []).map((m) => {
+        const sign = m.mass >= 0 ? '+' : ''
+        return { title: `${m.id}  ${sign}${m.mass.toFixed(4)} Da`, value: m.id }
+      })
+    },
     shouldShowSequenceChangeButton(): boolean {
       return !this.showIdentification && !!this.args.sequenceIdentifier
     },
@@ -752,6 +873,11 @@ export default defineComponent({
     // A new spectrum (or entry) arrives: rematch the fragments
     spectrum() {
       this.recomputeFragments()
+    },
+    // The selected spectrum's fragmentation method (fragmentation_column):
+    // a spectrum acquired with another method selects that method's series
+    spectrumFragmentation() {
+      this.applySpectrumFragmentation()
     },
     // A new entry (another identification, or a user-given sequence): clears the
     // stale residue selection and re-reads the settings.
@@ -768,6 +894,16 @@ export default defineComponent({
     // Re-match fragments on a tolerance change (local state, no round-trip).
     fragmentMassTolerance() {
       this.recomputeFragments()
+    },
+    toleranceUnit() {
+      this.recomputeFragments()
+    },
+    // Radical / hydrogen-shifted series toggles. deep required (nested .selected).
+    ionTypeVariants: {
+      handler() {
+        this.recomputeFragments()
+      },
+      deep: true,
     },
     // Rows selected from the sequence (residue click, internal track, mass table)
     selectedFragTableRowIndex(rowIndex?: number) {
@@ -837,18 +973,50 @@ export default defineComponent({
       return (this.entry?.[`fragment_masses_${iontype}` as keyof SequenceData] as number[][] | undefined) ?? []
     },
     updateMassTolerance(event: Event) {
-      this.fragmentMassTolerance = Number.parseInt((event.target as any).value as string)
+      const value = Number.parseFloat((event.target as any).value as string)
+      if (Number.isFinite(value) && value >= 0) {
+        this.fragmentMassTolerance = value
+      }
+    },
+    // Select exactly these ion series (base types and variants)
+    selectIons(names: string[]) {
+      const selected = new Set(names.map(canonicalIonName))
+      if (this.usesAnnotator) {
+        // Annotated fragments are drawn by their base type (z+1, z+2 as z)
+        names.forEach((name) => {
+          const base = ionSeries(name)?.base ?? name.charAt(0)
+          selected.add(base)
+        })
+      }
+      this.ionTypes.forEach((item) => {
+        item.selected = selected.has(item.text)
+      })
+      this.ionTypeVariants.forEach((item) => {
+        item.selected = selected.has(item.text)
+      })
     },
     updateSettings() {
       const settings = this.settings
       if (settings?.ion_types !== undefined && settings.ion_types !== null) {
-        this.ionTypes.forEach((item) => {
-          item.selected = settings.ion_types.includes(item.text)
-        })
+        this.selectIons(settings.ion_types)
+      } else {
+        const ions = methodIons(settings?.fragmentation)
+        if (ions !== undefined) this.selectIons(ions)
       }
       if (settings?.tolerance !== undefined && settings.tolerance !== null) {
         this.fragmentMassTolerance = settings.tolerance
       }
+      if (settings?.tolerance_unit !== undefined && settings.tolerance_unit !== null) {
+        this.toleranceUnit = toleranceUnit(settings.tolerance_unit)
+      }
+      this.applySpectrumFragmentation()
+    },
+    // Select the ion series of the spectrum's own fragmentation method. Not with
+    // annotated fragments: those were annotated for the search's ion types.
+    applySpectrumFragmentation() {
+      if (this.usesAnnotator) return
+      const ions = methodIons(this.spectrumFragmentation)
+      if (ions !== undefined) this.selectIons(ions)
     },
     toggleIonTypeSelected(index: number) {
       this.ionTypes[index].selected = !this.ionTypes[index].selected
@@ -875,6 +1043,9 @@ export default defineComponent({
           `${this.args.observedMassLabel ?? 'Observed mass'} : ${observed_mass}`,
           `Δ Mass (Da) : ${delta_mass}`,
         ]
+        if (this.spectrumFragmentation) {
+          this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
+        }
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
@@ -914,6 +1085,9 @@ export default defineComponent({
         `Observed mass : ${observedMass.toFixed(2)}`,
         `Δ Mass (Da) : ${deltaMassDa.toFixed(2)}`,
       ]
+      if (this.spectrumFragmentation) {
+        this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
+      }
     },
     prepareFragmentTable(): void {
       this.selectedFragment = undefined
@@ -940,6 +1114,7 @@ export default defineComponent({
       // through Vue's reactive proxies there cost about a second per spectrum
       const observed_masses: number[] = toRaw(this.spectrum.masses ?? [])
       const tolerance = this.fragmentMassTolerance
+      const unit = this.toleranceUnit
       const extraFragments = Object.entries(extraFragmentTypeObject)
         .filter(
           ([extraFragmentType]) =>
@@ -953,14 +1128,16 @@ export default defineComponent({
       let matching_fragments: Record<string, unknown>[] = []
       const sequence_size = this.sequence_end
       
-      this.ionTypes
-        .filter((iontype) => iontype.selected)
-        .forEach((iontype) => {
-          
+      this.selectedIonSeries
+        .forEach((series) => {
+          // The base series' flags and masses; a variant shifts the masses
+          const iontype = { text: series.base }
+          const isVariant = series.name !== series.base
+
           // Dont match fragments of an identification whose end is undetermined
-          if ((iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c') && (this.sequence_start_reported < 0))
+          if (isPrefixIon(iontype.text) && (this.sequence_start_reported < 0))
             return
-          if ((iontype.text === 'x' || iontype.text === 'y' || iontype.text === 'z') && (this.sequence_end_reported < 0))
+          if (isSuffixIon(iontype.text) && (this.sequence_end_reported < 0))
             return
 
           const theoretical_frags = this.getFragmentMasses(iontype.text)
@@ -997,17 +1174,17 @@ export default defineComponent({
             ) {
               extraFragments.forEach(({ typeName, typeMass }) => {
                 // Mass difference = (observed-theoretical)/theoretical*1e6
-                const thisTypeMass = theoretical_mass + typeMass
+                const thisTypeMass = theoretical_mass + series.offset + typeMass
                 const massDiffDa = observed_masses[obsIndex] - thisTypeMass
                 const massDiffPpm = (massDiffDa / thisTypeMass) * 1e6
-                if (Math.abs(massDiffPpm) > tolerance) {
+                if (Math.abs(massDiffDa) > toleranceDa(thisTypeMass, tolerance, unit)) {
                   // if mass difference is larger than tolerance, ignore
                   return
                 }
 
                 const matched = {
-                  Name: `${iontype.text}${theoIndex + 1}`,
-                  IonType: `${iontype.text}${typeName}`,
+                  Name: `${series.name}${theoIndex + 1}`,
+                  IonType: `${series.name}${typeName}`,
                   IonNumber: theoIndex + 1,
                   TheoreticalMass: thisTypeMass.toFixed(3),
                   ObservedMass: observed_masses[obsIndex], // should not have "toFixed" to be used as comparison factor
@@ -1023,8 +1200,8 @@ export default defineComponent({
                   this.sequenceObjects[sequence_size - theoIndex][`${iontype.text}Ion`] = true
                   aa_index = sequence_size - theoIndex
                 }
-                if (typeName) {
-                  this.sequenceObjects[aaIndex]['extraTypes'].push(`${iontype.text}${typeName}`)
+                if (typeName || isVariant) {
+                  this.sequenceObjects[aa_index]['extraTypes'].push(`${series.name}${typeName}`)
                 }
               })
             }
@@ -1115,7 +1292,7 @@ export default defineComponent({
     // them to the mass table within the fragment tolerance
     massLinkTolerance(mass: number): number {
       if (this.usesAnnotator) {
-        return mass * this.fragmentMassTolerance * 1e-6
+        return toleranceDa(mass, this.fragmentMassTolerance, this.toleranceUnit)
       }
       return 0.001 // 0.001 Da tolerance for floating point precision
     },
@@ -1445,6 +1622,7 @@ export default defineComponent({
     // Sequence change dialog methods
     openSequenceDialog(): void {
       this.customSequenceInput = ''
+      this.customModifications = [...(this.args.modifications ?? [])]
       this.sequenceInputError = ''
       this.sequenceDialog = true
     },
@@ -1454,6 +1632,13 @@ export default defineComponent({
       this.sequenceInputError = ''
     },
     submitCustomSequence(): void {
+      // The picked modifications first, so the rebuild for the sequence uses them
+      if (this.args.modificationsIdentifier && this.modificationItems.length > 0) {
+        this.selectionStore.updateSelection(
+          this.args.modificationsIdentifier,
+          [...this.customModifications]
+        )
+      }
       // Python rebuilds the view for the new sequence
       if (this.args.sequenceIdentifier) {
         this.selectionStore.updateSelection(

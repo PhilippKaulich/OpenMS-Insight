@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.multi_select import normalize_multi_select
 from ..core.registry import register_component
 
 
@@ -61,6 +62,7 @@ class ClusteredHeatmap(BaseComponent):
         reversescale: bool = True,
         intensity_label: str | None = None,
         group_colors: dict[str, str] | None = None,
+        multi_select: dict[str, str] | None = None,
         **kwargs,
     ):
         """
@@ -105,6 +107,11 @@ class ClusteredHeatmap(BaseComponent):
                 {"Control": "#1f77b4", "Treatment": "#d62728"}). Auto-
                 assigned from a default palette for any group not given an
                 explicit color.
+            multi_select: Mapping of an identifier name to ``id_col`` for
+                selecting several rows at once with a box or lasso drag over
+                the cells (Shift adds, Alt removes). The identifier holds the
+                sorted labels of the selected rows, or None, and the selected
+                rows are outlined, whichever component chose them.
             **kwargs: Additional configuration options.
         """
         if (data is not None or data_path is not None) and not id_col:
@@ -128,6 +135,13 @@ class ClusteredHeatmap(BaseComponent):
         self._reversescale = reversescale
         self._intensity_label = intensity_label
         self._group_colors = group_colors or {}
+        self._multi_select = normalize_multi_select(multi_select)
+        for identifier, column in self._multi_select.items():
+            if id_col is not None and column != id_col:
+                raise ValueError(
+                    f"multi_select of a ClusteredHeatmap selects rows: map "
+                    f"{identifier!r} to id_col {id_col!r}, not {column!r}"
+                )
 
         super().__init__(
             cache_id=cache_id,
@@ -151,6 +165,7 @@ class ClusteredHeatmap(BaseComponent):
             reversescale=reversescale,
             intensity_label=intensity_label,
             group_colors=group_colors,
+            multi_select=multi_select,
             **kwargs,
         )
 
@@ -212,6 +227,8 @@ class ClusteredHeatmap(BaseComponent):
             "reversescale": self._reversescale,
             "intensity_label": self._intensity_label,
             "group_colors": self._group_colors,
+            # Only when set, so caches built without it keep their hash
+            **({"multi_select": self._multi_select} if self._multi_select else {}),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -230,6 +247,7 @@ class ClusteredHeatmap(BaseComponent):
         self._reversescale = config.get("reversescale", True)
         self._intensity_label = config.get("intensity_label")
         self._group_colors = config.get("group_colors", {})
+        self._multi_select = dict(config.get("multi_select") or {})
         self._metadata = None  # not needed after clustering has been precomputed
 
     def _compute_dendrogram(self, matrix: np.ndarray) -> dict[str, Any]:
@@ -407,4 +425,6 @@ class ClusteredHeatmap(BaseComponent):
         }
         if self._title:
             args["title"] = self._title
+        if self._multi_select:
+            args["multiSelect"] = self._multi_select
         return args

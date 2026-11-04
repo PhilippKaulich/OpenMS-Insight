@@ -14,6 +14,13 @@ except ImportError as exc:
         "    pip install openms-insight[analysis]"
     ) from exc
 
+GO_CATEGORIES = ("BP", "CC", "MF")
+GO_CATEGORY_NAMES = {
+    "BP": "Biological process",
+    "CC": "Cellular component",
+    "MF": "Molecular function",
+}
+
 
 def get_clean_uniprot(name):
     """Cleans FASTA-style UniProt headers to extract the core accession ID.
@@ -51,6 +58,181 @@ def extract_go_terms(go_data, go_type):
     if isinstance(terms, dict):
         terms = [terms]
     return list({t.get("term") for t in terms if "term" in t})
+
+
+def go_term_table(res_go, fg_set, bg_set, go_type, adjust=True):
+    """Fisher's exact test of every GO term of one category, without a plot.
+
+    Args:
+        res_go: DataFrame with a "query" column (protein ID) and a
+            "{go_type}_terms" column (list of GO term names per protein), as
+            returned by `fetch_go_annotations`.
+        fg_set: Protein IDs of the foreground (the selected proteins).
+        bg_set: Protein IDs of the background (all proteins the foreground
+            was chosen from, the foreground included).
+        go_type: "BP", "CC" or "MF".
+        adjust: Add a Benjamini-Hochberg adjusted p-value ("p_adj").
+
+    Returns:
+        DataFrame with "GO_Term", "Count" (foreground proteins with the term),
+        "Background" (background proteins with it), "GeneRatio", "BgRatio",
+        "FoldEnrichment", "p_value", "-log10(p)", ("p_adj"), "Proteins" (the
+        foreground proteins with the term, ";"-separated), sorted by p-value.
+        Empty when no foreground protein has a term of the category.
+    """
+    columns = [
+        "GO_Term",
+        "Count",
+        "Background",
+        "GeneRatio",
+        "BgRatio",
+        "FoldEnrichment",
+        "p_value",
+        "-log10(p)",
+        "Proteins",
+    ]
+    if adjust:
+        columns.insert(columns.index("Proteins"), "p_adj")
+    go2fg = defaultdict(set)
+    go2bg = defaultdict(set)
+    fg_set = set(map(str, fg_set))
+    bg_set = set(map(str, bg_set)) | fg_set
+
+    for _, row in res_go.iterrows():
+        uid = str(row["query"])
+        if uid not in bg_set:
+            continue
+        for term in row[f"{go_type}_terms"]:
+            go2bg[term].add(uid)
+            if uid in fg_set:
+                go2fg[term].add(uid)
+
+    records = []
+    n_fg = len(fg_set)
+    n_bg = len(bg_set)
+    for term, fg_genes in go2fg.items():
+        a = len(fg_genes)
+        if a == 0:
+            continue
+        b = n_fg - a
+        c = len(go2bg[term]) - a
+        d = n_bg - (a + b + c)
+        _, p = fisher_exact([[a, b], [c, d]], alternative="greater")
+        records.append(
+            {
+                "GO_Term": term,
+                "Count": a,
+                "Background": len(go2bg[term]),
+                "GeneRatio": f"{a}/{n_fg}",
+                "BgRatio": f"{len(go2bg[term])}/{n_bg}",
+                "FoldEnrichment": (a / n_fg) / (len(go2bg[term]) / n_bg),
+                "p_value": p,
+                "Proteins": ";".join(sorted(fg_genes)),
+            }
+        )
+    if not records:
+        return pd.DataFrame(columns=columns)
+    df = pd.DataFrame(records)
+    df["-log10(p)"] = -np.log10(df["p_value"].clip(lower=1e-300))
+    if adjust:
+        df["p_adj"] = benjamini_hochberg(df["p_value"].to_numpy())
+    return df.sort_values(["p_value", "GO_Term"]).reset_index(drop=True)[columns]
+
+
+def benjamini_hochberg(pvalues):
+    """Benjamini-Hochberg adjusted p-values, in the order given."""
+    p = np.asarray(pvalues, dtype=float)
+    n = len(p)
+    if n == 0:
+        return p
+    order = np.argsort(p)
+    ranked = p[order] * n / np.arange(1, n + 1)
+    ranked = np.minimum.accumulate(ranked[::-1])[::-1]
+    adjusted = np.empty(n)
+    adjusted[order] = np.clip(ranked, 0, 1)
+    return adjusted
+
+
+def fetch_go_annotations(accessions, mygene_client=None):
+    """GO terms of UniProt accessions, from MyGene.info (a network call).
+
+    Args:
+        accessions: Protein IDs, FASTA-style ("sp|P12345|NAME") or bare.
+        mygene_client: A `mygene.MyGeneInfo` (default: a new one).
+
+    Returns:
+        DataFrame with "query" (the clean accession) and "BP_terms",
+        "CC_terms", "MF_terms" (lists of term names), one row per accession
+        that MyGene.info found; accessions it has no GO terms for get empty
+        lists.
+    """
+    clean = sorted({get_clean_uniprot(a) for a in accessions if a})
+    columns = ["query"] + [f"{t}_terms" for t in GO_CATEGORIES]
+    if not clean:
+        return pd.DataFrame(columns=columns)
+    client = mygene_client or mygene.MyGeneInfo()
+    res_list = client.querymany(
+        clean, scopes="uniprot", fields="go", as_dataframe=False, verbose=False
+    )
+    res_go = pd.DataFrame(res_list)
+    if res_go.empty or "query" not in res_go.columns:
+        return pd.DataFrame(columns=columns)
+    if "notfound" in res_go.columns:
+        res_go = res_go[res_go["notfound"].ne(True)]
+    if "go" not in res_go.columns:
+        res_go["go"] = None
+    for go_type in GO_CATEGORIES:
+        res_go[f"{go_type}_terms"] = res_go["go"].apply(
+            lambda x, go_type=go_type: extract_go_terms(x, go_type)
+        )
+    # One row per accession (an accession can map to several genes)
+    merged = (
+        res_go[columns]
+        .groupby("query", as_index=False)
+        .agg(lambda lists: sorted({t for terms in lists for t in terms}))
+    )
+    merged["query"] = merged["query"].astype(str)
+    return merged.reset_index(drop=True)
+
+
+def go_enrichment(annotations, foreground, background, categories=GO_CATEGORIES):
+    """GO term enrichment of a selected set of proteins.
+
+    Unlike `calculate_go_enrichment`, the foreground is given directly (e.g.
+    the proteins a user selected in a plot or table) and the annotations come
+    from the caller, who can cache them.
+
+    Args:
+        annotations: DataFrame from `fetch_go_annotations` covering at least
+            the background.
+        foreground: Protein IDs of the selection (FASTA-style or bare).
+        background: Protein IDs the selection was made from.
+        categories: GO categories to test.
+
+    Returns:
+        Dict with "fg_count" and "bg_count" (proteins with any GO annotation
+        in either set), "fg_total"/"bg_total" (all proteins given) and
+        "categories" (category -> DataFrame of `go_term_table`).
+    """
+    fg = {get_clean_uniprot(a) for a in foreground if a}
+    bg = {get_clean_uniprot(a) for a in background if a} | fg
+    annotated = set(annotations["query"].astype(str)) if len(annotations) else set()
+    has_terms = set()
+    for _, row in annotations.iterrows():
+        if any(len(row[f"{t}_terms"]) for t in categories):
+            has_terms.add(str(row["query"]))
+    fg_annotated = fg & annotated & has_terms
+    bg_annotated = bg & annotated & has_terms
+    return {
+        "fg_total": len(fg),
+        "bg_total": len(bg),
+        "fg_count": len(fg_annotated),
+        "bg_count": len(bg_annotated),
+        "categories": {
+            t: go_term_table(annotations, fg_annotated, bg_annotated, t)
+            for t in categories
+        },
+    }
 
 
 def run_go_category(res_go, fg_set, bg_set, go_type):

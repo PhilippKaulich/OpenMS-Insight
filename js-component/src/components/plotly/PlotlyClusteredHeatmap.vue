@@ -1,5 +1,9 @@
 <template>
-  <div :id="id" class="clustered-heatmap-container"></div>
+  <div>
+    <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
+         box or lasso selection ends) measures this element -->
+    <div :id="id" class="clustered-heatmap-container" :style="{ minHeight: `${args.height || 500}px` }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -7,6 +11,7 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
+import { clearSelectionButton, SELECTION_ACCENT, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
 // Layout fractions for the 4 regions of the composite figure.
@@ -44,15 +49,26 @@ export default defineComponent({
       title: computed(() => props.args.title),
     })
 
+    const multi = useMultiSelect(computed(() => props.args.multiSelect))
+
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      multiSelectEnabled: multi.enabled,
+      selectedCount: multi.selectedCount,
+      multiSelectionKey: multi.selectionKey,
+      selectedSets: multi.selectedSets,
+      applySelectedRows: multi.applyRows,
+      clearSelection: multi.clear,
     }
   },
   data() {
     return {
       isInitialized: false as boolean,
       plotInitialized: false as boolean,
+      dragmode: 'select' as string,
+      removingOutline: false,
+      selectModifier: 'replace' as 'replace' | 'add' | 'remove',
     }
   },
   computed: {
@@ -235,8 +251,70 @@ export default defineComponent({
       if (groupBar) {
         traces.push(groupBar)
       }
+      const cells = this.selectableCells
+      if (cells) {
+        traces.push(cells)
+      }
 
       return traces
+    },
+
+    /**
+     * multi_select: an invisible point in every cell, which box and lasso drags
+     * select (Plotly cannot select a heatmap trace). Its customdata is the row.
+     */
+    selectableCells(): Plotly.Data | null {
+      if (!this.multiSelectEnabled) return null
+      const x: number[] = []
+      const y: number[] = []
+      const rows: number[] = []
+      for (let r = 0; r < this.rowLabels.length; r++) {
+        for (let c = 0; c < this.colLabels.length; c++) {
+          x.push(c)
+          y.push(r)
+          rows.push(r)
+        }
+      }
+      return {
+        type: 'scatter',
+        mode: 'markers',
+        x,
+        y,
+        customdata: rows,
+        xaxis: 'x',
+        yaxis: 'y',
+        marker: { size: 6, opacity: 0 },
+        selected: { marker: { opacity: 0 } },
+        unselected: { marker: { opacity: 0 } },
+        hoverinfo: 'none',
+        showlegend: false,
+      } as unknown as Plotly.Data
+    },
+
+    /** Outlines of the selected rows (runs of adjacent rows share one). */
+    selectionShapes(): Partial<Plotly.Shape>[] {
+      if (!this.multiSelectEnabled) return []
+      void this.multiSelectionKey
+      const identifier = Object.keys(this.args.multiSelect || {})[0]
+      const selected = this.selectedSets[identifier]
+      if (!selected || selected.size === 0) return []
+      const shapes: Partial<Plotly.Shape>[] = []
+      const nCols = this.colLabels.length
+      let start = -1
+      for (let r = 0; r <= this.rowLabels.length; r++) {
+        const isSelected = r < this.rowLabels.length && selected.has(this.rowLabels[r])
+        if (isSelected && start < 0) start = r
+        if (!isSelected && start >= 0) {
+          shapes.push({
+            type: 'rect', xref: 'x', yref: 'y',
+            x0: -0.5, x1: nCols - 0.5, y0: start - 0.5, y1: r - 0.5,
+            line: { color: SELECTION_ACCENT, width: 2.5 },
+            fillcolor: 'rgba(30, 136, 229, 0.12)',
+          })
+          start = -1
+        }
+      }
+      return shapes
     },
 
     layout(): Partial<Plotly.Layout> {
@@ -256,6 +334,9 @@ export default defineComponent({
         // above) - each gets its own space instead of fighting over the
         // same fixed margin.
         margin: { l: 40, r: 200, t: this.args.title ? 60 : 20, b: 80 },
+        ...(this.multiSelectEnabled
+          ? { dragmode: this.dragmode, shapes: this.selectionShapes, hovermode: 'closest', ...SELECTION_LAYOUT }
+          : {}),
         xaxis: {
           domain: [heatmapLeft, this.heatmapRight],
           anchor: 'y',
@@ -349,6 +430,11 @@ export default defineComponent({
       },
       deep: true,
     },
+    multiSelectionKey() {
+      if (this.isInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
   },
 
   mounted() {
@@ -379,7 +465,8 @@ export default defineComponent({
      * layout level.
      */
     getHeatmapPlotConfig(): Partial<Plotly.Config> {
-      return { ...this.getPlotConfig(), scrollZoom: false }
+      const buttons = this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []
+      return { ...this.getPlotConfig(buttons), scrollZoom: false }
     },
 
     async renderPlot(): Promise<void> {
@@ -393,6 +480,7 @@ export default defineComponent({
         if (!this.plotInitialized) {
           await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
           this.plotInitialized = true
+          this.setupSelectHandlers()
         } else {
           await Plotly.react(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
         }
@@ -405,6 +493,49 @@ export default defineComponent({
         this.plotInitialized = false
         this.renderFallback()
       }
+    },
+
+    setupSelectHandlers(): void {
+      if (!this.multiSelectEnabled) return
+      const element = document.getElementById(this.id) as Plotly.PlotlyHTMLElement | null
+      if (!element) return
+      element.addEventListener('mousedown', (e: MouseEvent) => {
+        this.selectModifier = e.shiftKey ? 'add' : 'replace'
+      }, true)
+      // Keep the mode picked in the mode bar across re-renders
+      element.on('plotly_relayout', (eventData: Plotly.PlotRelayoutEvent) => {
+        const mode = (eventData as Record<string, unknown>).dragmode
+        if (typeof mode === 'string') this.dragmode = mode
+      })
+      element.on('plotly_selected', (eventData: Plotly.PlotSelectionEvent | undefined) => {
+        if (!eventData || !eventData.points) return
+        // Plotly reports the removed outline as an empty selection
+        if (this.removingOutline) return
+        const idCol = this.args.idCol
+        const rows = new Set<number>()
+        for (const point of eventData.points) {
+          const row = (point as unknown as { customdata?: unknown }).customdata
+          if (typeof row === 'number') rows.add(row)
+        }
+        const picked = Array.from(rows).map((r) => ({ [idCol]: this.rowLabels[r] }))
+        if (picked.length === 0 && this.selectModifier === 'replace') {
+          this.clearSelection()
+        } else {
+          this.applySelectedRows(picked, this.selectModifier)
+        }
+        // The rows are outlined; Plotly's own outline would only show the last region.
+        // Removing it fires plotly_deselect, which must not clear the rows just picked.
+        this.removingOutline = true
+        Promise.resolve(
+          Plotly.relayout(this.id, { selections: [] } as unknown as Partial<Plotly.Layout>)
+        ).finally(() => {
+          this.removingOutline = false
+        })
+      })
+      element.on('plotly_deselect', () => {
+        if (this.removingOutline) return
+        this.clearSelection()
+      })
     },
 
     getFallbackData(): Plotly.Data[] {

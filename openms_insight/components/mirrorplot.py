@@ -197,18 +197,13 @@ class MirrorPlot(BaseComponent):
         # error messages naming filters_top/filters_bottom. If BaseComponent grows new
         # checks, mirror them here.
 
-        # Creation-mode: both sides required and disjoint
+        # Creation-mode: both sides required. They may share identifiers: two
+        # halves of one selection (e.g. observed vs. theoretical peaks of the same
+        # spectrum) filter on the same identifier through different columns.
         if not self._filters_top:
             raise ValueError("MirrorPlot requires filters_top (creation mode)")
         if not self._filters_bottom:
             raise ValueError("MirrorPlot requires filters_bottom (creation mode)")
-
-        overlap = set(self._filters_top.keys()) & set(self._filters_bottom.keys())
-        if overlap:
-            raise ValueError(
-                f"filters_top and filters_bottom must use disjoint identifier "
-                f"names; got overlap: {sorted(overlap)}"
-            )
 
         # Schema validation
         schema = self._raw_data.collect_schema()

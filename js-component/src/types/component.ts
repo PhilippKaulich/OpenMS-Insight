@@ -3,12 +3,18 @@
  */
 
 import type { ColumnDefinition, Options as TabulatorOptions } from 'tabulator-tables'
+import type { FragmentSettings } from './protein-sequence-data'
 
 /**
  * Base component arguments shared by all components.
  */
 export interface BaseComponentArgs {
   componentType: string
+  /**
+   * Selecting several entries at once: identifier -> column. The identifier
+   * holds the sorted distinct values of the column over the selected entries.
+   */
+  multiSelect?: Record<string, string>
 }
 
 /**
@@ -98,6 +104,10 @@ export interface TableComponentArgs extends BaseComponentArgs {
   resetSort?: boolean
   /** Identifiers whose selection change sorts by initialSort again */
   resetSortOn?: string[]
+  /** Without pagination, stay at the given height instead of shrinking to the rows */
+  fillHeight?: boolean
+  rowOverview?: boolean
+  rowOverviewTitle?: string
   /** False hides the column menu */
   columnMenu?: boolean
   /** Show the toolbar search box */
@@ -177,6 +187,12 @@ export interface HeatmapComponentArgs extends BaseComponentArgs {
   logScale?: boolean
   /** Custom label for the colorbar (default: "Intensity") */
   intensityLabel?: string
+  /** Column whose text is shown above the intensity when hovering a point */
+  hoverColumn?: string
+  /** Identifier → column; the points of each identifier's selected value are ringed */
+  highlight?: Record<string, string>
+  /** Selections a click sets besides `interactivity` (null clears one) */
+  onSelect?: Record<string, unknown>
   /** Rectangles drawn over the points, set by Heatmap.set_boxes() */
   boxes?: {
     /** Identifier the id of a clicked box is written to */
@@ -276,6 +292,9 @@ export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
   /** Max number of labels to show on significant points */
   maxLabels?: number
   interactivity?: InteractivityMapping
+  /** Labels of the selection buttons: changed, up, down, clear */
+  selectionPresets?: boolean
+  presetLabels?: Record<string, string>
   height?: number
 }
 
@@ -388,6 +407,10 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs {
   yLabel?: string
   showLegend?: boolean
   fixedYRange?: boolean
+  /** Plotly rangemode of the y axis (default 'nonnegative') */
+  yRangeMode?: 'nonnegative' | 'tozero' | 'normal'
+  /** Column whose text is shown on hover */
+  hoverColumn?: string | null
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
@@ -463,8 +486,8 @@ export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
   title?: string
   /** Identifier holding the selected residue (0-based position in the sequence) */
   aaIdentifier?: string | null
-  /** Fragment ion types and tolerance (ppm) to match with */
-  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Fragment ion types (or fragmentation method) and tolerance to match with */
+  settings?: FragmentSettings | null
   /** Identifier holding the fragment selected in a sequence view */
   fragmentIdentifier?: string | null
   /** Shown while no entry is selected */
@@ -489,10 +512,16 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   aaIdentifier?: string | null
   /** Identifier the change-sequence dialog writes the new sequence to */
   sequenceIdentifier?: string | null
+  // Fixed modifications offered in the change-sequence dialog
+  modificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
+  // Identifier the dialog writes the picked modification ids to
+  modificationsIdentifier?: string | null
+  // Ids preselected in the picker
+  modifications?: string[] | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
-  /** Fragment ion types and tolerance (ppm) to start from */
-  settings?: { tolerance: number; ion_types: string[] } | null
+  /** Fragment ion types (or fragmentation method) and tolerance to start from */
+  settings?: FragmentSettings | null
   /** Sequence tag to mark (0-based residues) */
   tag?: { startPos: number; endPos: number } | null
   svgFilename?: string

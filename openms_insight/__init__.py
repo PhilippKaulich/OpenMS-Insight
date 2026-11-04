@@ -12,7 +12,10 @@ from .components.lineplot import LinePlot
 from .components.mirrorplot import MirrorPlot
 from .components.pca import PCAPlot
 from .components.plot3d import Plot3D
-from .components.protein_sequence_view import ProteinSequenceView
+from .components.protein_sequence_view import (
+    ProteinSequenceView,
+    pyopenms_modification_library,
+)
 from .components.protein_structure_view import ProteinStructureView
 from .components.sequenceview import SequenceView, SequenceViewResult
 from .components.series_plot import SeriesPlot
@@ -28,7 +31,7 @@ from .rendering.bridge import (
     get_component_annotations,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     # Core
@@ -51,6 +54,7 @@ __all__ = [
     "Plot3D",
     "DeconvolvedSpectrum",
     "ProteinSequenceView",
+    "pyopenms_modification_library",
     "ProteinStructureView",
     # Utilities
     "get_component_annotations",

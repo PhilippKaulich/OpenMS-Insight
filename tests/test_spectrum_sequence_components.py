@@ -227,6 +227,48 @@ class TestSeriesPlot:
         ]
         data = plot._prepare_vue_data({})
         assert len(data["plotData"]) == 6
+        # Defaults: y axis from zero, no hover text
+        assert args["yRangeMode"] == "nonnegative"
+        assert args["hoverColumn"] is None
+
+    def test_signed_y_axis_and_hover_column(self, mock_streamlit, temp_cache_dir):
+        errors = pl.LazyFrame(
+            {
+                "mass": [500.0, 900.0, 1200.0],
+                "ppm": [-3.5, 1.0, 4.2],
+                "ion": ["b", "y", "y"],
+                "fragment": ["b5", "y8", "y11"],
+            }
+        )
+        plot = SeriesPlot(
+            cache_id="errors",
+            data=errors,
+            x_column="mass",
+            y_column="ppm",
+            series_column="ion",
+            mode="markers",
+            y_range_mode="normal",
+            hover_column="fragment",
+            cache_path=str(temp_cache_dir),
+        )
+        args = plot._get_component_args()
+        assert args["yRangeMode"] == "normal"
+        assert args["hoverColumn"] == "fragment"
+        data = plot._prepare_vue_data({})["plotData"]
+        assert list(data["fragment"]) == ["b5", "y8", "y11"]
+        # Restored from its cache with the same configuration
+        cached = SeriesPlot(cache_id="errors", cache_path=str(temp_cache_dir))
+        assert cached._get_component_args()["yRangeMode"] == "normal"
+        assert cached._get_component_args()["hoverColumn"] == "fragment"
+
+    def test_rejects_unknown_y_range_mode(self, mock_streamlit, temp_cache_dir):
+        with pytest.raises(ValueError, match="y_range_mode"):
+            SeriesPlot(
+                cache_id="bad",
+                data=pl.LazyFrame({"x": [1.0], "y": [1.0]}),
+                y_range_mode="symmetric",
+                cache_path=str(temp_cache_dir),
+            )
 
 
 class TestPlot3D:
@@ -527,6 +569,86 @@ class TestProteinSequenceView:
         )
         masses = view._prepare_vue_data({"protein": 0})["spectrumData"]["masses"]
         assert math.isclose(masses[0], 12345.678901, abs_tol=1e-9)
+
+    def test_modification_picker_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        default = ProteinSequenceView(
+            cache_id="seq_mods_off",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+        )
+        args = default._get_component_args()
+        assert args["modificationLibrary"] is None
+        assert args["modificationsIdentifier"] is None
+        assert args["modifications"] == []
+
+        view = ProteinSequenceView(
+            cache_id="seq_mods_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+            modification_library=[
+                {"id": "Carbamidomethyl (C)", "mass": 57.021464, "site": "C"},
+                {"id": "Acetyl (Protein N-term)", "mass": 42.010565},
+            ],
+            modifications_identifier="fixed_mods",
+            modifications=("Carbamidomethyl (C)",),
+        )
+        args = view._get_component_args()
+        assert args["modificationLibrary"] == [
+            {"id": "Carbamidomethyl (C)", "mass": 57.021464, "site": "C"},
+            {"id": "Acetyl (Protein N-term)", "mass": 42.010565, "site": None},
+        ]
+        assert args["modificationsIdentifier"] == "fixed_mods"
+        assert args["modifications"] == ["Carbamidomethyl (C)"]
+
+    def test_modification_picker_from_pyopenms(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        pytest.importorskip("pyopenms")
+        from openms_insight import pyopenms_modification_library
+
+        library = pyopenms_modification_library()
+        by_id = {m["id"]: m for m in library}
+        assert len(library) > 1000 and len(by_id) == len(library)
+        assert by_id["Carbamidomethyl (C)"]["site"] == "C"
+        assert by_id["Carbamidomethyl (C)"]["mass"] == pytest.approx(
+            57.021464, abs=1e-5
+        )
+        assert by_id["Acetyl (Protein N-term)"]["site"] == "N-term"
+        assert by_id["Amidated (C-term)"]["site"] == "C-term"
+
+        view = ProteinSequenceView(
+            cache_id="seq_mods_pyopenms",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            sequence_identifier="sequence",
+            modification_library="pyopenms",
+            modifications_identifier="fixed_mods",
+        )
+        assert view._get_component_args()["modificationLibrary"] == library
+        with pytest.raises(ValueError):
+            view.set_modification_picker("unimod")
+        # Not part of the cache: the same data cache serves both
+        assert "modification_library" not in view._get_cache_config()
 
 
 def test_table_navigation_uses_render_state_manager():
@@ -911,3 +1033,152 @@ class TestProteinStructureView:
         assert args["emptyMessage"] == "Pick a protein."
         assert args["viewerHeight"] == 300
         assert args["fragmentIdentifier"] == "fragment"
+
+
+class TestFragmentSettings:
+    """Fragmentation methods, ion variants and Da tolerance (ProSight Lite parity)."""
+
+    def test_new_keys_pass_through(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        settings = {
+            "tolerance": 0.02,
+            "tolerance_unit": "Da",
+            "fragmentation": "ETD",
+            "ion_types": ["c", "z•", "z+1"],
+        }
+        view = ProteinSequenceView(
+            cache_id="seq_settings",
+            data=sample_protein_sequence_data,
+            filters={"protein": "hit_index"},
+            settings=settings,
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["settings"] == settings
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"tolerance_unit": "mmu"},
+            {"tolerance_unit": 1},
+            {"fragmentation": "HCD/ETD"},
+            {"fragmentation": ["ETD"]},
+        ],
+    )
+    def test_invalid_settings_raise(self, settings):
+        from openms_insight.components.protein_sequence_view import (
+            check_fragment_settings,
+        )
+
+        with pytest.raises(ValueError):
+            check_fragment_settings(settings)
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            None,
+            {},
+            {"tolerance": 10, "ion_types": ["b", "y"]},
+            {"tolerance_unit": "ppm"},
+            {"tolerance_unit": "da"},
+            {"fragmentation": "CID / HCD"},
+            {"fragmentation": "uvpd"},
+            {"fragmentation": "EThcD", "extra": 1},
+            # Passed on unchecked, as before
+            {"tolerance": "10", "ion_types": ["b", "zp2"]},
+        ],
+    )
+    def test_valid_settings(self, settings):
+        from openms_insight.components.protein_sequence_view import (
+            check_fragment_settings,
+        )
+
+        check_fragment_settings(settings)
+
+    def test_method_ion_series_are_known(self):
+        from openms_insight.components.protein_sequence_view import (
+            FRAGMENTATION_METHODS,
+            ION_TYPES,
+            ION_VARIANTS,
+        )
+
+        for ions in FRAGMENTATION_METHODS.values():
+            for ion in ions:
+                assert ion in ION_TYPES or ion in ION_VARIANTS
+        assert len(FRAGMENTATION_METHODS["UVPD"]) == 9
+
+    def test_frontend_tables_match(self):
+        """The Vue side's method and variant tables say the same as Python's."""
+        from pathlib import Path
+
+        from openms_insight.components.protein_sequence_view import (
+            FRAGMENTATION_METHODS,
+            ION_VARIANTS,
+        )
+
+        source = (
+            Path(__file__).parents[1]
+            / "js-component/src/components/protein/fragment-ions.ts"
+        ).read_text(encoding="utf-8")
+        for method, ions in FRAGMENTATION_METHODS.items():
+            label = method.replace("/", " / ")
+            listed = ", ".join(f"'{i}'" for i in ions)
+            assert f"{{ name: '{label}', ions: [{listed}] }}" in source, method
+        for variant in set(ION_VARIANTS.values()):
+            assert f"name: '{variant}'" in source, variant
+
+
+class TestSpectrumFragmentation:
+    """Per-spectrum fragmentation method (fragmentation_column)."""
+
+    def _view(self, cache_dir, data, **kwargs):
+        return ProteinSequenceView(
+            cache_id="seq_frag",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(cache_dir),
+            **kwargs,
+        )
+
+    def test_payload_carries_method(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        data = sample_protein_sequence_data.with_columns(
+            pl.Series("activation", ["ETD", None])
+        )
+        view = self._view(temp_cache_dir, data, fragmentation_column="activation")
+        etd = view._prepare_vue_data({"protein": 0})["spectrumData"]
+        assert etd["fragmentation"] == "ETD"
+        unknown = view._prepare_vue_data({"protein": 1})["spectrumData"]
+        assert unknown["fragmentation"] is None
+
+    def test_without_column_payload_unchanged(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        view = self._view(temp_cache_dir, sample_protein_sequence_data)
+        spectrum = view._prepare_vue_data({"protein": 0})["spectrumData"]
+        assert set(spectrum) == {"masses", "precursorMass"}
+        assert "fragmentation_column" not in view._get_cache_config()
+
+    def test_column_survives_cache_reload(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        data = sample_protein_sequence_data.with_columns(
+            pl.Series("activation", ["HCD", "ETD"])
+        )
+        self._view(temp_cache_dir, data, fragmentation_column="activation")
+        reloaded = ProteinSequenceView(
+            cache_id="seq_frag", cache_path=str(temp_cache_dir)
+        )
+        spectrum = reloaded._prepare_vue_data({"protein": 1})["spectrumData"]
+        assert spectrum["fragmentation"] == "ETD"
+
+    def test_missing_column_raises(
+        self, mock_streamlit, temp_cache_dir, sample_protein_sequence_data
+    ):
+        with pytest.raises(ValueError):
+            self._view(
+                temp_cache_dir,
+                sample_protein_sequence_data,
+                fragmentation_column="activation",
+            )

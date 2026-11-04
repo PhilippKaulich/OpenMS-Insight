@@ -7,7 +7,7 @@ from .lineplot import LinePlot
 from .mirrorplot import MirrorPlot
 from .pca import PCAPlot
 from .plot3d import Plot3D
-from .protein_sequence_view import ProteinSequenceView
+from .protein_sequence_view import ProteinSequenceView, pyopenms_modification_library
 from .protein_structure_view import ProteinStructureView
 from .series_plot import SeriesPlot
 from .table import Table
@@ -25,5 +25,6 @@ __all__ = [
     "Plot3D",
     "DeconvolvedSpectrum",
     "ProteinSequenceView",
+    "pyopenms_modification_library",
     "ProteinStructureView",
 ]

@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.multi_select import normalize_multi_select
 from ..core.registry import register_component
 from ..preprocessing.scatter import build_scatter_columns
 
@@ -70,6 +71,9 @@ class VolcanoPlot(BaseComponent):
         ns_color: str = "#95A5A6",
         show_threshold_lines: bool = True,
         threshold_line_style: str = "dash",
+        multi_select: dict[str, str] | None = None,
+        selection_presets: bool = False,
+        preset_labels: dict[str, str] | None = None,
         **kwargs,
     ):
         """
@@ -102,6 +106,18 @@ class VolcanoPlot(BaseComponent):
             ns_color: Color for not significant points (default: gray #95A5A6).
             show_threshold_lines: Show threshold lines on plot (default: True).
             threshold_line_style: Line style for thresholds (default: "dash").
+            multi_select: Mapping of identifier names to column names for
+                selecting several points at once with Plotly's box and lasso
+                select (mode bar; Shift adds to the selection). The identifier
+                holds the sorted distinct values of the column over the
+                selected points (None when none are), and the selected points
+                are marked, whichever component chose them.
+            selection_presets: With ``multi_select``, show buttons above the
+                plot that select every significant, every up- or every
+                down-regulated point (default: False).
+            preset_labels: Labels of those buttons, keys "changed", "up",
+                "down" and "clear" (defaults: "All changed", "Up", "Down",
+                "Clear").
             **kwargs: Additional configuration options.
         """
         self._log2fc_column = log2fc_column
@@ -115,6 +131,9 @@ class VolcanoPlot(BaseComponent):
         self._ns_color = ns_color
         self._show_threshold_lines = show_threshold_lines
         self._threshold_line_style = threshold_line_style
+        self._multi_select = normalize_multi_select(multi_select)
+        self._selection_presets = bool(selection_presets)
+        self._preset_labels = dict(preset_labels or {})
 
         # Render-time threshold values (set in __call__)
         self._current_fc_threshold: float = 1.0
@@ -133,8 +152,13 @@ class VolcanoPlot(BaseComponent):
             interactivity=interactivity,
             cache_path=cache_path,
             regenerate_cache=regenerate_cache,
+            multi_select=multi_select,
+            selection_presets=selection_presets,
+            preset_labels=preset_labels,
             **kwargs,
         )
+        for key in ("multi_select", "selection_presets", "preset_labels"):
+            self._config.pop(key, None)
 
     def _validate_columns(self, schema: pl.Schema) -> None:
         """Validate that required columns exist in the data schema."""
@@ -147,6 +171,13 @@ class VolcanoPlot(BaseComponent):
                 f"Missing required columns: {missing}. "
                 f"Available columns: {sorted(available)}"
             )
+
+        for identifier, column in self._multi_select.items():
+            if column not in available:
+                raise ValueError(
+                    f"multi_select column '{column}' for identifier "
+                    f"'{identifier}' not found. Available columns: {sorted(available)}"
+                )
 
         if self._label_column and self._label_column not in available:
             raise ValueError(
@@ -177,7 +208,17 @@ class VolcanoPlot(BaseComponent):
             "ns_color": self._ns_color,
             "show_threshold_lines": self._show_threshold_lines,
             "threshold_line_style": self._threshold_line_style,
+            # Only when set, so caches built without them keep their hash
+            **({"multi_select": self._multi_select} if self._multi_select else {}),
+            **({"selection_presets": True} if self._selection_presets else {}),
+            **({"preset_labels": self._preset_labels} if self._preset_labels else {}),
         }
+
+    def _extra_columns(self) -> list[str]:
+        """Label and multi_select columns, carried along with the points."""
+        extra = [self._label_column] if self._label_column else []
+        extra += [c for c in self._multi_select.values() if c not in extra]
+        return extra
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
         """Restore component-specific configuration from cached config."""
@@ -192,6 +233,11 @@ class VolcanoPlot(BaseComponent):
         self._ns_color = config.get("ns_color", "#95A5A6")
         self._show_threshold_lines = config.get("show_threshold_lines", True)
         self._threshold_line_style = config.get("threshold_line_style", "dash")
+        self._multi_select = dict(config.get("multi_select") or {})
+        self._selection_presets = bool(config.get("selection_presets", False))
+        self._preset_labels = dict(config.get("preset_labels") or {})
+        for key in ("multi_select", "selection_presets", "preset_labels"):
+            self._config.pop(key, None)
 
     def _preprocess(self) -> None:
         """Preprocess data for volcano plot.
@@ -205,7 +251,7 @@ class VolcanoPlot(BaseComponent):
 
         # Build list of columns to select
         # Note: pvalue is passed as y_column only (no duplicate value_column)
-        extra_cols = [self._label_column] if self._label_column else []
+        extra_cols = self._extra_columns()
         columns = build_scatter_columns(
             x_column=self._log2fc_column,
             y_column=self._pvalue_column,
@@ -258,11 +304,7 @@ class VolcanoPlot(BaseComponent):
             df_polars = data
 
         # Build columns to select (remove duplicates)
-        extra_cols = (
-            [self._label_column, self._pvalue_column]
-            if self._label_column
-            else [self._pvalue_column]
-        )
+        extra_cols = self._extra_columns() + [self._pvalue_column]
         columns = build_scatter_columns(
             x_column=self._log2fc_column,
             y_column=self._neglog10p_column,
@@ -333,6 +375,9 @@ class VolcanoPlot(BaseComponent):
             "pThreshold": self._current_p_threshold,
             "maxLabels": self._current_max_labels,
             "interactivity": self._interactivity or {},
+            **({"multiSelect": self._multi_select} if self._multi_select else {}),
+            **({"selectionPresets": True} if self._selection_presets else {}),
+            **({"presetLabels": self._preset_labels} if self._preset_labels else {}),
         }
 
     def __call__(

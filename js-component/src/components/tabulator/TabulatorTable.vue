@@ -76,6 +76,15 @@
         </div>
         <div class="table-toolbar-title">
           <h4 :title="args.title ?? undefined">{{ args.title ?? '' }}</h4>
+          <v-btn
+            v-if="multiSelectEnabled"
+            variant="text"
+            size="x-small"
+            icon="mdi-checkbox-multiple-marked-outline"
+            :class="['multi-select-toggle', { active: checkboxesShown }]"
+            :title="checkboxesShown ? 'Hide the check boxes' : 'Tick rows to select several'"
+            @click="toggleCheckboxes"
+          />
         </div>
         <div class="table-toolbar-toggles">
           <v-checkbox
@@ -185,7 +194,7 @@
 
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
-import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
+import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { Streamlit } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -197,6 +206,7 @@ import type {
   NumericFilterConfig,
 } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
+import { combineSelection } from '@/composables/useMultiSelect'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -307,9 +317,24 @@ export default defineComponent({
       requestedSortDir: 'asc' as 'asc' | 'desc',
       // Track the counter value when AJAX request was made (for stale response detection)
       pendingRequestCounter: null as number | null,
+      // multi_select: last check box toggled (for Shift ranges), and a check box
+      // click, which must not also select the row
+      lastCheckedPosition: null as number | null,
+      checkboxClicked: false as boolean,
+      // The check box column is shown once the user asks for it
+      checkboxesShown: false as boolean,
     }
   },
   computed: {
+    multiSelectEnabled(): boolean {
+      return Object.keys(this.args.multiSelect || {}).length > 0
+    },
+    // Changes whenever a multi_select set changes
+    multiSelectionKey(): string {
+      return JSON.stringify(
+        Object.keys(this.args.multiSelect || {}).map((identifier) => this.selectionStore.$state[identifier] ?? null),
+      )
+    },
     selectionScrollPosition(): 'top' | 'center' | 'bottom' | 'nearest' {
       return this.args.scrollPosition || 'center'
     },
@@ -487,6 +512,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // The checked rows changed (here or in another component)
+    multiSelectionKey() {
+      this.refreshCheckboxes()
+    },
     // Save the CSV once per request. The payload stays in the data store after
     // later merges, so only the id this table asked for is honoured.
     downloadPayload(payload) {
@@ -960,7 +989,7 @@ export default defineComponent({
           title: '',
           hozAlign: 'right',
         },
-        columns: (this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -983,7 +1012,7 @@ export default defineComponent({
             }
           }
           return colDef as ColumnDefinition
-        }),
+        })],
         initialSort: this.args.initialSort,
       }
 
@@ -1012,10 +1041,17 @@ export default defineComponent({
       } else {
         // For non-paginated tables, set data directly
         tabulatorOptions.data = this.preparedTableData
-        // The table is as tall as its rows, up to the height it was given
-        delete tabulatorOptions.height
-        tabulatorOptions.minHeight = 50
-        tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        if (this.args.fillHeight) {
+          // Always the height it was given, so tables side by side line up
+          tabulatorOptions.height = Math.max(tableMaxHeight, 50)
+          tabulatorOptions.minHeight = Math.max(tableMaxHeight, 50)
+          tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        } else {
+          // The table is as tall as its rows, up to the height it was given
+          delete tabulatorOptions.height
+          tabulatorOptions.minHeight = 50
+          tabulatorOptions.maxHeight = Math.max(tableMaxHeight, 50)
+        }
         // Only use virtual DOM if pagination is disabled and dataset is large
         const useVirtualDom = this.preparedTableData.length > 100
         tabulatorOptions.renderVertical = useVirtualDom ? 'virtual' : 'basic'
@@ -1086,6 +1122,7 @@ export default defineComponent({
       // Only sync if no row is currently selected to avoid infinite loops
       // (selecting a row triggers render, which would trigger sync again).
       this.tabulator.on('renderComplete', () => {
+        this.refreshCheckboxes()
         const selectedRows = this.tabulator?.getSelectedRows() || []
         if (selectedRows.length === 0 && !this.skipNextSync) {
           this.syncSelectionFromStore()
@@ -1718,6 +1755,11 @@ export default defineComponent({
     },
 
     onRowClick(row: any): void {
+      // A click on a check box (multi_select) checks the row, nothing more
+      if (this.checkboxClicked) {
+        this.checkboxClicked = false
+        return
+      }
       // Get the row data directly from Tabulator's row object
       const rowData = row.getData()
       const rowIndex = row.getIndex()
@@ -2249,6 +2291,248 @@ export default defineComponent({
       delete this.filterTypes[columnField]
       delete this.columnAnalysis[columnField]
       this.applyFilters()
+    },
+
+    // multi_select: a check box per row, and one in the header for all rows
+    multiSelectColumns(): ColumnDefinition[] {
+      if (!this.multiSelectEnabled) return []
+      return [{
+        title: '',
+        field: '__multi_select',
+        visible: this.checkboxesShown,
+        headerSort: false,
+        resizable: false,
+        width: 36,
+        minWidth: 36,
+        hozAlign: 'center',
+        headerHozAlign: 'center',
+        download: false,
+        responsive: 0,
+        headerTooltip: false,
+        tooltip: 'Add to the selection (Shift: a range)',
+        formatter: (cell: CellComponent) => this.checkboxHtml(this.isRowChecked(cell.getRow().getData() as Record<string, unknown>)),
+        titleFormatter: () => `<span class="multi-select-header" title="Select every row (all pages, filters applied)">${this.checkboxHtml(false)}</span>`,
+        headerClick: () => {
+          this.toggleAllRows()
+        },
+        cellClick: (event: UIEvent, cell: CellComponent) => {
+          this.checkboxClicked = true
+          // rowClick fires after cellClick; reset the flag if it does not
+          setTimeout(() => { this.checkboxClicked = false }, 0)
+          this.toggleRow(cell, (event as MouseEvent).shiftKey)
+        },
+      } as unknown as ColumnDefinition]
+    },
+
+    toggleCheckboxes(): void {
+      this.checkboxesShown = !this.checkboxesShown
+      const column = this.tabulator?.getColumn('__multi_select')
+      if (column) {
+        if (this.checkboxesShown) column.show()
+        else column.hide()
+      }
+      this.refreshCheckboxes()
+    },
+
+    checkboxHtml(checked: boolean | 'some'): string {
+      const state = checked === 'some' ? ' some' : checked ? ' checked' : ''
+      const mark = checked === 'some' ? 'mdi-minus' : 'mdi-check'
+      return `<span class="multi-select-box${state}" role="checkbox" aria-checked="${checked === 'some' ? 'mixed' : !!checked}"><i class="mdi ${mark}"></i></span>`
+    },
+
+    isRowChecked(row: Record<string, unknown>): boolean {
+      for (const [identifier, column] of Object.entries(this.args.multiSelect || {})) {
+        const set = this.selectionStore.$state[identifier]
+        if (Array.isArray(set) && row[column] !== undefined && set.includes(row[column])) return true
+      }
+      return false
+    },
+
+    applyCheckedRows(rows: Record<string, unknown>[], mode: 'add' | 'remove'): void {
+      for (const [identifier, column] of Object.entries(this.args.multiSelect || {})) {
+        const current = this.selectionStore.$state[identifier] ?? null
+        const next = combineSelection(current, rows.map((r) => r[column]), mode)
+        if (JSON.stringify(current) !== JSON.stringify(next)) {
+          this.selectionStore.updateSelection(identifier, next)
+        }
+      }
+    },
+
+    toggleRow(cell: CellComponent, shift: boolean): void {
+      const row = cell.getRow()
+      const data = row.getData() as Record<string, unknown>
+      const mode = this.isRowChecked(data) ? 'remove' : 'add'
+      const active = this.tabulator ? this.tabulator.getRows('active') : []
+      const position = active.findIndex((r) => r.getIndex() === row.getIndex())
+      let rows = [data]
+      if (shift && this.lastCheckedPosition !== null && position >= 0) {
+        const from = Math.min(this.lastCheckedPosition, position)
+        const to = Math.max(this.lastCheckedPosition, position)
+        rows = active.slice(from, to + 1).map((r) => r.getData() as Record<string, unknown>)
+      }
+      if (position >= 0) this.lastCheckedPosition = position
+      this.applyCheckedRows(rows, mode)
+    },
+
+    /** Header box: every row passing the filters, or none of them. */
+    toggleAllRows(): void {
+      if (!this.tabulator) return
+      const active = this.tabulator.getRows('active').map((r) => r.getData() as Record<string, unknown>)
+      const allChecked = active.length > 0 && active.every((row) => this.isRowChecked(row))
+      const mode = allChecked ? 'remove' : 'add'
+      if (this.isServerSidePagination) {
+        // Only one page is here: Python selects the rows of every page
+        this.streamlitDataStore.sendEvent({ type: 'multi_select_all', mode })
+      } else {
+        this.applyCheckedRows(active, mode)
+      }
+    },
+
+    /** Redraw the check boxes after the checked rows changed. */
+    refreshCheckboxes(): void {
+      if (!this.tabulator || !this.isTableBuilt || !this.multiSelectEnabled) return
+      const rows = this.tabulator.getRows('active')
+      let checked = 0
+      for (const row of rows) {
+        const data = row.getData() as Record<string, unknown>
+        const isChecked = this.isRowChecked(data)
+        if (isChecked) checked += 1
+        // Selected rows are marked whether or not the check boxes are shown
+        row.getElement().classList.toggle('multi-selected', isChecked)
+        const cell = (row as unknown as { getCell: (f: string) => { getElement: () => HTMLElement } | false }).getCell('__multi_select')
+        if (cell) {
+          const element = cell.getElement()
+          const html = this.checkboxHtml(isChecked)
+          if (element.innerHTML !== html) element.innerHTML = html
+        }
+      }
+      const header = document.querySelector(`#${this.id} .multi-select-header`)
+      if (header) {
+        const state = checked === 0 ? false : checked === rows.length ? true : 'some'
+        header.innerHTML = this.checkboxHtml(state)
+      }
+    },
+
+    // Row overview: a button per row that shows every column of that row
+    rowOverviewColumns(): ColumnDefinition[] {
+      if (!this.args.rowOverview) return []
+      return [{
+        title: '',
+        field: '__row_overview',
+        headerSort: false,
+        resizable: false,
+        width: 36,
+        minWidth: 36,
+        hozAlign: 'center',
+        download: false,
+        // Never folded away by the collapsed layout
+        responsive: 0,
+        headerTooltip: false,
+        tooltip: 'Show the whole row',
+        formatter: () => '<i class="mdi mdi-text-box-search-outline row-overview-button" aria-label="Show the whole row"></i>',
+        cellClick: (_event: UIEvent, cell: CellComponent) => {
+          this.openRowOverview(cell.getRow().getData() as Record<string, unknown>)
+        },
+      } as unknown as ColumnDefinition]
+    },
+
+    rowOverviewValue(col: Record<string, any>, value: unknown): string {
+      const placeholders = (col.formatterParams && col.formatterParams.placeholders) || {}
+      if (value !== null && value !== undefined && String(value) in placeholders) {
+        return String(placeholders[String(value)])
+      }
+      if (value === null || value === undefined || value === '') return '-'
+      if (typeof value === 'number') {
+        if (Number.isNaN(value)) return '-'
+        const precision = col.formatterParams && col.formatterParams.precision
+        if (typeof precision === 'number' && !Number.isInteger(value)) return value.toFixed(precision)
+        return Number.isInteger(value) ? String(value) : String(Math.round(value * 1e4) / 1e4)
+      }
+      if (typeof value === 'boolean') return value ? 'yes' : 'no'
+      if (Array.isArray(value)) return value.map((v) => (v === null ? '-' : String(v))).join(', ')
+      return String(value)
+    },
+
+    // Title of the overview: rowOverviewTitle with {field} replaced by the row's values
+    rowOverviewTitle(row: Record<string, unknown>): string {
+      const template = this.args.rowOverviewTitle
+      if (!template) return 'Row details'
+      const columns = (this.args.columnDefinitions || []) as Record<string, any>[]
+      return template.replace(/\{([^{}]+)\}/g, (_match: string, field: string) => {
+        const col = columns.find((c) => c.field === field) || {}
+        return this.rowOverviewValue(col, row[field])
+      })
+    },
+
+    openRowOverview(row: Record<string, unknown>): void {
+      if (!this.parentDocument) this.initializeTeleport()
+      if (!this.parentDocument || this.teleportBackdrop) return
+      const doc = this.parentDocument
+      const dark = this.streamlitDataStore.theme?.base === 'dark'
+      const colors = dark
+        ? { bg: '#262730', fg: '#fafafa', muted: '#a3a8b8', line: '#3d3f4b' }
+        : { bg: '#ffffff', fg: '#31333f', muted: '#6b6f80', line: '#e6e7eb' }
+
+      this.createTeleportBackdrop()
+      this.createTeleportContainer()
+      const container = this.teleportContainer as HTMLElement
+      container.style.background = colors.bg
+      container.style.color = colors.fg
+      container.style.width = '640px'
+
+      const header = doc.createElement('div')
+      header.style.cssText = `display: flex; justify-content: space-between; align-items: center;
+        padding: 14px 20px; border-bottom: 1px solid ${colors.line};`
+      const title = doc.createElement('span')
+      title.textContent = this.rowOverviewTitle(row)
+      title.style.cssText = 'font-size: 18px; font-weight: 600;'
+      const close = doc.createElement('button')
+      close.textContent = '×'
+      close.setAttribute('aria-label', 'Close')
+      close.style.cssText = `background: none; border: none; font-size: 24px; cursor: pointer;
+        color: ${colors.muted}; padding: 0 6px;`
+      header.append(title, close)
+
+      const body = doc.createElement('div')
+      body.style.cssText = 'overflow: auto; padding: 8px 20px 16px;'
+      const table = doc.createElement('table')
+      table.style.cssText = 'width: 100%; border-collapse: collapse; font-size: 14px;'
+      for (const col of (this.args.columnDefinitions || []) as Record<string, any>[]) {
+        if (!col.field) continue
+        const tr = doc.createElement('tr')
+        tr.style.borderBottom = `1px solid ${colors.line}`
+        const name = doc.createElement('th')
+        name.textContent = String(col.title || col.field)
+        name.style.cssText = `text-align: left; font-weight: 500; color: ${colors.muted};
+          padding: 6px 16px 6px 0; vertical-align: top; white-space: nowrap;`
+        const value = doc.createElement('td')
+        value.textContent = this.rowOverviewValue(col, row[col.field])
+        value.style.cssText = 'padding: 6px 0; word-break: break-word;'
+        tr.append(name, value)
+        table.appendChild(tr)
+      }
+      body.appendChild(table)
+      container.append(header, body)
+
+      // Close on the button, a click outside or Escape; each way removes the
+      // Escape listeners so they cannot close a later dialog. Escape is heard
+      // on the page and in this component's frame, which keeps the focus
+      // after the row button is clicked.
+      const docs = doc === document ? [doc] : [doc, document]
+      const unlisten = () => docs.forEach((d) => d.removeEventListener('keydown', onKey))
+      const closeOverview = () => {
+        unlisten()
+        this.closeTeleportDialog()
+      }
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') closeOverview()
+      }
+      close.addEventListener('click', closeOverview)
+      const backdrop = this.teleportBackdrop as HTMLElement | null
+      backdrop?.addEventListener('click', (event: MouseEvent) => {
+        if (event.target === backdrop) unlisten()
+      })
+      docs.forEach((d) => d.addEventListener('keydown', onKey))
     },
 
     // Teleport functionality for filter dialog
@@ -2964,7 +3248,10 @@ export default defineComponent({
 
 .table-toolbar-title {
   min-width: 0;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
 }
 
 .table-toolbar-title h4 {
@@ -3092,7 +3379,70 @@ export default defineComponent({
   margin-right: 8px;
 }
 
+.tabulator,
+.table-toolbar {
+  --ms-accent: #1e88e5;
+  --ms-accent-soft: rgba(30, 136, 229, 0.16);
+}
+.multi-select-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.45;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 0.12s, border-color 0.12s, opacity 0.12s, transform 0.12s;
+}
+.multi-select-box .mdi {
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  transform: scale(0);
+  transition: transform 0.12s;
+}
+.tabulator-cell:hover .multi-select-box,
+.multi-select-header:hover .multi-select-box {
+  opacity: 0.8;
+  border-color: var(--ms-accent);
+}
+.multi-select-box.checked,
+.multi-select-box.some {
+  opacity: 1;
+  background: var(--ms-accent);
+  border-color: var(--ms-accent);
+  box-shadow: 0 0 0 3px var(--ms-accent-soft);
+}
+.multi-select-box.checked .mdi,
+.multi-select-box.some .mdi {
+  transform: scale(1);
+}
+.tabulator-row.multi-selected {
+  box-shadow: inset 3px 0 0 var(--ms-accent);
+  background-image: linear-gradient(90deg, var(--ms-accent-soft), transparent 60%);
+}
+.multi-select-toggle {
+  border-radius: 8px !important;
+  transition: background-color 0.15s, color 0.15s;
+}
+.multi-select-toggle.active {
+  color: var(--ms-accent) !important;
+  background: var(--ms-accent-soft);
+}
+
 /* Dark mode pagination styling */
+.row-overview-button {
+  cursor: pointer;
+  font-size: 18px;
+  opacity: 0.7;
+}
+.row-overview-button:hover {
+  opacity: 1;
+}
+
 .table-dark .tabulator-footer {
   background-color: #1e1e1e;
   border-color: #444;

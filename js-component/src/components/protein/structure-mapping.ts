@@ -1,4 +1,5 @@
 import type { SequenceData } from '@/types/protein-sequence-data'
+import { ionSeries, isPrefixIon, isSuffixIon, toleranceDa, type ToleranceUnit } from './fragment-ions'
 
 // The structure set with ProteinStructureView.set_structure()
 export type StructureData = {
@@ -215,7 +216,8 @@ export function fragmentSites(
   entry: SequenceData,
   observedMasses: number[] | undefined,
   ionTypes: string[],
-  tolerancePpm: number
+  tolerance: number,
+  unit: ToleranceUnit = 'ppm'
 ): FragmentSites {
   const nTerminal = new Set<number>()
   const cTerminal = new Set<number>()
@@ -262,7 +264,7 @@ export function fragmentSites(
   const end = endReported < 0 ? entry.sequence.length - 1 : endReported
   const sorted = [...observedMasses].sort((x, y) => x - y)
   const hit = (mass: number): boolean => {
-    const tol = (mass * tolerancePpm) / 1e6
+    const tol = toleranceDa(mass, tolerance, unit)
     let lo = 0
     let hi = sorted.length
     while (lo < hi) {
@@ -272,15 +274,20 @@ export function fragmentSites(
     }
     return lo < sorted.length && sorted[lo] <= mass + tol
   }
-  ionTypes.forEach((ion) => {
-    const prefix = ion === 'a' || ion === 'b' || ion === 'c'
-    const suffix = ion === 'x' || ion === 'y' || ion === 'z'
+  ionTypes.forEach((name) => {
+    // Variants (a•, x•, y-1, z•) are offsets of their base series and are
+    // marked as it, as in the sequence view
+    const series = ionSeries(name)
+    if (series === undefined) return
+    const ion = series.base
+    const prefix = isPrefixIon(ion)
+    const suffix = isSuffixIon(ion)
     if (prefix && startReported < 0) return
     if (suffix && endReported < 0) return
     const masses = entry[`fragment_masses_${ion}` as keyof SequenceData] as number[][] | undefined
     if (!masses) return
     masses.forEach((candidates, theoIndex) => {
-      if (!candidates.some(hit)) return
+      if (!candidates.some((mass) => hit(mass + series.offset))) return
       if (prefix) {
         nTerminal.add(start + theoIndex)
         addIon(start + theoIndex, ion)

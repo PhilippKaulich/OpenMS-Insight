@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+from functools import lru_cache
 from typing import Any
 
 import polars as pl
@@ -34,6 +35,63 @@ SEQUENCE_COLUMNS: tuple[str, ...] = (
 )
 
 
+# Ion series the views match: the base series (whose masses the data carries)
+# and their radical / hydrogen-shifted variants, with accepted spellings
+ION_TYPES: tuple[str, ...] = ("a", "b", "c", "x", "y", "z")
+ION_VARIANTS: dict[str, str] = {
+    "a•": "a•",
+    "a+1": "a•",
+    "a.": "a•",
+    "x•": "x•",
+    "x+1": "x•",
+    "x.": "x•",
+    "y-1": "y-1",
+    "y−1": "y-1",
+    "z•": "z•",
+    "z+1": "z•",
+    "z.": "z•",
+    "z-dot": "z•",
+    "zp1": "z•",
+}
+# Fragmentation methods and the ion series they select (as in ProSight Lite)
+FRAGMENTATION_METHODS: dict[str, tuple[str, ...]] = {
+    "CID/HCD": ("b", "y"),
+    "ETD/ECD": ("c", "z•"),
+    "EThcD": ("b", "c", "y", "z•"),
+    "UVPD": ("a", "a•", "b", "c", "x", "x•", "y", "y-1", "z"),
+}
+_METHOD_ALIASES = {"cid/hcd", "cid", "hcd", "etd/ecd", "etd", "ecd", "ethcd", "uvpd"}
+
+
+def check_fragment_settings(settings: dict[str, Any] | None) -> None:
+    """Raise ValueError for a fragment setting the views cannot apply.
+
+    Checks the keys ``tolerance_unit`` ('ppm' or 'Da') and ``fragmentation``
+    (a key of ``FRAGMENTATION_METHODS``, or 'CID', 'HCD', 'ETD', 'ECD'; case
+    and spaces ignored). ``tolerance`` and ``ion_types`` are passed on as
+    before: the view ignores ion series it does not know (see ``ION_TYPES``
+    and ``ION_VARIANTS`` for the ones it draws).
+    """
+    if not isinstance(settings, dict):
+        return
+    unit = settings.get("tolerance_unit")
+    if unit is not None and (
+        not isinstance(unit, str) or unit.lower() not in ("ppm", "da")
+    ):
+        raise ValueError(
+            f"settings['tolerance_unit'] must be 'ppm' or 'Da', not {unit!r}"
+        )
+    method = settings.get("fragmentation")
+    if method is not None and (
+        not isinstance(method, str)
+        or method.replace(" ", "").lower() not in _METHOD_ALIASES
+    ):
+        raise ValueError(
+            f"Unknown fragmentation method {method!r}; "
+            f"use one of {list(FRAGMENTATION_METHODS)}"
+        )
+
+
 def _json_safe(value: Any) -> Any:
     """Replace NaN and infinities, which JSON cannot carry, with None."""
     if isinstance(value, float):
@@ -43,6 +101,59 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     return value
+
+
+def _pyopenms_text(value: Any) -> str:
+    """pyOpenMS returns some names as bytes (latin-1 for the "®" in TMT names)."""
+    if not isinstance(value, bytes):
+        return str(value)
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("latin-1")
+
+
+@lru_cache(maxsize=1)
+def _pyopenms_modifications() -> tuple:
+    try:
+        from pyopenms import ModificationsDB, ResidueModification
+    except ImportError as e:  # pragma: no cover - depends on the environment
+        raise ImportError(
+            "modification_library='pyopenms' needs pyopenms (pip install pyopenms)"
+        ) from e
+    term = ResidueModification.TermSpecificity
+    db = ModificationsDB()
+    entries: dict[str, dict[str, Any]] = {}
+    for i in range(db.getNumberOfModifications()):
+        mod = db.getModification(i)
+        full_id = _pyopenms_text(mod.getFullId())
+        if full_id in entries:
+            continue
+        specificity = mod.getTermSpecificity()
+        if specificity in (term.N_TERM, term.PROTEIN_N_TERM):
+            site = "N-term"
+        elif specificity in (term.C_TERM, term.PROTEIN_C_TERM):
+            site = "C-term"
+        else:
+            site = _pyopenms_text(mod.getOrigin())
+        entries[full_id] = {
+            "id": full_id,
+            "mass": float(mod.getDiffMonoMass()),
+            "site": site,
+        }
+    return tuple(sorted(entries.values(), key=lambda e: (e["id"].lower(), e["site"])))
+
+
+def pyopenms_modification_library() -> list[dict[str, Any]]:
+    """Every modification in pyOpenMS ``ModificationsDB`` (Unimod and more), as
+    the dicts ``modification_library`` takes: ``id`` (the full id, e.g.
+    ``'Carbamidomethyl (C)'``, which ``AASequence.fromString`` and
+    ``ModificationsDB.getModification`` accept), ``mass`` (monoisotopic mass
+    shift) and ``site`` (a residue, ``'N-term'`` or ``'C-term'``).
+
+    Raises ImportError without pyopenms.
+    """
+    return [dict(e) for e in _pyopenms_modifications()]
 
 
 @register_component("protein_sequence_view")
@@ -109,9 +220,13 @@ class ProteinSequenceView(BaseComponent):
         sequence: dict[str, Any] | None = None,
         mass_column: str | None = "masses",
         precursor_mass_column: str | None = "precursor_mass",
+        fragmentation_column: str | None = None,
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
+        modification_library: list[dict[str, Any]] | str | None = None,
+        modifications_identifier: str | None = None,
+        modifications: list[str] | None = None,
         settings: dict[str, Any] | None = None,
         title: str | None = "Sequence View",
         annotation_title: str = "Fragment annotation",
@@ -143,6 +258,13 @@ class ProteinSequenceView(BaseComponent):
                 None: no spectrum (fragments only from annotated_fragments).
             precursor_mass_column: Column with the precursor mass, shown against
                 the theoretical mass when no observed mass is given.
+            fragmentation_column: Column with the fragmentation method of the
+                spectrum (a ``fragmentation`` value of ``settings``, e.g.
+                'ETD' or 'HCD'; None or unknown keeps the current ion series).
+                When the selected spectrum's method changes, the view selects
+                that method's ion series and shows the method in the mass
+                summary; not with annotated fragments, which were annotated
+                for the search's ion types.
             mass_identifier: Identifier holding the selected mass, as an index
                 into the masses of the spectrum (e.g. a mass table's selection).
                 Selecting a fragment selects its mass and vice versa.
@@ -151,8 +273,26 @@ class ProteinSequenceView(BaseComponent):
             sequence_identifier: Identifier the "change sequence" dialog writes a
                 new sequence to. None hides the button. The app reads it and
                 rebuilds the view for the new sequence.
-            settings: Initial fragment settings: {'tolerance': ppm,
-                'ion_types': ['b', 'y', ...]}.
+            modification_library: Fixed modifications offered in the "change
+                sequence" dialog, as dicts with ``id`` (e.g.
+                ``'Carbamidomethyl (C)'``) and ``mass`` (the mass shift); a
+                ``site`` key is shown when given. ``'pyopenms'`` offers every
+                modification in pyOpenMS ``ModificationsDB`` (see
+                ``pyopenms_modification_library``; needs pyopenms). None shows
+                no picker.
+            modifications_identifier: Identifier the dialog writes the ids of
+                the picked modifications to (a list), before it writes the
+                sequence. Needs ``modification_library``.
+            modifications: Ids preselected in the picker, e.g. the fixed
+                modifications the current sequence carries.
+            settings: Initial fragment settings, all keys optional:
+                ``tolerance`` (default 10), ``tolerance_unit`` ('ppm' default,
+                or 'Da'), ``ion_types`` (a b c x y z and the variants a• x•
+                y-1 z•, also written a+1 x+1 z+1; default b and y) and
+                ``fragmentation`` ('CID/HCD', 'ETD/ECD', 'EThcD' or 'UVPD',
+                selecting that method's ion series when ``ion_types`` is not
+                given). The user can change all of them in the view. See
+                ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
             svg_filename: File name for the SVG download.
@@ -173,9 +313,15 @@ class ProteinSequenceView(BaseComponent):
         self._sequence = _json_safe(sequence) if sequence is not None else None
         self._mass_column = mass_column
         self._precursor_mass_column = precursor_mass_column
+        self._fragmentation_column = fragmentation_column
         self._mass_identifier = mass_identifier
         self._aa_identifier = aa_identifier
         self._sequence_identifier = sequence_identifier
+        # Per render, not cached: the picker of the "change sequence" dialog
+        self.set_modification_picker(
+            modification_library, modifications_identifier, modifications
+        )
+        check_fragment_settings(settings)
         self._settings = settings
         self._title = title
         self._annotation_title = annotation_title
@@ -200,6 +346,7 @@ class ProteinSequenceView(BaseComponent):
             sequence=self._sequence,
             mass_column=mass_column,
             precursor_mass_column=precursor_mass_column,
+            fragmentation_column=fragmentation_column,
             mass_identifier=mass_identifier,
             aa_identifier=aa_identifier,
             sequence_identifier=sequence_identifier,
@@ -227,6 +374,8 @@ class ProteinSequenceView(BaseComponent):
             "annotation_title": self._annotation_title,
             "svg_filename": self._svg_filename,
         }
+        if self._fragmentation_column is not None:
+            config["fragmentation_column"] = self._fragmentation_column
         if self._accent_color is not None:
             config["accent_color"] = self._accent_color
         if self._fragment_identifier is not None:
@@ -241,6 +390,7 @@ class ProteinSequenceView(BaseComponent):
         self._sequence = config.get("sequence")
         self._mass_column = config.get("mass_column")
         self._precursor_mass_column = config.get("precursor_mass_column")
+        self._fragmentation_column = config.get("fragmentation_column")
         self._mass_identifier = config.get("mass_identifier")
         self._aa_identifier = config.get("aa_identifier")
         self._sequence_identifier = config.get("sequence_identifier")
@@ -256,7 +406,13 @@ class ProteinSequenceView(BaseComponent):
 
     def _spectrum_columns(self) -> list[str]:
         return [
-            c for c in (self._mass_column, self._precursor_mass_column) if c is not None
+            c
+            for c in (
+                self._mass_column,
+                self._precursor_mass_column,
+                self._fragmentation_column,
+            )
+            if c is not None
         ]
 
     def _validate_mappings(self) -> None:
@@ -339,6 +495,8 @@ class ProteinSequenceView(BaseComponent):
                         else None,
                     }
                 )
+                if self._fragmentation_column is not None:
+                    spectrum_data["fragmentation"] = row.get(self._fragmentation_column)
         payload = {"sequenceData": sequence_data, "spectrumData": spectrum_data}
         data_hash = hashlib.md5(
             json.dumps(payload, sort_keys=True, default=str).encode()
@@ -364,6 +522,39 @@ class ProteinSequenceView(BaseComponent):
             self._tag = {"startPos": int(start), "endPos": int(end)}
         return self
 
+    def set_modification_picker(
+        self,
+        library: list[dict[str, Any]] | str | None,
+        identifier: str | None = None,
+        selected: list[str] | None = None,
+    ) -> "ProteinSequenceView":
+        """Offer fixed modifications in the "change sequence" dialog.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``modification_library``, ``modifications_identifier`` and
+        ``modifications`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        if isinstance(library, str):
+            if library != "pyopenms":
+                raise ValueError(
+                    f"modification_library must be a list, 'pyopenms' or None, not {library!r}"
+                )
+            library = _pyopenms_modifications()
+        self._modification_library = (
+            [
+                {"id": str(m["id"]), "mass": float(m["mass"]), "site": m.get("site")}
+                for m in library
+            ]
+            if library is not None
+            else None
+        )
+        self._modifications_identifier = identifier
+        self._modifications = list(selected) if selected is not None else []
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -372,6 +563,9 @@ class ProteinSequenceView(BaseComponent):
             "massIdentifier": self._mass_identifier,
             "aaIdentifier": self._aa_identifier,
             "sequenceIdentifier": self._sequence_identifier,
+            "modificationLibrary": self._modification_library,
+            "modificationsIdentifier": self._modifications_identifier,
+            "modifications": self._modifications,
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,

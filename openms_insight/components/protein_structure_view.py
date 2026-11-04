@@ -91,7 +91,9 @@ class ProteinStructureView(ProteinSequenceView):
                 ``ProteinSequenceView`` (its ``fragment_identifier``): its
                 cleavage sites are marked, the rest of the protein faded and
                 the view centred on it.
-            settings: Fragment settings: {'tolerance': ppm, 'ion_types': [...]}.
+            settings: Fragment settings as for ``ProteinSequenceView``
+                (``tolerance``, ``tolerance_unit``, ``ion_types``,
+                ``fragmentation``).
             title: Title above the view (None: no title).
             empty_message: Shown while no entry is selected.
             viewer_height: Height of the 3D viewer in pixels.

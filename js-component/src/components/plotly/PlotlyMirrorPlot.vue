@@ -5,7 +5,7 @@
 <script lang="ts">
 import { defineComponent, type PropType } from 'vue'
 import Plotly from 'plotly.js-dist-min'
-import { type Theme } from 'streamlit-component-lib'
+import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { MirrorPlotComponentArgs } from '@/types/component'
@@ -429,7 +429,12 @@ export default defineComponent({
       ]
 
       const tickValues = [-yMax, -yMax / 2, 0, yMax / 2, yMax]
-      const tickText = tickValues.map((v) => Math.abs(v).toFixed(0))
+      // Whole numbers for intensities; relative abundances (below 100) keep
+      // up to three significant digits instead of rounding 0.5 to "1"
+      const tickText = tickValues.map((v) => {
+        const value = Math.abs(v)
+        return value >= 100 ? value.toFixed(0) : String(Number(value.toPrecision(3)))
+      })
 
       const titleAnnotations: Partial<Plotly.Annotations>[] = [
         ...(this.args.titleTop
@@ -533,6 +538,9 @@ export default defineComponent({
         ],
       })
       this.isInitialized = true
+      // The frame follows the plot's height. Without this a mirror plot first
+      // drawn in a zero-height frame (e.g. below the fold) stayed invisible.
+      this.$nextTick(() => Streamlit.setFrameHeight())
 
       // Wire click handler for interactivity
       const plotEl = element as Plotly.PlotlyHTMLElement
@@ -723,6 +731,5 @@ export default defineComponent({
 <style scoped>
 .plot-container {
   width: 100%;
-  height: 100%;
 }
 </style>

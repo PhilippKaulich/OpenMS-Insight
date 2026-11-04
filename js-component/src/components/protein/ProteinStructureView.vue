@@ -86,6 +86,7 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { ProteinStructureViewComponentArgs } from '@/types/component'
 import type { FragmentSelection, MatchedSpectrum, SequenceData } from '@/types/protein-sequence-data'
+import { settingsIons, toleranceUnit } from './fragment-ions'
 import {
   bestChainMapping,
   fragmentSites,
@@ -201,8 +202,9 @@ export default defineComponent({
       return fragmentSites(
         this.entry,
         this.observedMasses,
-        settings?.ion_types ?? ['b', 'y'],
-        settings?.tolerance ?? 10
+        settingsIons(settings).map((series) => series.name),
+        settings?.tolerance ?? 10,
+        toleranceUnit(settings?.tolerance_unit)
       )
     },
     sequenceRange(): [number, number] {

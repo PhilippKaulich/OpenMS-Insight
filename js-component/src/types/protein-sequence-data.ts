@@ -78,7 +78,13 @@ export type FragmentSelection = {
 
 export type FragmentSettings = {
   tolerance : number
-  ion_types : string[]
+  // 'ppm' (default) or 'Da'
+  tolerance_unit? : string | null
+  // Ion series: a b c x y z and the variants a• x• y-1 z• (also a+1, x+1, z+1)
+  ion_types? : string[] | null
+  // Fragmentation method choosing the ion series when ion_types is not given:
+  // 'CID/HCD' ('CID', 'HCD'), 'ETD/ECD' ('ETD', 'ECD'), 'EThcD' or 'UVPD'
+  fragmentation? : string | null
 }
 
 export type SequenceDataDictionary = Record<number, SequenceData>
@@ -88,6 +94,8 @@ export type SequenceDataDictionary = Record<number, SequenceData>
 export type MatchedSpectrum = {
   masses: number[]
   precursorMass?: number | null
+  // Fragmentation method the spectrum was acquired with (see FragmentSettings)
+  fragmentation?: string | null
 }
 
 // Sequence tag marked on the sequence (0-based residues, inclusive)

@@ -48,26 +48,29 @@ export default defineComponent({
       return (this.streamlitDataStore.allDataForDrawing?.plotData as Record<string, unknown[]>) || {}
     },
     /** Points grouped by series, in series_names order then order of appearance. */
-    series(): Array<{ key: string; name: string; x: number[]; y: number[]; rows: number[] }> {
+    series(): Array<{ key: string; name: string; x: number[]; y: number[]; rows: number[]; text: string[] }> {
+      const hoverColumn = this.args.hoverColumn
+      const hover = hoverColumn ? (this.columns[hoverColumn] as unknown[]) || [] : []
       const xs = (this.columns[this.args.xColumn] as number[]) || []
       const ys = (this.columns[this.args.yColumn] as number[]) || []
       const seriesColumn = this.args.seriesColumn
       const seriesValues = seriesColumn ? (this.columns[seriesColumn] as unknown[]) || [] : []
       const names = new Map<string, string>((this.args.seriesNames || []).map(([k, v]) => [String(k), v]))
 
-      const groups = new Map<string, { key: string; name: string; x: number[]; y: number[]; rows: number[] }>()
+      const groups = new Map<string, { key: string; name: string; x: number[]; y: number[]; rows: number[]; text: string[] }>()
       for (const key of names.keys()) {
-        groups.set(key, { key, name: names.get(key) as string, x: [], y: [], rows: [] })
+        groups.set(key, { key, name: names.get(key) as string, x: [], y: [], rows: [], text: [] })
       }
       for (let i = 0; i < xs.length; i++) {
         const key = seriesColumn ? String(seriesValues[i]) : ''
         if (!groups.has(key)) {
-          groups.set(key, { key, name: names.get(key) ?? key, x: [], y: [], rows: [] })
+          groups.set(key, { key, name: names.get(key) ?? key, x: [], y: [], rows: [], text: [] })
         }
         const group = groups.get(key)!
         group.x.push(xs[i])
         group.y.push(ys[i])
         group.rows.push(i)
+        if (hoverColumn) group.text.push(String(hover[i] ?? ''))
       }
       return [...groups.values()]
     },
@@ -80,6 +83,10 @@ export default defineComponent({
           mode: this.args.mode || 'lines+markers',
           type: 'scatter',
           name: s.name,
+        }
+        if (this.args.hoverColumn) {
+          trace.text = s.text
+          trace.hovertemplate = '%{text}<br>%{x}, %{y}<extra>%{fullData.name}</extra>'
         }
         const color = colors[s.key]
         if (color) {
@@ -127,7 +134,7 @@ export default defineComponent({
         yaxis: {
           title: this.args.yLabel ? { text: this.args.yLabel } : undefined,
           showgrid: true,
-          rangemode: 'nonnegative',
+          rangemode: this.args.yRangeMode || 'nonnegative',
           fixedrange: !!this.args.fixedYRange,
         },
         paper_bgcolor: this.theme?.backgroundColor || 'white',

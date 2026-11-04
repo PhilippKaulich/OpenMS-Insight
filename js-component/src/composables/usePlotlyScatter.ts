@@ -30,6 +30,8 @@ export interface PlotlyScatterOptions {
   scrollZoom?: ComputedRef<boolean | undefined>
   /** Width threshold for "narrow" mode (default 600) */
   narrowThreshold?: number
+  /** Selections a click sets besides `interactivity` (null clears one) */
+  onSelect?: ComputedRef<Record<string, unknown> | undefined>
 }
 
 export interface PlotlyScatterReturn {
@@ -56,8 +58,9 @@ export interface PlotlyScatterReturn {
 }
 
 export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterReturn {
-  const { id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600 } =
-    options
+  const {
+    id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600, onSelect,
+  } = options
 
   const streamlitDataStore = useStreamlitDataStore()
   const selectionStore = useSelectionStore()
@@ -165,6 +168,21 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
         const pointData = data[hasRowIndex ? customIndex : point.pointIndex]
 
         if (pointData) {
+          // Side effects first, as in Table: only when the click changes the
+          // selection, and never for an identifier the click itself sets
+          const sideEffects = onSelect?.value || {}
+          const selectionChanges = Object.entries(interactivityMap).some(
+            ([identifier, column]) =>
+              pointData[column] !== undefined &&
+              selectionStore.$state[identifier] !== pointData[column]
+          )
+          if (selectionChanges) {
+            for (const [identifier, value] of Object.entries(sideEffects)) {
+              if (!(identifier in interactivityMap) && selectionStore.$state[identifier] !== value) {
+                selectionStore.updateSelection(identifier, value)
+              }
+            }
+          }
           // Update selection store for each interactivity mapping
           for (const [identifier, column] of Object.entries(interactivityMap)) {
             const value = pointData[column]
