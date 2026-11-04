@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import polars as pl
-from scipy.stats import fisher_exact
+from scipy.stats import fisher_exact, hypergeom
 
 try:
     import mygene
@@ -60,6 +60,116 @@ def extract_go_terms(go_data, go_type):
     return list({t.get("term") for t in terms if "term" in t})
 
 
+_TABLE_COLUMNS = [
+    "GO_Term",
+    "Count",
+    "Background",
+    "GeneRatio",
+    "BgRatio",
+    "FoldEnrichment",
+    "p_value",
+    "-log10(p)",
+    "p_adj",
+    "Proteins",
+]
+_INDEX_SCHEMA = {"accession": pl.Utf8, "category": pl.Utf8, "term": pl.Utf8}
+
+
+def go_term_index(annotations, proteins=None):
+    """The GO terms of proteins as a long table, for repeated enrichment tests.
+
+    Everything an enrichment test needs that does not depend on the selection
+    is in this table, so an app can build it once (e.g. after its workflow
+    ran), store it (it is a plain Polars frame, e.g. as parquet) and test any
+    number of selections with `go_enrichment_from_index`.
+
+    Args:
+        annotations: DataFrame from `fetch_go_annotations` ("query" and the
+            "{category}_terms" lists).
+        proteins: Protein IDs the index is for (FASTA-style or bare;
+            default: every protein in `annotations`). Those without a GO
+            term are kept, so the index lists every protein it was built for.
+
+    Returns:
+        Polars DataFrame with "accession" (clean accession), "category" ("BP",
+        "CC" or "MF") and "term", one row per protein and term; a protein
+        without any term has one row with null category and term.
+    """
+    if proteins is None:
+        wanted = {str(a) for a in annotations["query"]} if len(annotations) else set()
+    else:
+        wanted = {get_clean_uniprot(a) for a in proteins if a}
+    rows = {"accession": [], "category": [], "term": []}
+    seen = set()
+    if len(annotations):
+        for category in GO_CATEGORIES:
+            column = f"{category}_terms"
+            if column not in annotations.columns:
+                continue
+            for accession, terms in zip(
+                annotations["query"].astype(str), annotations[column], strict=True
+            ):
+                if accession not in wanted or terms is None:
+                    continue
+                for term in terms:
+                    rows["accession"].append(accession)
+                    rows["category"].append(category)
+                    rows["term"].append(str(term))
+                    seen.add(accession)
+    for accession in sorted(wanted - seen):
+        rows["accession"].append(accession)
+        rows["category"].append(None)
+        rows["term"].append(None)
+    return pl.DataFrame(rows, schema=_INDEX_SCHEMA).unique(maintain_order=True)
+
+
+def _term_table(terms, fg, n_fg, n_bg, adjust=True):
+    """Fisher's exact test (one-sided) of every term of `terms` (index rows
+    of one category, restricted to the background) that a protein of `fg`
+    has. Vectorised: P(X >= a) of the hypergeometric distribution, computed
+    once per distinct (count, background count) pair."""
+    columns = [c for c in _TABLE_COLUMNS if adjust or c != "p_adj"]
+    picked = terms.filter(pl.col("accession").is_in(list(fg)))
+    if not picked.height:
+        return pd.DataFrame(columns=columns)
+    counts = (
+        picked.group_by("term")
+        .agg(
+            pl.col("accession").n_unique().alias("Count"),
+            pl.col("accession").unique().sort().str.join(";").alias("Proteins"),
+        )
+        .join(
+            terms.group_by("term").agg(
+                pl.col("accession").n_unique().alias("Background")
+            ),
+            on="term",
+        )
+        .sort("term")
+    )
+    a = counts["Count"].to_numpy().astype(np.int64)
+    k = counts["Background"].to_numpy().astype(np.int64)
+    pairs, inverse = np.unique(np.stack([a, k]), axis=1, return_inverse=True)
+    p = np.clip(hypergeom.sf(pairs[0] - 1, n_bg, n_fg, pairs[1]), 0.0, 1.0)[
+        np.ravel(inverse)
+    ]
+    df = pd.DataFrame(
+        {
+            "GO_Term": counts["term"].to_list(),
+            "Count": a,
+            "Background": k,
+            "GeneRatio": [f"{x}/{n_fg}" for x in a],
+            "BgRatio": [f"{x}/{n_bg}" for x in k],
+            "FoldEnrichment": (a / n_fg) / (k / n_bg),
+            "p_value": p,
+            "-log10(p)": -np.log10(np.clip(p, 1e-300, None)),
+            "Proteins": counts["Proteins"].to_list(),
+        }
+    )
+    if adjust:
+        df["p_adj"] = benjamini_hochberg(p)
+    return df.sort_values(["p_value", "GO_Term"]).reset_index(drop=True)[columns]
+
+
 def go_term_table(res_go, fg_set, bg_set, go_type, adjust=True):
     """Fisher's exact test of every GO term of one category, without a plot.
 
@@ -80,63 +190,54 @@ def go_term_table(res_go, fg_set, bg_set, go_type, adjust=True):
         foreground proteins with the term, ";"-separated), sorted by p-value.
         Empty when no foreground protein has a term of the category.
     """
-    columns = [
-        "GO_Term",
-        "Count",
-        "Background",
-        "GeneRatio",
-        "BgRatio",
-        "FoldEnrichment",
-        "p_value",
-        "-log10(p)",
-        "Proteins",
-    ]
-    if adjust:
-        columns.insert(columns.index("Proteins"), "p_adj")
-    go2fg = defaultdict(set)
-    go2bg = defaultdict(set)
-    fg_set = set(map(str, fg_set))
-    bg_set = set(map(str, bg_set)) | fg_set
+    fg = set(map(str, fg_set))
+    bg = set(map(str, bg_set)) | fg
+    index = go_term_index(res_go[["query", f"{go_type}_terms"]], proteins=None)
+    terms = index.filter(
+        (pl.col("category") == go_type) & pl.col("accession").is_in(list(bg))
+    )
+    return _term_table(terms, fg, len(fg), len(bg), adjust=adjust)
 
-    for _, row in res_go.iterrows():
-        uid = str(row["query"])
-        if uid not in bg_set:
-            continue
-        for term in row[f"{go_type}_terms"]:
-            go2bg[term].add(uid)
-            if uid in fg_set:
-                go2fg[term].add(uid)
 
-    records = []
-    n_fg = len(fg_set)
-    n_bg = len(bg_set)
-    for term, fg_genes in go2fg.items():
-        a = len(fg_genes)
-        if a == 0:
-            continue
-        b = n_fg - a
-        c = len(go2bg[term]) - a
-        d = n_bg - (a + b + c)
-        _, p = fisher_exact([[a, b], [c, d]], alternative="greater")
-        records.append(
-            {
-                "GO_Term": term,
-                "Count": a,
-                "Background": len(go2bg[term]),
-                "GeneRatio": f"{a}/{n_fg}",
-                "BgRatio": f"{len(go2bg[term])}/{n_bg}",
-                "FoldEnrichment": (a / n_fg) / (len(go2bg[term]) / n_bg),
-                "p_value": p,
-                "Proteins": ";".join(sorted(fg_genes)),
-            }
-        )
-    if not records:
-        return pd.DataFrame(columns=columns)
-    df = pd.DataFrame(records)
-    df["-log10(p)"] = -np.log10(df["p_value"].clip(lower=1e-300))
-    if adjust:
-        df["p_adj"] = benjamini_hochberg(df["p_value"].to_numpy())
-    return df.sort_values(["p_value", "GO_Term"]).reset_index(drop=True)[columns]
+def go_enrichment_from_index(index, foreground, background, categories=GO_CATEGORIES):
+    """GO term enrichment of a selected set of proteins, from a term index.
+
+    The same result as `go_enrichment`, but the per-protein terms come from
+    `go_term_index`, built once, so a new selection only counts its proteins
+    and runs the tests.
+
+    Args:
+        index: Frame from `go_term_index` covering at least the background
+            and the foreground.
+        foreground: Protein IDs of the selection (FASTA-style or bare).
+        background: Protein IDs the selection was made from.
+        categories: GO categories to test.
+
+    Returns:
+        Dict with "fg_count" and "bg_count" (proteins with any GO annotation
+        in either set), "fg_total"/"bg_total" (all proteins given) and
+        "categories" (category -> DataFrame of `go_term_table`).
+    """
+    fg = {get_clean_uniprot(a) for a in foreground if a}
+    bg = {get_clean_uniprot(a) for a in background if a} | fg
+    terms = index.filter(
+        pl.col("accession").is_in(list(bg)) & pl.col("category").is_in(list(categories))
+    )
+    annotated = set(terms["accession"].unique().to_list())
+    fg_annotated = fg & annotated
+    n_fg, n_bg = len(fg_annotated), len(annotated)
+    return {
+        "fg_total": len(fg),
+        "bg_total": len(bg),
+        "fg_count": n_fg,
+        "bg_count": n_bg,
+        "categories": {
+            t: _term_table(
+                terms.filter(pl.col("category") == t), fg_annotated, n_fg, n_bg
+            )
+            for t in categories
+        },
+    }
 
 
 def benjamini_hochberg(pvalues):
@@ -200,7 +301,8 @@ def go_enrichment(annotations, foreground, background, categories=GO_CATEGORIES)
 
     Unlike `calculate_go_enrichment`, the foreground is given directly (e.g.
     the proteins a user selected in a plot or table) and the annotations come
-    from the caller, who can cache them.
+    from the caller, who can cache them. To test many selections of the same
+    proteins, build `go_term_index` once and call `go_enrichment_from_index`.
 
     Args:
         annotations: DataFrame from `fetch_go_annotations` covering at least
@@ -214,25 +316,10 @@ def go_enrichment(annotations, foreground, background, categories=GO_CATEGORIES)
         in either set), "fg_total"/"bg_total" (all proteins given) and
         "categories" (category -> DataFrame of `go_term_table`).
     """
-    fg = {get_clean_uniprot(a) for a in foreground if a}
-    bg = {get_clean_uniprot(a) for a in background if a} | fg
-    annotated = set(annotations["query"].astype(str)) if len(annotations) else set()
-    has_terms = set()
-    for _, row in annotations.iterrows():
-        if any(len(row[f"{t}_terms"]) for t in categories):
-            has_terms.add(str(row["query"]))
-    fg_annotated = fg & annotated & has_terms
-    bg_annotated = bg & annotated & has_terms
-    return {
-        "fg_total": len(fg),
-        "bg_total": len(bg),
-        "fg_count": len(fg_annotated),
-        "bg_count": len(bg_annotated),
-        "categories": {
-            t: go_term_table(annotations, fg_annotated, bg_annotated, t)
-            for t in categories
-        },
-    }
+    proteins = list(foreground) + list(background)
+    return go_enrichment_from_index(
+        go_term_index(annotations, proteins), foreground, background, categories
+    )
 
 
 def run_go_category(res_go, fg_set, bg_set, go_type):

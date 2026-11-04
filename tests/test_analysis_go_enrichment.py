@@ -10,6 +10,8 @@ from openms_insight.analysis.enrichment import (  # noqa: E402
     benjamini_hochberg,
     fetch_go_annotations,
     go_enrichment,
+    go_enrichment_from_index,
+    go_term_index,
     go_term_table,
 )
 
@@ -74,3 +76,41 @@ def test_fetch_merges_genes_and_skips_not_found():
     assert result.loc[0, "BP_terms"] == ["a", "b"]
     assert result.loc[0, "MF_terms"] == ["m"]
     assert fetch_go_annotations([], mygene_client=FakeClient()).empty
+
+
+def test_term_index_lists_every_protein(annotations):
+    index = go_term_index(annotations, ["sp|A|NAME_A", "F", "G"])
+    assert sorted(index["accession"].unique().to_list()) == ["A", "F", "G"]
+    # F (no terms) and G (not annotated) keep one row without a term
+    empty = index.filter(index["term"].is_null())
+    assert sorted(empty["accession"].to_list()) == ["F", "G"]
+    assert sorted(
+        index.filter(index["accession"] == "A")[["category", "term"]].rows()
+    ) == [("BP", "x"), ("BP", "y"), ("MF", "m")]
+
+
+@pytest.mark.parametrize(
+    "foreground",
+    [["A"], ["sp|A|NAME_A", "B", "C"], ["D", "E", "F"], list("ABCDEFG")],
+)
+def test_from_index_matches_direct_enrichment(annotations, foreground):
+    background = list("ABCDEFG")
+    index = go_term_index(annotations, background)
+    got = go_enrichment_from_index(index, foreground, background)
+    want = go_enrichment(annotations, foreground, background)
+    for key in ("fg_total", "bg_total", "fg_count", "bg_count"):
+        assert got[key] == want[key]
+    for category, table in want["categories"].items():
+        pd.testing.assert_frame_equal(
+            got["categories"][category], table, check_dtype=False
+        )
+
+
+def test_p_values_are_fishers_exact_test(annotations):
+    from scipy.stats import fisher_exact
+
+    table = go_term_table(annotations, {"A", "D"}, set("ABCDE"), "BP")
+    # y: both selected proteins, 2 of 5 in the background
+    row = table.set_index("GO_Term").loc["y"]
+    _, p = fisher_exact([[2, 0], [0, 3]], alternative="greater")
+    assert row["p_value"] == pytest.approx(p)

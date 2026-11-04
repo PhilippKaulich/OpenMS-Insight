@@ -1014,6 +1014,21 @@ result["categories"]["BP"]  # GO_Term, Count, Background, GeneRatio, BgRatio,
 # FoldEnrichment, p_value, -log10(p), p_adj, Proteins
 ```
 
+When the user tests many selections of the same proteins (a lasso on a plot,
+check boxes in a table), build the term index once and test each selection from
+it. The index is a Polars frame (accession, category, term) that an app can
+store, for example as parquet next to its results, so a selection only counts its
+proteins and runs the tests:
+
+```python
+from openms_insight.analysis.enrichment import go_enrichment_from_index, go_term_index
+
+index = go_term_index(annotations, background)  # once, e.g. after the workflow
+result = go_enrichment_from_index(index, foreground=picked, background=background)
+```
+
+`go_enrichment` returns the same result; it builds the index itself.
+
 These functions need the `analysis` extra:
 
 ```bash
