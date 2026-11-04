@@ -1,6 +1,7 @@
 <template>
-  <!-- At least as wide as the residue grid: a narrow frame scrolls sideways
-       instead of squeezing the header and the fragment table -->
+  <!-- The header wraps whole label and value pairs, the residue grid puts
+       fewer residues in a row, and the fragment table scrolls inside itself:
+       the view fits a narrow frame instead of scrolling it sideways -->
   <!-- The Change sequence dialog is drawn inside this frame, which fits the
        view: while it is open, the view is at least as tall as the dialog and
        the fixed-modification list below its field -->
@@ -16,22 +17,20 @@
   <v-sheet class="pa-4 rounded-lg" style="max-width: 97%" :theme="theme?.base ?? 'light'" border>
     <div class="sequence-and-scale">
     <div :id="sequencePartId" class="sequence-part">
-      <div class="d-flex justify-space-evenly">
-        <template v-if="massData.length != 0">
-          <h3>{{massTitle}}</h3>
-          <v-divider :vertical="true"></v-divider>
-          <template v-for="(item, p_index) in massData" :key="p_index">
-            {{ item }}
-            <v-divider :vertical="true"></v-divider>
-          </template>
-        </template>
+      <!-- Label and value pairs wrap as whole pairs, never inside one -->
+      <div v-if="massData.length != 0" class="summary-line">
+        <h3 class="summary-title">{{ massTitle }}</h3>
+        <span v-for="(item, p_index) in massData" :key="p_index" class="summary-pair">
+          <span class="summary-label">{{ item.label }}</span>
+          <span class="summary-value">{{ item.value }}</span>
+        </span>
       </div>
-      <div v-if="annotationSummaryItems.length > 0" class="d-flex flex-wrap justify-space-evenly text-body-2 mt-1">
-        <span class="font-weight-bold">{{ args.annotationTitle ?? 'Fragment annotation' }}</span>
-        <template v-for="(item, s_index) in annotationSummaryItems" :key="`s${s_index}`">
-          <v-divider :vertical="true"></v-divider>
-          <span>{{ item }}</span>
-        </template>
+      <div v-if="annotationSummaryItems.length > 0" class="summary-line summary-line-secondary text-body-2 mt-1">
+        <span class="summary-title font-weight-bold">{{ args.annotationTitle ?? 'Fragment annotation' }}</span>
+        <span v-for="(item, s_index) in annotationSummaryItems" :key="`s${s_index}`" class="summary-pair">
+          <span class="summary-label">{{ item.label }}</span>
+          <span class="summary-value">{{ item.value }}</span>
+        </span>
       </div>
       <div class="d-flex justify-end px-4 mb-4">
         <div>
@@ -79,6 +78,9 @@
               <v-list>
                 <v-list-item>
                   <v-list-item-title># amino acids per row</v-list-item-title>
+                  <v-list-item-subtitle v-if="perRow < rowWidth">
+                    {{ perRow }} fit at this width
+                  </v-list-item-subtitle>
                   <v-slider
                     v-model="rowWidth"
                     :ticks="tickLabels"
@@ -229,11 +231,11 @@
           </v-row>
         </v-card>
       </div>
-      <div class="pb-4 px-2" :class="gridClasses" style="width: 100%; max-width: 100%">
+      <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
           <div
-            v-if="(showTruncations && (aa_index !== 0) && (aa_index % rowWidth === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % rowWidth === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
-            class="d-flex justify-center align-center"
+            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            class="row-number row-number-start"
           >
           {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
           </div>
@@ -255,8 +257,8 @@
             @selected="aminoAcidSelected"
           />
           <div
-            v-if="(showTruncations && (aa_index % rowWidth === rowWidth - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % rowWidth === rowWidth - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
-            class="d-flex justify-center align-center"
+            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            class="row-number row-number-end"
           >
             {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
           </div>
@@ -288,7 +290,7 @@
       <div class="scale-text">1x</div>
     </div>
   </div>
-    <div>
+    <div class="fit-width">
       <template v-if="(fragmentTableTitle !== '') && showFragments">
         <FragmentTable
           :key="usesAnnotator ? 'annotator' : 'matched'"
@@ -436,6 +438,15 @@ import {
 // the fixed-modification picker with its open list, and the buttons
 const SEQUENCE_DIALOG_HEIGHT = 640
 
+// One label and value of the summary lines above the sequence
+type SummaryItem = { label: string; value: string }
+
+// Residues per row the view falls back to, in steps of 5, when the chosen
+// number does not fit: a residue cell stays at least this many font sizes wide
+const MIN_CELL_FONT_SIZES = 2
+const MIN_CELL_PX = 20
+const MIN_ROW_WIDTH = 10
+
 const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => unknown }) => {
   const value = cell.getValue()
   if (value === null || value === undefined) return ''
@@ -492,7 +503,9 @@ export default defineComponent({
     return {
       rowWidth: 35 as number,
       fontSize: 12 as number,
-      massData: [] as string[],
+      massData: [] as SummaryItem[],
+      gridWidth: 0 as number,
+      gridResizeObserver: undefined as ResizeObserver | undefined,
       massTitle: "" as string,
       ionTypes: [
         { text: 'a', selected: false },
@@ -731,17 +744,17 @@ export default defineComponent({
     annotationSummary(): AnnotationSummary | undefined {
       return this.entry?.annotation_summary ?? undefined
     },
-    annotationSummaryItems(): string[] {
+    annotationSummaryItems(): SummaryItem[] {
       const s = this.annotationSummary
       if (s === undefined || !this.showFragments) return []
-      const items: string[] = []
-      if (s.score !== null) items.push(`Score : ${s.score.toFixed(2)}`)
-      if (s.coverage !== null) items.push(`Bond coverage : ${s.coverage.toFixed(1)}%`)
-      if (s.coverage_with_internal !== null) items.push(`With internal : ${s.coverage_with_internal.toFixed(1)}%`)
+      const items: SummaryItem[] = []
+      if (s.score !== null) items.push({ label: 'Score', value: s.score.toFixed(2) })
+      if (s.coverage !== null) items.push({ label: 'Bond coverage', value: `${s.coverage.toFixed(1)}%` })
+      if (s.coverage_with_internal !== null) items.push({ label: 'With internal', value: `${s.coverage_with_internal.toFixed(1)}%` })
       if (s.internal_matched !== null && s.internal_hypotheses !== null) {
-        items.push(`Internal pieces : ${s.internal_matched} / ${s.internal_hypotheses}`)
+        items.push({ label: 'Internal pieces', value: `${s.internal_matched} / ${s.internal_hypotheses}` })
       }
-      if (s.calibration_ppm !== null) items.push(`Calibration : ${s.calibration_ppm.toFixed(2)} ppm`)
+      if (s.calibration_ppm !== null) items.push({ label: 'Calibration', value: `${s.calibration_ppm.toFixed(2)} ppm` })
       return items
     },
     hasInternalFragments(): boolean {
@@ -793,10 +806,26 @@ export default defineComponent({
         16: '16',
       }
     },
-    gridClasses(): Record<string, boolean> {
+    // Residues per row: the chosen number, or fewer where its cells would be
+    // too small to read at this width
+    perRow(): number {
+      if (this.gridWidth <= 0) return this.rowWidth
+      const minCell = Math.max(MIN_CELL_PX, this.fontSize * MIN_CELL_FONT_SIZES)
+      // Two row-number columns of up to four digits, the gaps and the padding
+      const numbers = 2 * (4 * 0.65 * this.fontSize + 8)
+      for (let n = this.rowWidth; n > MIN_ROW_WIDTH; n -= 5) {
+        if ((this.gridWidth - numbers - 16) / n - 4 >= minCell) return n
+      }
+      return MIN_ROW_WIDTH
+    },
+    // Row numbers get columns of their own, as wide as the widest number,
+    // so they never run into the first or last residue of a row
+    gridStyles(): Record<string, string> {
       return {
-        'sequence-grid': true,
-        [`grid-width-${this.rowWidth}`]: true,
+        width: '100%',
+        maxWidth: '100%',
+        gridTemplateColumns: `max-content repeat(${this.perRow}, minmax(0, 1fr)) max-content`,
+        '--row-number-font-size': `${this.fontSize}px`,
       }
     },
     proteinTerminalCellStyles(): Record<string, string> {
@@ -954,9 +983,17 @@ export default defineComponent({
     // keep the frame fitted to it
     this.resizeObserver = new ResizeObserver(() => Streamlit.setFrameHeight())
     this.resizeObserver.observe(document.body)
+    const grid = this.$refs.sequenceGrid as HTMLElement | undefined
+    if (grid) {
+      this.gridResizeObserver = new ResizeObserver((entries) => {
+        this.gridWidth = entries[0]?.contentRect.width ?? grid.clientWidth
+      })
+      this.gridResizeObserver.observe(grid)
+    }
   },
   beforeUnmount() {
     this.resizeObserver?.disconnect()
+    this.gridResizeObserver?.disconnect()
   },
   methods: {
     // Full recompute of the sequence view: precursor info, per-residue objects,
@@ -1039,12 +1076,12 @@ export default defineComponent({
 
 
         this.massData = [
-          `Theoretical protein mass : ${this.theoreticalMass.toFixed(2)}`,
-          `${this.args.observedMassLabel ?? 'Observed mass'} : ${observed_mass}`,
-          `Δ Mass (Da) : ${delta_mass}`,
+          { label: 'Theoretical protein mass', value: this.theoreticalMass.toFixed(2) },
+          { label: this.args.observedMassLabel ?? 'Observed mass', value: observed_mass },
+          { label: 'Δ Mass (Da)', value: delta_mass },
         ]
         if (this.spectrumFragmentation) {
-          this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
+          this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
         }
 
         // Ensures this is only executed once
@@ -1081,12 +1118,12 @@ export default defineComponent({
       const deltaMassDa = Math.abs(theoreticalMass - observedMass)
       this.massTitle = 'Precursor'
       this.massData = [
-        `Theoretical mass : ${theoreticalMass.toFixed(2)}`,
-        `Observed mass : ${observedMass.toFixed(2)}`,
-        `Δ Mass (Da) : ${deltaMassDa.toFixed(2)}`,
+        { label: 'Theoretical mass', value: theoreticalMass.toFixed(2) },
+        { label: 'Observed mass', value: observedMass.toFixed(2) },
+        { label: 'Δ Mass (Da)', value: deltaMassDa.toFixed(2) },
       ]
       if (this.spectrumFragmentation) {
-        this.massData.push(`Fragmentation : ${this.spectrumFragmentation}`)
+        this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
       }
     },
     prepareFragmentTable(): void {
@@ -1694,27 +1731,65 @@ export default defineComponent({
   }
 }
 
-/* Columns may shrink below their content (minmax(0, 1fr)): with plain 1fr a
-   row number wider than its column widened the grid past its container, so
-   the last column ran under the coverage scale */
-.grid-width-20 {
-  grid-template-columns: repeat(22, minmax(0, 1fr));
+/* Residue columns may shrink below their content (minmax(0, 1fr)): with
+   plain 1fr a long residue label widened the grid past its container, so the
+   last column ran under the coverage scale */
+.sequence-grid > .row-number {
+  aspect-ratio: auto;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  font-size: var(--row-number-font-size, 12px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: var(--v-medium-emphasis-opacity);
 }
 
-.grid-width-25 {
-  grid-template-columns: repeat(27, minmax(0, 1fr));
+.row-number-start {
+  justify-content: flex-end;
 }
 
-.grid-width-30 {
-  grid-template-columns: repeat(32, minmax(0, 1fr));
+.row-number-end {
+  justify-content: flex-start;
 }
 
-.grid-width-35 {
-  grid-template-columns: repeat(37, minmax(0, 1fr));
+/* Label and value pairs above the sequence: whole pairs wrap to the next
+   line, a label never splits from its value */
+.summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  column-gap: 24px;
+  row-gap: 2px;
 }
 
-.grid-width-40 {
-  grid-template-columns: repeat(42, minmax(0, 1fr));
+.summary-title {
+  margin-right: 4px;
+}
+
+/* Drawn at the width it is given: the table's columns (and the internal
+   fragment track's SVG) keep the width of their last layout, so without
+   this a frame that narrowed would stay as wide as before */
+.fit-width,
+.sequence-part :deep(.internal-track) {
+  contain: inline-size;
+}
+
+.summary-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.summary-label {
+  opacity: var(--v-medium-emphasis-opacity);
+}
+
+.summary-value {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .sequence-and-scale {
