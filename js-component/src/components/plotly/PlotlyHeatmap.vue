@@ -8,7 +8,7 @@
 
 <script lang="ts">
 import { defineComponent, computed, type PropType } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'

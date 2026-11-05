@@ -6,18 +6,16 @@ import App from './App.vue'
 import '@mdi/font/css/materialdesignicons.css'
 import 'vuetify/styles'
 import { createVuetify } from 'vuetify'
-import * as components from 'vuetify/components'
-import * as directives from 'vuetify/directives'
 
 const app = createApp(App)
 
 app.use(createPinia())
 
 app.use(
-  createVuetify({
-    components,
-    directives,
-  })
+  // Components and directives are imported where a view uses them
+  // (vite-plugin-vuetify), so each view loads only the Vuetify code and
+  // styles it needs
+  createVuetify()
 )
 
 app.mount('#app')

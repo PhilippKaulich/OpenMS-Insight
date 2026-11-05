@@ -10,7 +10,8 @@
  */
 
 import { ref, computed, type Ref, type ComputedRef } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import type Plotly from 'plotly.js-dist-min'
+import { plotly } from '@/plotly/current'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
@@ -111,9 +112,9 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
       {
         title: 'Download as SVG',
         name: 'toImageSvg',
-        icon: Plotly.Icons.camera,
+        icon: plotly().Icons.camera,
         click: (plotlyElement: unknown) => {
-          Plotly.downloadImage(plotlyElement as Plotly.PlotlyHTMLElement, {
+          plotly().downloadImage(plotlyElement as Plotly.PlotlyHTMLElement, {
             filename: svgFilename?.value || title?.value || 'plot',
             height: 400,
             width: 1200,
