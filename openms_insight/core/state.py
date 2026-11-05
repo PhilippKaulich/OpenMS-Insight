@@ -343,9 +343,7 @@ class StateManager:
         on, so the views take the cleared state instead of sending their old
         selections back (each of which would be applied and cost a rerun).
         """
-        self._state["selections"] = {
-            key: None for key in self._state["selections"]
-        }
+        self._state["selections"] = dict.fromkeys(self._state["selections"])
         self._state["selection_counter"] += 1
         self._state["pagination_counter"] += 1
 
