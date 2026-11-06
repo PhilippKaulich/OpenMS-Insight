@@ -468,7 +468,7 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { useModificationStore } from '@/stores/variable-modification'
-import type { ProteinSequenceViewComponentArgs } from '@/types/component'
+import type { FragmentMatches, MatchedFragmentIon, ProteinSequenceViewComponentArgs } from '@/types/component'
 import type {
   AnnotatedFragment,
   AnnotationSummary,
@@ -1310,11 +1310,13 @@ export default defineComponent({
 
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = '' // if no sequence is selected, nothing to show
+        this.publishFragmentMatches(null)
         return
       }
 
       if (this.spectrum === undefined) {
         this.fragmentTableTitle = '' // if no scan is selected, nothing to show
+        this.publishFragmentMatches(null)
         return
       }
 
@@ -1335,6 +1337,7 @@ export default defineComponent({
 
       // calculate matching masses
       let matching_fragments: Record<string, unknown>[] = []
+      const matchedIons: MatchedFragmentIon[] = []
       const sequence_size = this.sequence_end
       
       this.selectedIonSeries
@@ -1401,6 +1404,13 @@ export default defineComponent({
                   MassDiffPpm: massDiffPpm.toFixed(3),
                 }
                 matching_fragments.push(matched)
+                matchedIons.push({
+                  name: matched.Name,
+                  ion: matched.IonType,
+                  kind: isPrefixIon(iontype.text) ? 'N' : 'C',
+                  mass: observed_masses[obsIndex],
+                  massIndex: obsIndex,
+                })
                 // setting the fragment mark for fragment map
                 let aa_index = aaIndex
                 if (iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c')
@@ -1420,12 +1430,14 @@ export default defineComponent({
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = matching_fragments
       this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
+      this.publishFragmentMatches(matchedIons)
     },
     // Externally annotated fragment ions: the envelopes accepted on the raw
     // spectrum, no matching against the deconvolved masses here.
     prepareAnnotatedFragmentTable(): void {
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = ''
+        this.publishFragmentMatches(null)
         return
       }
       const selectedTypes = new Set(
@@ -1474,6 +1486,17 @@ export default defineComponent({
         })
       })
       this.fragmentTableSource = source
+      this.publishFragmentMatches(
+        source.map((fragment) => ({
+          name: fragment.name,
+          ion: fragment.ion_type,
+          kind: fragment.kind,
+          mass: fragment.observed_mass,
+          massIndex: this.massIndexOf(fragment.observed_mass),
+          charge: fragment.charge,
+          mz: fragment.mz,
+        }))
+      )
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = rows
       this.fragmentTableTitle = this.hasInternalFragments
@@ -1607,6 +1630,34 @@ export default defineComponent({
         return { name: row.Name as string, kind: 'N', start: this.sequence_start, end: this.sequence_start + n - 1 }
       }
       return { name: row.Name as string, kind: 'C', start: this.sequence_end - n + 1, end: this.sequence_end }
+    },
+    // Index of the spectrum's mass nearest `mass` within the link tolerance, or null
+    massIndexOf(mass: number): number | null {
+      const masses: number[] = toRaw(this.spectrum?.masses ?? [])
+      const tolerance = this.massLinkTolerance(mass)
+      let best: number | null = null
+      for (let i = 0; i < masses.length; i++) {
+        const diff = Math.abs(masses[i] - mass)
+        if (diff <= tolerance && (best === null || diff < Math.abs(masses[best] - mass))) best = i
+      }
+      return best
+    },
+    // The matched ions, for spectra to mark (fragmentMatchesIdentifier); null
+    // while no spectrum is matched
+    publishFragmentMatches(fragments: MatchedFragmentIon[] | null) {
+      const id = this.args.fragmentMatchesIdentifier
+      if (!id) return
+      const next: FragmentMatches | null =
+        fragments === null
+          ? null
+          : {
+              spectrum: this.spectrum?.key ?? null,
+              tolerance: { value: this.fragmentMassTolerance, unit: this.toleranceUnit },
+              fragments,
+            }
+      // Skip no-op writes: each write is a round trip to Python
+      if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
+      this.selectionStore.updateSelection(id, next)
     },
     publishSelectedFragment(rowIndex?: number) {
       const id = this.args.fragmentIdentifier

@@ -17,13 +17,24 @@
  *  - annotated: raw peaks, signal peaks of the selected mass highlighted, z=N labels
  *  - ladder: masses with a sequence tag ladder; clicking a ladder mass drills
  *    down to its raw peaks ('ladder-annotated'), the back button returns
+ *
+ * With fragmentMatchesIdentifier, the fragment ions a ProteinSequenceView
+ * matched are coloured and labelled in every mode (see utils/fragmentIons).
  */
 import { defineComponent, type PropType } from 'vue'
 import Plotly from '@/plotly/basic'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { DeconvolvedSpectrumComponentArgs } from '@/types/component'
+import type { DeconvolvedSpectrumComponentArgs, FragmentMatches } from '@/types/component'
+import {
+  fragmentMarks,
+  matchesSpectrum,
+  visibleLabels,
+  type FragmentKind,
+  type FragmentLabel,
+  type FragmentMarks,
+} from '@/utils/fragmentIons'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -62,6 +73,10 @@ const DEFAULT_STYLING = {
   // Circles of the theoretical isotope envelope (set_envelope)
   envelopeColor: '#D62728',
   isolationWindowColor: '#7F7F7F',
+  // Fragment ions of the sequence view: N-terminal, C-terminal, internal
+  nTermColor: '#1F5FBF',
+  cTermColor: '#B5179E',
+  internalColor: '#2E8B57',
   annotationColors: {
     massButton: '#E4572E',
     selectedMassButton: '#F3A712',
@@ -83,6 +98,20 @@ const TOGGLE_ANNOTATIONS_ICON = {
   width: 1792,
   height: 1792,
   path: 'M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z',
+}
+/** Fragment-ion labels closer than this (pixels) to a more intense one are left out. */
+const FRAGMENT_LABEL_SPACING_PX = 14
+const FRAGMENT_KINDS: FragmentKind[] = ['N', 'C', 'I']
+const FRAGMENT_KIND_NAMES: Record<FragmentKind, string> = {
+  N: 'N-terminal fragment ions',
+  C: 'C-terminal fragment ions',
+  I: 'Internal fragment ions',
+}
+// Square brackets: the ends of a sequence
+const TOGGLE_FRAGMENTS_ICON = {
+  width: 1000,
+  height: 1000,
+  path: 'M150 100h300v100H250v600h200v100H150z M550 100h300v800H550V800h200V200H550z',
 }
 const TOGGLE_PEAKS_ICON = {
   width: 1792,
@@ -118,6 +147,8 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       annotationsVisible: true,
       deconvolvedPeaksHighlightMode: false,
+      // The fragment ions of the sequence view are marked (toolbar toggle)
+      fragmentIonsVisible: true,
       // Drilled down from the ladder view into the raw peaks of a mass
       drilledDown: false,
     }
@@ -211,6 +242,42 @@ export default defineComponent({
       return this.xColumnValues.length > 0 && this.yColumnValues.length > 0
     },
 
+    /** The fragment ions the sequence view matched on this spectrum, or null */
+    fragmentMatches(): FragmentMatches | null {
+      const id = this.args.fragmentMatchesIdentifier
+      if (!id) return null
+      const matches = this.selectionStore.$state[id] as FragmentMatches | null | undefined
+      const keyColumn = this.args.spectrumKeyColumn
+      const key = keyColumn ? this.row[keyColumn] : undefined
+      return matchesSpectrum(matches, key) ? (matches as FragmentMatches) : null
+    },
+    fragmentMatchesJson(): string {
+      return JSON.stringify(this.fragmentMatches)
+    },
+    hasFragmentMatches(): boolean {
+      return (this.fragmentMatches?.fragments.length ?? 0) > 0
+    },
+    /** Masses and raw peaks the fragment ions explain */
+    fragmentMarks(): FragmentMarks | null {
+      const matches = this.fragmentMatches
+      if (!matches || matches.fragments.length === 0) return null
+      const intensities = this.row[this.args.massIntensityColumn]
+      const peakIntensities = this.args.peakIntensityColumn ? this.row[this.args.peakIntensityColumn] : undefined
+      return fragmentMarks(
+        matches,
+        this.MassValues,
+        Array.isArray(intensities) ? (intensities as number[]) : [],
+        this.MZValues,
+        Array.isArray(peakIntensities) ? (peakIntensities as number[]) : [],
+        this.mzSignals,
+      )
+    },
+    /** Kind of fragment ion per drawn mass or peak, while they are shown */
+    fragmentKindPos(): (FragmentKind | undefined)[] {
+      const marks = this.fragmentMarks
+      if (!marks || !this.fragmentIonsVisible || !this.annotationsVisible) return []
+      return this.isMzMode ? marks.peakKinds : marks.massKinds
+    },
     selectedMassIndex(): number | undefined {
       if (!this.args.massIdentifier) return undefined
       const value = this.selectionStore.$state[this.args.massIdentifier]
@@ -410,19 +477,30 @@ export default defineComponent({
         highlighted_y: [] as number[],
         selected_x: [] as number[],
         selected_y: [] as number[],
+        N_x: [] as number[],
+        N_y: [] as number[],
+        C_x: [] as number[],
+        C_y: [] as number[],
+        I_x: [] as number[],
+        I_y: [] as number[],
       }
       const mask = this.isMzMode ? this.highlightedMzPos : this.highlightedMassPos
       const reversedSelectedAA = this.reversedSelectedAA
+      const fragmentKinds = this.fragmentKindPos
       for (let i = 0; i < this.xValues.length; i++) {
         const peak = Math.floor(i / 3)
         const posHighlight = mask[peak]
         if (posHighlight === undefined) continue
+        const fragmentKind = fragmentKinds[peak]
         if (posHighlight && (reversedSelectedAA === peak || reversedSelectedAA === peak - 1)) {
           result.selected_x.push(this.xValues[i])
           result.selected_y.push(this.yValues[i])
         } else if (posHighlight) {
           result.highlighted_x.push(this.xValues[i])
           result.highlighted_y.push(this.yValues[i])
+        } else if (fragmentKind !== undefined) {
+          result[`${fragmentKind}_x`].push(this.xValues[i])
+          result[`${fragmentKind}_y`].push(this.yValues[i])
         } else {
           result.unhighlighted_x.push(this.xValues[i])
           result.unhighlighted_y.push(this.yValues[i])
@@ -669,6 +747,7 @@ export default defineComponent({
           type: 'scatter',
           marker: { color: this.styling.unhighlightedColor },
         } as Plotly.Data,
+        ...this.fragmentTraces,
         {
           x: this.plotData.highlighted_x,
           y: this.plotData.highlighted_y,
@@ -687,6 +766,91 @@ export default defineComponent({
       if (this.envelopeTrace) traces.push(this.envelopeTrace)
       if (this.annotationsVisible) traces.push(...this.annotationData.traces)
       return traces
+    },
+    fragmentColors(): Record<FragmentKind, string> {
+      return {
+        N: this.styling.nTermColor,
+        C: this.styling.cTermColor,
+        I: this.styling.internalColor,
+      }
+    },
+    /** Sticks of the fragment ions, one trace per kind, with the ion names on hover */
+    fragmentTraces(): Plotly.Data[] {
+      const marks = this.fragmentMarks
+      if (!marks || this.fragmentKindPos.length === 0) return []
+      const traces: Plotly.Data[] = []
+      for (const kind of FRAGMENT_KINDS) {
+        const x = this.plotData[`${kind}_x`]
+        const y = this.plotData[`${kind}_y`]
+        if (x.length === 0) continue
+        traces.push({
+          x,
+          y,
+          mode: 'lines',
+          type: 'scatter',
+          name: FRAGMENT_KIND_NAMES[kind],
+          line: { color: this.fragmentColors[kind], width: 1.5 },
+          hoverinfo: 'skip',
+        } as Plotly.Data)
+      }
+      // Hover: the names of the ions at each marked mass or peak
+      const hover = this.isMzMode ? marks.peakHover : marks.massHover
+      const xs = this.xColumnValues
+      const ys = this.yColumnValues
+      const hx: number[] = []
+      const hy: number[] = []
+      const ht: string[] = []
+      const kinds = this.fragmentKindPos
+      hover.forEach((text, i) => {
+        if (text === undefined || kinds[i] === undefined) return
+        hx.push(xs[i])
+        hy.push(ys[i])
+        ht.push(`${text}<br>${this.isMzMode ? 'm/z' : 'Mass'} ${xs[i]?.toFixed(4)}`)
+      })
+      if (hx.length > 0) {
+        traces.push({
+          x: hx,
+          y: hy,
+          mode: 'markers',
+          type: 'scatter',
+          marker: { size: 8, opacity: 0 },
+          hoverinfo: 'text',
+          hovertext: ht,
+          showlegend: false,
+        } as Plotly.Data)
+      }
+      return traces
+    },
+    /** Ion names above their peaks, as many as fit */
+    fragmentLabelAnnotations(): Partial<Plotly.Annotations>[] {
+      const marks = this.fragmentMarks
+      if (!marks || this.fragmentKindPos.length === 0) return []
+      const labels: FragmentLabel[] = this.isMzMode ? marks.peakLabels : marks.massLabels
+      const [x0, x1] = this.xRange
+      const pixelsPerX = this.xAxisPixelLength() / Math.max(x1 - x0, 1e-9)
+      // The selected mass carries its own label
+      const selected = this.selectedMassIndex
+      const skip =
+        !this.isMzMode && selected !== undefined && selected < this.MassValues.length
+          ? this.MassValues[selected]
+          : undefined
+      return visibleLabels(
+        labels.filter((label) => label.x !== skip),
+        this.xRange,
+        pixelsPerX,
+        FRAGMENT_LABEL_SPACING_PX,
+      ).map((label) => ({
+        x: label.x,
+        y: label.y,
+        xref: 'x',
+        yref: 'y',
+        yanchor: 'bottom',
+        yshift: 2,
+        textangle: '-90',
+        text: label.text,
+        showarrow: false,
+        font: { size: 11, color: this.fragmentColors[label.kind] },
+      }))
     },
     layout(): Partial<Plotly.Layout> {
       return {
@@ -725,6 +889,7 @@ export default defineComponent({
         ],
         annotations: [
           ...this.isolationWindowAnnotations,
+          ...this.fragmentLabelAnnotations,
           ...this.annotationData.annotations,
           ...this.measureOverlay.annotations,
         ],
@@ -809,6 +974,13 @@ export default defineComponent({
       this.requestGraph()
     },
     isolationWindowJson() {
+      this.requestGraph()
+    },
+    // By value: the selection store gets a new object on every rerun
+    fragmentMatchesJson() {
+      this.requestGraph()
+    },
+    fragmentIonsVisible() {
       this.requestGraph()
     },
     selectedMassIndex() {
@@ -1108,6 +1280,16 @@ export default defineComponent({
           },
         },
       ]
+      if (this.hasFragmentMatches) {
+        modeBarButtons.push({
+          title: this.fragmentIonsVisible ? 'Hide Fragment Ions' : 'Show Fragment Ions',
+          name: 'toggleFragmentIons',
+          icon: TOGGLE_FRAGMENTS_ICON,
+          click: () => {
+            this.fragmentIonsVisible = !this.fragmentIonsVisible
+          },
+        })
+      }
       if (this.isMzMode) {
         modeBarButtons.push({
           title: this.deconvolvedPeaksHighlightMode ? 'Hide Deconvolved Peaks' : 'Show Deconvolved Peaks',
