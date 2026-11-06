@@ -15,7 +15,7 @@
  *   their x and y differences.
  *
  * Measurements are plain Plotly shapes and annotations (see `overlay()`), so
- * the SVG download includes them. Esc cancels a half-finished measurement,
+ * the image download includes them. Esc cancels a half-finished measurement,
  * clicking a label removes its measurement and "Clear" removes all. They
  * belong to the data they were taken on: `setDataKey()` drops them when the
  * plotted data changes.
@@ -303,7 +303,7 @@ export function useMeasure(enabled: () => boolean) {
 
   /**
    * Shapes and annotations drawing the measurements and the pending point.
-   * Plain layout items, so they are part of the SVG download.
+   * Plain layout items, so they are part of the image download.
    */
   function overlay(options: MeasureOverlayOptions): MeasureOverlay {
     const shapes: Partial<Plotly.Shape>[] = []
@@ -439,7 +439,7 @@ export function useMeasure(enabled: () => boolean) {
 
   /**
    * The Measure toggle and the Clear button for Plotly's mode bar (none when
-   * the tool is off). Mode bar buttons are left out of the SVG download.
+   * the tool is off). Mode bar buttons are left out of the image download.
    * `title` is the Measure button's tooltip; it must start with "Measure".
    */
   function modeBarButtons(

@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
     measure_args,
@@ -99,6 +100,7 @@ class DeconvolvedSpectrum(BaseComponent):
         measure: bool = True,
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -135,7 +137,8 @@ class DeconvolvedSpectrum(BaseComponent):
                 selectedSequenceArrow, background, buttonHover).
             config: Label layout overrides: xPosScalingFactor (27.5),
                 xPosScalingThreshold (30).
-            svg_filename: File name for the SVG download.
+            svg_filename: File name (without extension) of the image download;
+                the extension follows the image format.
             measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two masses draws a
                 bracket labelled with their difference ("Δmass 128.095 ≈ K"),
@@ -144,13 +147,17 @@ class DeconvolvedSpectrum(BaseComponent):
                 drill-down) the difference is m/z and matched at 1+ and 2+. Esc
                 cancels a half-finished measurement, clicking a label removes it
                 and "Clear measurements" removes all; they are cleared when
-                other data is plotted and are part of the SVG download. With
+                other data is plotted and are part of the image download. With
                 measure mode off, clicks select masses as before. Render-time
                 only: not part of the cache.
             measure_tolerance: Residue matching tolerance in Da per point
                 (default 0.02); a difference matches within twice this.
             measure_residues: Extra named masses to match besides the 20
                 standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if view not in VIEWS:
@@ -178,6 +185,9 @@ class DeconvolvedSpectrum(BaseComponent):
         self._measure = validate_measure(measure)
         self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
         self._measure_residues = validate_measure_residues(measure_residues)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -441,4 +451,5 @@ class DeconvolvedSpectrum(BaseComponent):
         args.update(
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
+        args.update(image_format_args(self._image_format))
         return args

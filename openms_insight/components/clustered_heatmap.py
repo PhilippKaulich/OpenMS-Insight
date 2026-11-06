@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.multi_select import normalize_multi_select
 from ..core.registry import register_component
 
@@ -63,6 +64,7 @@ class ClusteredHeatmap(BaseComponent):
         intensity_label: str | None = None,
         group_colors: dict[str, str] | None = None,
         multi_select: dict[str, str] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -112,6 +114,10 @@ class ClusteredHeatmap(BaseComponent):
                 the cells (Shift adds, Alt removes). The identifier holds the
                 sorted labels of the selected rows, or None, and the selected
                 rows are outlined, whichever component chose them.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if (data is not None or data_path is not None) and not id_col:
@@ -142,6 +148,9 @@ class ClusteredHeatmap(BaseComponent):
                     f"multi_select of a ClusteredHeatmap selects rows: map "
                     f"{identifier!r} to id_col {id_col!r}, not {column!r}"
                 )
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -427,4 +436,5 @@ class ClusteredHeatmap(BaseComponent):
             args["title"] = self._title
         if self._multi_select:
             args["multiSelect"] = self._multi_select
+        args.update(image_format_args(self._image_format))
         return args

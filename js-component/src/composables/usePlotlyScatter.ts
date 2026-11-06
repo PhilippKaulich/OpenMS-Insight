@@ -3,7 +3,7 @@
  *
  * Provides common functionality:
  * - Resize observer for responsive behavior
- * - Plotly config with SVG export
+ * - Plotly config with the image download (format from `imageFormat`)
  * - Click event handling with selection store integration
  * - Theme-aware layout styling
  * - Streamlit frame height updates
@@ -14,6 +14,8 @@ import Plotly from 'plotly.js-dist-min'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 export interface PlotlyScatterOptions {
   /** Unique ID for the plot container */
@@ -22,10 +24,12 @@ export interface PlotlyScatterOptions {
   interactivity: ComputedRef<Record<string, string>>
   /** Function to get data array for click handling */
   getData: () => Record<string, unknown>[]
-  /** Optional title for SVG export filename */
+  /** Optional title, the download file name without svgFilename */
   title?: ComputedRef<string | undefined>
-  /** Optional SVG export filename (default: the title) */
+  /** Optional download file name without extension (default: the title) */
   svgFilename?: ComputedRef<string | undefined>
+  /** Format of the image download (the `imageFormat` argument; default SVG) */
+  imageFormat?: ComputedRef<unknown>
   /** Whether the mouse wheel zooms the plot (default true; else it scrolls the page) */
   scrollZoom?: ComputedRef<boolean | undefined>
   /** Width threshold for "narrow" mode (default 600) */
@@ -52,7 +56,7 @@ export interface PlotlyScatterReturn {
   setupResizeObserver: () => void
   /** Clean up resize observer - call in beforeUnmount() */
   cleanupResizeObserver: () => void
-  /** Get Plotly config with SVG export and scroll zoom */
+  /** Get Plotly config with the image download and scroll zoom */
   getPlotConfig: (additionalButtons?: Plotly.ModeBarButton[]) => Partial<Plotly.Config>
   /** Set up click handler for interactivity - call after Plotly.newPlot() */
   setupClickHandler: () => void
@@ -64,7 +68,7 @@ export interface PlotlyScatterReturn {
 
 export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterReturn {
   const {
-    id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600, onSelect, onPointClick,
+    id, interactivity, getData, title, svgFilename, imageFormat, scrollZoom, narrowThreshold = 600, onSelect, onPointClick,
   } = options
 
   const streamlitDataStore = useStreamlitDataStore()
@@ -113,19 +117,10 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
 
   function getPlotConfig(additionalButtons?: Plotly.ModeBarButton[]): Partial<Plotly.Config> {
     const buttons: Plotly.ModeBarButton[] = [
-      {
-        title: 'Download as SVG',
-        name: 'toImageSvg',
-        icon: Plotly.Icons.camera,
-        click: (plotlyElement: unknown) => {
-          Plotly.downloadImage(plotlyElement as Plotly.PlotlyHTMLElement, {
-            filename: svgFilename?.value || title?.value || 'plot',
-            height: 400,
-            width: 1200,
-            format: 'svg',
-          })
-        },
-      },
+      plotlyDownloadButton({
+        format: () => imageFormatOf(imageFormat?.value),
+        filename: () => svgFilename?.value || title?.value || 'plot',
+      }),
       ...(additionalButtons || []),
     ]
 

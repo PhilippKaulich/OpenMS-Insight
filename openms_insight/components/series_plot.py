@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.measure import (
     measure_args,
     validate_measure,
@@ -69,6 +70,7 @@ class SeriesPlot(BaseComponent):
         y_range_mode: str = "nonnegative",
         hover_column: str | None = None,
         measure: bool = True,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -98,7 +100,8 @@ class SeriesPlot(BaseComponent):
             y_label: Y-axis label (default: y_column).
             show_legend: Show the legend.
             fixed_y_range: Disable zooming along the y axis.
-            svg_filename: File name for the SVG download (default: title).
+            svg_filename: File name (without extension) of the image download
+                (default: title); the extension follows the image format.
             font: Plotly font of the plot, e.g. {'family': 'Arial', 'color':
                 'black'} (default: the Streamlit theme's font and text colour).
             y_range_mode: Plotly rangemode of the y axis: 'nonnegative' (from
@@ -111,9 +114,13 @@ class SeriesPlot(BaseComponent):
                 bracket labelled with their x difference ("ΔRT 12.400"). Esc
                 cancels a half-finished measurement, clicking a label removes
                 it and "Clear measurements" removes all; they are cleared when
-                other data is plotted and are part of the SVG download. With
+                other data is plotted and are part of the image download. With
                 measure mode off, clicks select as before. Render-time only:
                 not part of the cache.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):
@@ -143,6 +150,9 @@ class SeriesPlot(BaseComponent):
 
         # Render-time options, kept out of the cache config (see core/measure.py)
         self._measure = validate_measure(measure)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -286,4 +296,5 @@ class SeriesPlot(BaseComponent):
         if self._font:
             args["font"] = self._font
         args.update(measure_args(self._measure))
+        args.update(image_format_args(self._image_format))
         return args

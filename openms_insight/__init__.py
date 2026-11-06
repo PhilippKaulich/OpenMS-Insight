@@ -23,6 +23,7 @@ from .components.table import Table
 from .components.volcanoplot import VolcanoPlot
 from .core.base import BaseComponent
 from .core.cache import CacheMissError
+from .core.image_format import IMAGE_FORMATS, get_image_format, set_image_format
 from .core.registry import get_component_class, register_component
 from .core.state import StateManager
 from .rendering.bridge import (
@@ -60,4 +61,7 @@ __all__ = [
     "get_component_annotations",
     "clear_component_annotations",
     "defer_reruns",
+    "set_image_format",
+    "get_image_format",
+    "IMAGE_FORMATS",
 ]

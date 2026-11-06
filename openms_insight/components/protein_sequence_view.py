@@ -9,6 +9,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.registry import register_component
 from ..preprocessing.filtering import _make_cache_key
 
@@ -235,6 +236,7 @@ class ProteinSequenceView(BaseComponent):
         fragment_identifier: str | None = None,
         entry_title: str = "Identification",
         observed_mass_label: str = "Observed mass",
+        image_format: str | None = None,
         float_precision: str = "float64",
         **kwargs,
     ):
@@ -295,7 +297,8 @@ class ProteinSequenceView(BaseComponent):
                 ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
-            svg_filename: File name for the SVG download.
+            svg_filename: File name (without extension) of the image download;
+                the extension follows the image format.
             accent_color: Colour of the dialog buttons (default: the theme's
                 primary colour).
             fragment_identifier: Identifier the selected fragment's bounds are
@@ -308,6 +311,10 @@ class ProteinSequenceView(BaseComponent):
                 summary.
             float_precision: Masses are compared at ppm level, so they are kept
                 as Float64 by default.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         self._sequence = _json_safe(sequence) if sequence is not None else None
@@ -326,6 +333,8 @@ class ProteinSequenceView(BaseComponent):
         self._title = title
         self._annotation_title = annotation_title
         self._svg_filename = svg_filename
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
         self._accent_color = accent_color
         self._fragment_identifier = fragment_identifier
         self._entry_title = entry_title
@@ -569,6 +578,7 @@ class ProteinSequenceView(BaseComponent):
             "settings": self._settings,
             "tag": self._tag,
             "svgFilename": self._svg_filename,
+            **image_format_args(self._image_format),
             "accentColor": self._accent_color,
             "fragmentIdentifier": self._fragment_identifier,
             "entryTitle": self._entry_title,

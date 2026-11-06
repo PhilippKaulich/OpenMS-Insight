@@ -90,6 +90,7 @@ export default defineComponent({
         return (data as VolcanoData[]) || []
       },
       title: computed(() => props.args.title),
+      imageFormat: computed(() => props.args.imageFormat),
     })
 
     const multi = useMultiSelect(computed(() => props.args.multiSelect))

@@ -8,6 +8,13 @@
 
       <!-- Toolbar -->
       <div class="d-flex justify-end px-4 mb-4">
+        <ImageScreenshot
+          :element-id="gridId"
+          :filename="args.svgFilename || args.title || 'sequence'"
+          :format="args.imageFormat"
+          :color="theme?.primaryColor ?? 'primary'"
+          size="small"
+        />
         <v-btn variant="text" icon size="small" :disabled="sequence.length === 0" @click="copySequence">
           <v-icon>mdi-content-copy</v-icon>
           <v-tooltip activator="parent" location="bottom">Copy sequence to clipboard</v-tooltip>
@@ -107,7 +114,7 @@
       </div>
 
       <!-- Sequence grid -->
-      <div class="px-2 pb-4" :class="gridClasses" style="width: 100%; max-width: 100%">
+      <div :id="gridId" class="px-2 pb-4" :class="gridClasses" style="width: 100%; max-width: 100%">
         <template v-for="(aaObj, aaIndex) in sequenceObjects" :key="aaIndex">
           <!-- Row number (left) -->
           <div
@@ -181,9 +188,10 @@
 import { defineComponent } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
-import type { Theme } from 'streamlit-component-lib'
+import { Streamlit, type Theme } from 'streamlit-component-lib'
 import type { SequenceData, SequenceObject, FragmentTableRow, ExternalAnnotation } from '@/types/sequence-data'
 import AminoAcidCell from './AminoAcidCell.vue'
+import ImageScreenshot from '@/components/protein/ImageScreenshot.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from './modification'
 
 // Proton mass for m/z calculations
@@ -203,6 +211,7 @@ export default defineComponent({
   name: 'SequenceView',
   components: {
     AminoAcidCell,
+    ImageScreenshot,
   },
   props: {
     args: {
@@ -253,6 +262,10 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Element saved by the image download: the sequence grid */
+    gridId(): string {
+      return `sequence-view-grid-${this.index}`
+    },
     containerStyle(): Record<string, string> {
       return {
         height: `${this.args.height || 400}px`,
@@ -354,6 +367,9 @@ export default defineComponent({
     },
   },
   watch: {
+    'args.height'() {
+      this.$nextTick(() => Streamlit.setFrameHeight())
+    },
     sequenceData: {
       handler(newData, oldData) {
         // Reset auto-zoom flag when sequence changes
@@ -423,6 +439,10 @@ export default defineComponent({
       this.resetFragmentMarkers()
       this.matchFragments()
     },
+  },
+  mounted() {
+    // The view has a fixed height; the frame does not follow it by itself
+    this.$nextTick(() => Streamlit.setFrameHeight())
   },
   methods: {
     initializeSequenceObjects(): void {

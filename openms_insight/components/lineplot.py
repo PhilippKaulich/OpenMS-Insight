@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
     measure_args,
@@ -73,6 +74,7 @@ class LinePlot(BaseComponent):
         measure: bool = True,
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -126,6 +128,10 @@ class LinePlot(BaseComponent):
                 (default 0.02); a difference matches within twice this.
             measure_residues: Extra named masses to match besides the 20
                 standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -146,6 +152,9 @@ class LinePlot(BaseComponent):
         self._measure = validate_measure(measure)
         self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
         self._measure_residues = validate_measure_residues(measure_residues)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -451,6 +460,7 @@ class LinePlot(BaseComponent):
         args.update(
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
+        args.update(image_format_args(self._image_format))
         return args
 
     def with_styling(

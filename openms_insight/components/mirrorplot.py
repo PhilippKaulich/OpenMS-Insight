@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
     measure_args,
@@ -79,6 +80,7 @@ class MirrorPlot(BaseComponent):
         # Visuals
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -120,8 +122,10 @@ class MirrorPlot(BaseComponent):
             title_bottom: Label shown below the bottom spectrum (above the x-axis).
             x_label: X-axis label (defaults to x_column).
             y_label: Y-axis label (defaults to y_column).
-            svg_filename: File name (without extension) for the "Download as
-                SVG" modebar button. Defaults to the title, then "mirror_plot".
+            svg_filename: File name (without extension) of the image download
+                (the mode bar's "Download as SVG/PNG/..." button); the extension
+                follows the image format. Defaults to the title, then
+                "mirror_plot".
             measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two peaks of the same
                 half draws a bracket between them labelled with their m/z
@@ -147,6 +151,10 @@ class MirrorPlot(BaseComponent):
                 - unhighlightedColor: Color for normal points (default: 'lightblue')
                 - annotationBackground: Background color for annotations
             config: Additional Plotly config options.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         # Subprocess preprocessing re-instantiates the component via
@@ -191,6 +199,9 @@ class MirrorPlot(BaseComponent):
             **self._filter_defaults_top,
             **self._filter_defaults_bottom,
         }
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -604,6 +615,7 @@ class MirrorPlot(BaseComponent):
         for key, val in self._config.items():
             if key not in args:
                 args[key] = val
+        args.update(image_format_args(self._image_format))
         return args
 
     def set_top_dynamic_annotations(

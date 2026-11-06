@@ -15,6 +15,8 @@ import type { MirrorPlotComponentArgs } from '@/types/component'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import MeasureHint from './MeasureHint.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -559,19 +561,11 @@ export default defineComponent({
         responsive: true,
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: Plotly.Icons.camera,
-            click: (plotElement: HTMLElement) => {
-              Plotly.downloadImage(plotElement, {
-                filename: this.args.svgFilename || this.args.title || 'mirror_plot',
-                height: this.args.height || 400,
-                width: 1200,
-                format: 'svg',
-              })
-            },
-          },
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.svgFilename || this.args.title || 'mirror_plot',
+            height: this.args.height || 400,
+          }),
           ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
         ],
       })

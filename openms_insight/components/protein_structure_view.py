@@ -67,6 +67,7 @@ class ProteinStructureView(ProteinSequenceView):
         empty_message: str = "Select an entry to show its structure.",
         viewer_height: int = 480,
         float_precision: str = "float64",
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -99,6 +100,11 @@ class ProteinStructureView(ProteinSequenceView):
             viewer_height: Height of the 3D viewer in pixels.
             float_precision: Masses are compared at ppm level, so they are kept
                 as Float64 by default.
+            image_format: Format of the image download (the 3D scene
+                has no vector form: 'svg' saves a PNG): 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         self._empty_message = empty_message
@@ -125,6 +131,7 @@ class ProteinStructureView(ProteinSequenceView):
             float_precision=float_precision,
             empty_message=empty_message,
             viewer_height=viewer_height,
+            image_format=image_format,
             **kwargs,
         )
 

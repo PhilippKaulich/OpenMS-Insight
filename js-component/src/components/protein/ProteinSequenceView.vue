@@ -34,7 +34,12 @@
       </div>
       <div class="d-flex justify-end px-4 mb-4">
         <div>
-          <SvgScreenshot :element-id="sequencePartId" :filename="args.svgFilename" :color="accentColor" />
+          <ImageScreenshot
+            :element-id="sequencePartId"
+            :filename="args.svgFilename"
+            :format="args.imageFormat"
+            :color="accentColor"
+          />
           <SequenceViewInformation :color="accentColor" />
           <v-btn
             variant="text"
@@ -413,7 +418,7 @@ import type { ColumnDefinition } from 'tabulator-tables'
 import FragmentTable from './FragmentTable.vue'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
-import SvgScreenshot from './SvgScreenshot.vue'
+import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
@@ -462,7 +467,7 @@ export default defineComponent({
     FragmentTable,
     AminoAcidCell,
     ProteinTerminalCell,
-    SvgScreenshot,
+    ImageScreenshot,
     InternalFragmentTrack,
   },
   props: {
