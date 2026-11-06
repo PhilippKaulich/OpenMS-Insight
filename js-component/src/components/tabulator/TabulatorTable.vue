@@ -359,6 +359,13 @@ export default defineComponent({
     }
   },
   computed: {
+    // Buttons and chips in the table's dialogs take the app's primary colour
+    accentColor(): string {
+      return this.streamlitDataStore.theme?.primaryColor || '#1976d2'
+    },
+    accentHover(): string {
+      return `color-mix(in srgb, ${this.accentColor} 82%, black)`
+    },
     multiSelectEnabled(): boolean {
       return Object.keys(this.args.multiSelect || {}).length > 0
     },
@@ -2960,7 +2967,7 @@ export default defineComponent({
       const closeFooterBtn = this.parentDocument.createElement('button')
       closeFooterBtn.textContent = 'Close'
       closeFooterBtn.style.cssText = `
-        background: #1976d2;
+        background: ${this.accentColor};
         color: white;
         border: none;
         padding: 8px 16px;
@@ -2970,10 +2977,10 @@ export default defineComponent({
       `
       closeFooterBtn.addEventListener('click', () => this.closeTeleportDialog())
       closeFooterBtn.addEventListener('mouseenter', () => {
-        closeFooterBtn.style.backgroundColor = '#1565c0'
+        closeFooterBtn.style.backgroundColor = this.accentHover
       })
       closeFooterBtn.addEventListener('mouseleave', () => {
-        closeFooterBtn.style.backgroundColor = '#1976d2'
+        closeFooterBtn.style.backgroundColor = this.accentColor
       })
 
       footer.appendChild(closeFooterBtn)
@@ -3018,7 +3025,7 @@ export default defineComponent({
           transition: all 0.2s;
           ${
             isSelected
-              ? 'background: #1976d2; color: white; border: 1px solid #1976d2;'
+              ? `background: ${this.accentColor}; color: white; border: 1px solid ${this.accentColor};`
               : 'background: white; color: #333; border: 1px solid #e0e0e0;'
           }
         `
@@ -3079,8 +3086,8 @@ export default defineComponent({
       btn.textContent = text
       btn.style.cssText = `
         background: white;
-        color: #1976d2;
-        border: 1px solid #1976d2;
+        color: ${this.accentColor};
+        border: 1px solid ${this.accentColor};
         padding: 6px 12px;
         border-radius: 4px;
         cursor: pointer;
@@ -3320,8 +3327,8 @@ export default defineComponent({
         const open = numeric.min === null && numeric.max === null
         for (const { button, value } of buttons) {
           const active = value === null ? open : numeric.op === config?.op && bound === value
-          button.style.background = active ? '#1976d2' : 'white'
-          button.style.color = active ? 'white' : '#1976d2'
+          button.style.background = active ? this.accentColor : 'white'
+          button.style.color = active ? 'white' : this.accentColor
         }
       }
       if (config) {
@@ -3341,7 +3348,7 @@ export default defineComponent({
           button.textContent = choice.text
           button.title = choice.tip
           button.style.cssText =
-            'border: 1px solid #1976d2; border-radius: 14px; padding: 2px 10px; font-size: 13px; cursor: pointer;'
+            `border: 1px solid ${this.accentColor}; border-radius: 14px; padding: 2px 10px; font-size: 13px; cursor: pointer;`
           button.addEventListener('click', () => {
             opSelect.value = config.op
             numeric.op = config.op
