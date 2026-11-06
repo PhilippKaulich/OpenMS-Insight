@@ -610,7 +610,9 @@ class ProteinSequenceView(BaseComponent):
                 if self._fragmentation_column is not None:
                     spectrum_data["fragmentation"] = row.get(self._fragmentation_column)
                 if self._spectrum_key_column is not None:
-                    spectrum_data["key"] = _json_safe(row.get(self._spectrum_key_column))
+                    spectrum_data["key"] = _json_safe(
+                        row.get(self._spectrum_key_column)
+                    )
         payload = {"sequenceData": sequence_data, "spectrumData": spectrum_data}
         data_hash = hashlib.md5(
             json.dumps(payload, sort_keys=True, default=str).encode()
