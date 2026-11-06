@@ -57,6 +57,7 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
+  isolationWindowColor: '#7F7F7F',
   annotationColors: {
     massButton: '#E4572E',
     selectedMassButton: '#F3A712',
@@ -218,6 +219,66 @@ export default defineComponent({
     ladderJson(): string {
       return JSON.stringify(this.args.ladder ?? null)
     },
+    isolationWindowJson(): string {
+      return JSON.stringify(this.args.isolationWindow ?? null)
+    },
+    /** The isolation window, in the m/z views only */
+    isolationWindow(): { lower: number; upper: number; target?: number } | null {
+      const window = this.args.isolationWindow
+      if (!window || !this.isMzMode) return null
+      if (!Number.isFinite(window.lower) || !Number.isFinite(window.upper)) return null
+      return window
+    },
+    isolationWindowShapes(): Partial<Plotly.Shape>[] {
+      const window = this.isolationWindow
+      if (!window) return []
+      const color = this.styling.isolationWindowColor
+      const shapes: Partial<Plotly.Shape>[] = [
+        {
+          type: 'rect',
+          xref: 'x',
+          yref: 'paper',
+          x0: window.lower,
+          x1: window.upper,
+          y0: 0,
+          y1: 1,
+          fillcolor: color,
+          opacity: 0.25,
+          line: { width: 0 },
+          layer: 'below',
+        },
+      ]
+      if (window.target !== undefined && Number.isFinite(window.target)) {
+        shapes.push({
+          type: 'line',
+          xref: 'x',
+          yref: 'paper',
+          x0: window.target,
+          x1: window.target,
+          y0: 0,
+          y1: 1,
+          line: { color, width: 1, dash: 'dash' },
+          layer: 'below',
+        })
+      }
+      return shapes
+    },
+    isolationWindowAnnotations(): Partial<Plotly.Annotations>[] {
+      const window = this.isolationWindow
+      if (!window) return []
+      return [
+        {
+          x: (window.lower + window.upper) / 2,
+          y: 1,
+          xref: 'x',
+          yref: 'paper',
+          yanchor: 'bottom',
+          text: `Isolation window ${window.lower.toFixed(2)}–${window.upper.toFixed(2)}`,
+          showarrow: false,
+          font: { size: 11, color: this.styling.isolationWindowColor },
+        },
+      ]
+    },
     ladderKey(): unknown {
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
     },
@@ -339,8 +400,12 @@ export default defineComponent({
         : highlighted.map((a) => a.mass).filter((m) => !isNaN(m))
       if (values.length === 0) return [0, 1]
 
-      // Raw peaks of the highlighted masses: all of them
-      if (this.isMzMode) return [Math.min(...values) * 0.98, Math.max(...values) * 1.02]
+      // Raw peaks of the highlighted masses: all of them, and the isolation window
+      if (this.isMzMode) {
+        const window = this.isolationWindow
+        if (window) values.push(window.lower, window.upper)
+        return [Math.min(...values) * 0.98, Math.max(...values) * 1.02]
+      }
 
       // Masses: centre on them, then narrow until their labels stop overlapping
       const xcenter = values.reduce((sum, mass) => sum + mass, 0) / values.length
@@ -601,8 +666,16 @@ export default defineComponent({
           color: this.theme?.textColor,
           family: this.theme?.font,
         },
-        shapes: [...this.annotationData.shapes, ...this.measureOverlay.shapes],
-        annotations: [...this.annotationData.annotations, ...this.measureOverlay.annotations],
+        shapes: [
+          ...this.isolationWindowShapes,
+          ...this.annotationData.shapes,
+          ...this.measureOverlay.shapes,
+        ],
+        annotations: [
+          ...this.isolationWindowAnnotations,
+          ...this.annotationData.annotations,
+          ...this.measureOverlay.annotations,
+        ],
       }
     },
     /**
@@ -678,6 +751,9 @@ export default defineComponent({
     },
     // By value: the arguments arrive as a new object on every rerun
     ladderJson() {
+      this.requestGraph()
+    },
+    isolationWindowJson() {
       this.requestGraph()
     },
     selectedMassIndex() {

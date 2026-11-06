@@ -483,12 +483,15 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, Mea
     selectedColor?: string
     unhighlightedColor?: string
     highlightHiddenColor?: string
+    isolationWindowColor?: string
     annotationColors?: Record<string, string>
   }
   config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
   svgFilename?: string
   /** Sequence tag drawn in the ladder view */
   ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  /** Isolation window shaded in the m/z views */
+  isolationWindow?: { lower: number; upper: number; target?: number } | null
   height?: number
 }
 

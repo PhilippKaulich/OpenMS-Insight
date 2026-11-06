@@ -374,6 +374,36 @@ class TestDeconvolvedSpectrum:
         spectrum.set_ladder(None)
         assert spectrum._get_component_args()["ladder"] is None
 
+    def test_isolation_window(
+        self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="window",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            cache_path=str(temp_cache_dir),
+        )
+        assert "isolationWindow" not in spectrum._get_component_args()
+
+        spectrum.set_isolation_window(1300.0, 1305.0, target_mz=1302.5)
+        assert spectrum._get_component_args()["isolationWindow"] == {
+            "lower": 1300.0,
+            "upper": 1305.0,
+            "target": 1302.5,
+        }
+        spectrum.set_isolation_window(1300, 1305)
+        assert spectrum._get_component_args()["isolationWindow"] == {
+            "lower": 1300.0,
+            "upper": 1305.0,
+        }
+        # Cleared by None or an empty window
+        spectrum.set_isolation_window(1305.0, 1300.0)
+        assert "isolationWindow" not in spectrum._get_component_args()
+        spectrum.set_isolation_window(1300.0, 1305.0)
+        spectrum.set_isolation_window(None)
+        assert "isolationWindow" not in spectrum._get_component_args()
+
     def test_deconvolved_view_needs_no_peaks(self, mock_streamlit, temp_cache_dir):
         data = pl.LazyFrame(
             {"scan_idx": [0], "masses": [[1.0]], "intensities": [[2.0]]}

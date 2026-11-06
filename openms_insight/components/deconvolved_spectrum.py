@@ -165,6 +165,8 @@ class DeconvolvedSpectrum(BaseComponent):
         self._drilldown_title = drilldown_title
         # Sequence tag drawn in the 'ladder' view (set per render, not cached)
         self._ladder: dict[str, Any] | None = None
+        # Isolation window marked in the m/z views (set per render, not cached)
+        self._isolation_window: dict[str, float] | None = None
 
         # Render-time options, kept out of the cache config (see core/measure.py)
         self._measure = validate_measure(measure)
@@ -230,6 +232,7 @@ class DeconvolvedSpectrum(BaseComponent):
         self._svg_filename = config.get("svg_filename", "spectrum")
         self._drilldown_title = config.get("drilldown_title")
         self._ladder = None
+        self._isolation_window = None
 
     def _data_columns(self) -> list[str]:
         """Columns this view draws from (filter columns are added separately)."""
@@ -331,6 +334,40 @@ class DeconvolvedSpectrum(BaseComponent):
             }
         return self
 
+    def set_isolation_window(
+        self,
+        lower_mz: float | None,
+        upper_mz: float | None = None,
+        target_mz: float | None = None,
+    ) -> "DeconvolvedSpectrum":
+        """
+        Mark an isolation window in the m/z views for the next render.
+
+        The window is shaded from ``lower_mz`` to ``upper_mz``, with a dashed
+        line at ``target_mz`` when given. Use it on a precursor (MS1) spectrum
+        to show the m/z range isolated for a fragmentation spectrum. It is
+        drawn in the m/z views only: ``'annotated'``, and ``'ladder'`` drilled
+        down to a mass.
+
+        Args:
+            lower_mz: Lower edge of the window. None clears the window.
+            upper_mz: Upper edge of the window.
+            target_mz: Isolation target, or None.
+
+        Returns:
+            Self for method chaining.
+        """
+        if lower_mz is None or upper_mz is None or not upper_mz > lower_mz:
+            self._isolation_window = None
+        else:
+            self._isolation_window = {
+                "lower": float(lower_mz),
+                "upper": float(upper_mz),
+            }
+            if target_mz is not None:
+                self._isolation_window["target"] = float(target_mz)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         view = VIEWS[self._view]
         args: dict[str, Any] = {
@@ -350,6 +387,9 @@ class DeconvolvedSpectrum(BaseComponent):
         }
         if self._drilldown_title:
             args["drilldownTitle"] = self._drilldown_title
+        # Only when set, so the args of other callers stay as they were
+        if self._isolation_window:
+            args["isolationWindow"] = self._isolation_window
         args.update(
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
