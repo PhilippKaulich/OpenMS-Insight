@@ -58,7 +58,10 @@ def match_selection(column: str, value: Any, dtype: Any = None) -> pl.Expr:
         values = [_int_if_whole(v) for v in value]
         if is_list:
             return (
-                pl.col(column).list.eval(pl.element().is_in(values)).list.any().fill_null(False)
+                pl.col(column)
+                .list.eval(pl.element().is_in(values))
+                .list.any()
+                .fill_null(False)
             )
         return pl.col(column).is_in(values)
     if is_list:

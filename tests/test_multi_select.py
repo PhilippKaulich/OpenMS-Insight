@@ -501,7 +501,10 @@ def test_table_with_two_filters_and_an_all_default(
         filters={"group": "group", "shift": "shifts"},
         filter_defaults={"shift": ALL},
     )
-    rows = lambda state: sorted(table._prepare_vue_data(state)["tableData"]["id"])
+
+    def rows(state):
+        return sorted(table._prepare_vue_data(state)["tableData"]["id"])
+
     assert rows({"group": 1, "shift": None}) == [0, 1]
     assert rows({"group": 1, "shift": 3}) == [1]
     assert rows({"group": 2, "shift": 3}) == []

@@ -10,7 +10,6 @@ from ..core.base import BaseComponent
 from ..core.multi_select import (
     combine,
     filter_selection,
-    match_selection,
     normalize_multi_select,
     selection_values,
 )
