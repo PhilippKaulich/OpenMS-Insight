@@ -188,7 +188,7 @@
       </div>
     </div>
 
-    <div :id="id" :class="tableClasses"></div>
+    <div :id="id" :class="tableClasses" @keydown.capture="onTableKeydown"></div>
   </div>
 </template>
 
@@ -232,6 +232,27 @@ function formatNumber(value: number): string {
 
 // How long typing in the search box waits before the table is searched
 const SEARCH_DELAY_MS = 400
+// A row reached with the keyboard is highlighted at once, and selected (sent to
+// Python, so linked components follow) once no key has been pressed for this
+// long: holding a key down reruns the app once, not once per row passed
+const KEY_SELECT_DELAY_MS = 200
+// A page asked for by the keyboard that has not arrived after this long is
+// given up, so the keys work again
+const KEY_PAGE_TIMEOUT_MS = 5000
+// How often a page asked for by the keyboard is looked for: Tabulator may
+// still be busy with the previous page and drop the request, which is then
+// made again
+const KEY_PAGE_CHECK_MS = 750
+
+type KeyMove = 'up' | 'down' | 'pageUp' | 'pageDown' | 'home' | 'end'
+const KEY_MOVES: Record<string, KeyMove> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  PageUp: 'pageUp',
+  PageDown: 'pageDown',
+  Home: 'home',
+  End: 'end',
+}
 
 export default defineComponent({
   name: 'TabulatorTable',
@@ -323,6 +344,18 @@ export default defineComponent({
       checkboxClicked: false as boolean,
       // The check box column is shown once the user asks for it
       checkboxesShown: false as boolean,
+      // Keyboard navigation: the row highlighted with the keys and not yet
+      // selected (its index field value), and the timer that selects it
+      keyboardRowId: null as unknown,
+      // The last row the keys moved to: kept in view when its page is drawn again
+      keyboardShownId: null as unknown,
+      keySelectTimer: null as ReturnType<typeof setTimeout> | null,
+      // Position (over all pages) of the row the keys moved to while its page
+      // is being fetched, the page asked for and when
+      keyNavTarget: null as number | null,
+      keyNavRequestedPage: null as number | null,
+      keyNavRequestedAt: 0,
+      keyNavCheckTimer: null as ReturnType<typeof setTimeout> | null,
     }
   },
   computed: {
@@ -777,6 +810,8 @@ export default defineComponent({
   },
   beforeUnmount() {
     if (this.searchTimer) clearTimeout(this.searchTimer)
+    if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
+    if (this.keyNavCheckTimer) clearTimeout(this.keyNavCheckTimer)
     this.cleanupTeleport()
     this.rootResizeObserver?.disconnect()
   },
@@ -1123,6 +1158,9 @@ export default defineComponent({
       // (selecting a row triggers render, which would trigger sync again).
       this.tabulator.on('renderComplete', () => {
         this.refreshCheckboxes()
+        // A page the keys asked for has arrived
+        this.applyKeyNavTarget()
+        this.keepKeyboardRowInView()
         const selectedRows = this.tabulator?.getSelectedRows() || []
         if (selectedRows.length === 0 && !this.skipNextSync) {
           this.syncSelectionFromStore()
@@ -1488,6 +1526,11 @@ export default defineComponent({
       if (this.skipNextSync) {
         return
       }
+      // The keys moved the highlight and the selection follows shortly: keep
+      // the highlighted row rather than going back to the selected one
+      if (this.keepKeyboardRow()) {
+        return
+      }
 
       // Sync table selection with selection store
       if (!this.tabulator) return
@@ -1614,6 +1657,9 @@ export default defineComponent({
     },
 
     selectDefaultRow(): void {
+      if (this.keepKeyboardRow()) {
+        return
+      }
       // Skip auto-selection during initial load for server-side pagination.
       // Wait for paginationState watcher to confirm data is ready.
       if (this.isServerSidePagination && !this.initialLoadComplete) {
@@ -1760,6 +1806,8 @@ export default defineComponent({
         this.checkboxClicked = false
         return
       }
+      // A click wins over a row the keys moved to and not yet selected
+      this.cancelKeyboardSelection()
       // Get the row data directly from Tabulator's row object
       const rowData = row.getData()
       const rowIndex = row.getIndex()
@@ -1806,6 +1854,15 @@ export default defineComponent({
         row.scrollTo(this.args.scrollPosition, false).catch(() => {})
       }
 
+      this.commitRowSelection(rowData, rowIndex)
+    },
+
+    /**
+     * Select a row (already highlighted) as a click does: set the selections
+     * of ``interactivity`` and ``on_select`` to it.
+     */
+    commitRowSelection(rowData: Record<string, unknown> | undefined, rowIndex: unknown): void {
+      const interactivity = this.args.interactivity || {}
       this.$emit('rowSelected', rowIndex)
 
       // Set flag to skip the redundant syncSelectionFromStore call that will be
@@ -1840,6 +1897,234 @@ export default defineComponent({
       this.$nextTick(() => {
         this.skipNextSync = false
       })
+    },
+
+    /**
+     * Arrow keys, Page Up/Down, Home and End step through the rows while the
+     * rows have focus (a row was clicked, or the table tabbed to). Keys typed
+     * in a field (search box, check box, editor) and keys with a modifier are
+     * left alone. Handled in the capture phase so Tabulator's own Page Up/Down,
+     * Home and End scrolling does not run as well.
+     */
+    onTableKeydown(event: KeyboardEvent): void {
+      if (this.args.keyboardNavigation === false || !this.tabulator) return
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      const move = KEY_MOVES[event.key]
+      if (!move) return
+      const holder = (this.tabulator as any).rowManager?.element as HTMLElement | undefined
+      const target = event.target as HTMLElement | null
+      if (!holder || !target || !holder.contains(target)) return
+      if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return
+      event.preventDefault()
+      event.stopPropagation()
+      this.stepSelection(move)
+    },
+
+    /** Rows that fit in the visible part of the table (Page Up/Down step). */
+    visibleRowCount(rows: any[]): number {
+      const holder = (this.tabulator as any)?.rowManager?.element as HTMLElement | undefined
+      const sample = (this.tabulator?.getSelectedRows()[0] || rows[0]) as any
+      const rowHeight = sample?.getElement?.()?.offsetHeight || 0
+      if (!holder || rowHeight <= 0) return 10
+      return Math.max(1, Math.floor(holder.clientHeight / rowHeight))
+    },
+
+    /**
+     * Move the highlight one step. Positions count over every row passing the
+     * filters, so with server-side pagination a step past the end of the page
+     * goes on to the next page (fetched from Python) and Home/End reach the
+     * first and last page.
+     */
+    stepSelection(move: KeyMove): void {
+      if (!this.tabulator) return
+      const rows = this.tabulator.getRows('active') as any[]
+      const server = this.isServerSidePagination
+      const state = this.paginationState
+      const pageSize = server ? state?.page_size || this.args.pageSize || 100 : Math.max(rows.length, 1)
+      const offset = server ? ((state?.page || 1) - 1) * pageSize : 0
+      const total = server ? (state?.total_rows ?? rows.length) : rows.length
+      if (total <= 0) return
+
+      // While a page is on its way, keep counting from the position asked for
+      let current: number | null = this.keyNavTarget
+      if (current === null) {
+        // By index: the row objects Tabulator hands out are not always the same
+        const selected = this.tabulator.getSelectedRows()[0] as any
+        const selectedId = selected ? selected.getIndex() : undefined
+        const local = selected ? rows.findIndex((row) => row.getIndex() === selectedId) : -1
+        current = local >= 0 ? offset + local : null
+      }
+      const pageStep = this.visibleRowCount(rows)
+      let target: number
+      if (move === 'home') target = 0
+      else if (move === 'end') target = total - 1
+      // Nothing highlighted yet: start at the first row on screen
+      else if (current === null) target = offset
+      else if (move === 'down') target = current + 1
+      else if (move === 'up') target = current - 1
+      else if (move === 'pageDown') target = current + pageStep
+      else target = current - pageStep
+      target = Math.max(0, Math.min(total - 1, target))
+      this.moveKeyboardSelectionTo(target, rows, offset, pageSize)
+    },
+
+    /** Highlight the row at ``target`` (over all pages), fetching its page if need be. */
+    moveKeyboardSelectionTo(target: number, rows: any[], offset: number, pageSize: number): void {
+      const pageInFlight =
+        this.keyNavRequestedPage !== null && Date.now() - this.keyNavRequestedAt < KEY_PAGE_TIMEOUT_MS
+      if (pageInFlight) {
+        // Decided when the page arrives
+        this.keyNavTarget = target
+        return
+      }
+      this.keyNavRequestedPage = null
+      if (target >= offset && target < offset + rows.length) {
+        this.keyNavTarget = null
+        this.highlightKeyboardRow(rows[target - offset])
+        return
+      }
+      if (!this.isServerSidePagination || !this.tabulator) return
+      // On another page: ask Python for it and select the row once it is here.
+      // The row selected so far stays selected until then.
+      this.cancelKeyboardSelection()
+      const page = Math.floor(target / pageSize) + 1
+      this.keyNavTarget = target
+      this.keyNavRequestedPage = page
+      this.keyNavRequestedAt = Date.now()
+      ;(this.tabulator as any).setPage(page).catch(() => {})
+      this.scheduleKeyNavCheck()
+    },
+
+    /** Look for the page the keys asked for until it is here, asking again if it went astray. */
+    scheduleKeyNavCheck(): void {
+      if (this.keyNavCheckTimer) clearTimeout(this.keyNavCheckTimer)
+      this.keyNavCheckTimer = setTimeout(() => {
+        this.keyNavCheckTimer = null
+        const page = this.keyNavRequestedPage
+        if (page === null || !this.tabulator) return
+        if (Date.now() - this.keyNavRequestedAt >= KEY_PAGE_TIMEOUT_MS) {
+          this.keyNavRequestedPage = null
+          this.keyNavTarget = null
+          return
+        }
+        this.applyKeyNavTarget()
+        if (this.keyNavRequestedPage === null) return
+        if (this.paginationState?.page !== page) {
+          if (!this.pendingDataRequest) {
+            ;(this.tabulator as any).setPage(page).catch(() => {})
+          } else if (this.args.paginationIdentifier) {
+            // The request reached Python while it was busy and went unanswered:
+            // send it again, for the request Tabulator is waiting on
+            this.selectionStore.updateSelection(this.args.paginationIdentifier, {
+              page,
+              page_size: this.paginationState?.page_size || this.args.pageSize || 100,
+              sort_column: this.requestedSortColumn || undefined,
+              sort_dir: this.requestedSortDir,
+              column_filters: this.currentColumnFilters,
+              ...this.viewFiltersPatch,
+            })
+            this.pendingRequestCounter = this.selectionStore.$state.pagination_counter || 0
+          }
+        }
+        this.scheduleKeyNavCheck()
+      }, KEY_PAGE_CHECK_MS)
+    },
+
+    /** A page the keys asked for arrived: highlight the row they moved to. */
+    applyKeyNavTarget(): void {
+      if (this.keyNavRequestedPage === null || this.keyNavTarget === null || !this.tabulator) return
+      const state = this.paginationState
+      if (!state || state.page !== this.keyNavRequestedPage) return
+      const rows = this.tabulator.getRows('active') as any[]
+      const data = this.preparedTableData
+      const indexField = this.args.tableIndexField || 'id'
+      // Tabulator holds the rows Python sent for that page
+      if (
+        rows.length === 0 ||
+        rows.length !== data.length ||
+        rows[0].getData()[indexField] !== data[0][indexField]
+      ) {
+        return
+      }
+      const target = this.keyNavTarget
+      const pageSize = state.page_size || this.args.pageSize || 100
+      this.keyNavRequestedPage = null
+      this.keyNavTarget = null
+      this.moveKeyboardSelectionTo(target, rows, (state.page - 1) * pageSize, pageSize)
+    },
+
+    /** Highlight a row now and select it once the keys rest. */
+    highlightKeyboardRow(row: any): void {
+      if (!row || !this.tabulator) return
+      this.unhighlightedSelection = null
+      if (!row.isSelected()) {
+        this.tabulator.deselectRow()
+        row.select()
+      }
+      row.scrollTo('nearest', false).catch(() => {})
+      this.keyboardRowId = row.getIndex()
+      this.keyboardShownId = this.keyboardRowId
+      if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
+      this.keySelectTimer = setTimeout(() => this.commitKeyboardRow(), KEY_SELECT_DELAY_MS)
+    },
+
+    /** The keys rested: select the highlighted row as a click would. */
+    commitKeyboardRow(): void {
+      this.keySelectTimer = null
+      const id = this.keyboardRowId
+      this.keyboardRowId = null
+      if (id === null || id === undefined || !this.tabulator) return
+      const row = this.tabulator.getRow(id as string | number) as any
+      if (!row) return
+      if (!row.isSelected()) {
+        this.tabulator.deselectRow()
+        row.select()
+      }
+      this.commitRowSelection(row.getData(), row.getIndex())
+    },
+
+    /** Forget a row the keys moved to and have not selected yet. */
+    cancelKeyboardSelection(): void {
+      if (this.keySelectTimer) clearTimeout(this.keySelectTimer)
+      this.keySelectTimer = null
+      this.keyboardRowId = null
+      this.keyboardShownId = null
+      this.keyNavTarget = null
+      this.keyNavRequestedPage = null
+    },
+
+    /**
+     * Loading a page again (as Tabulator does after a page change) scrolls it
+     * back to the top: bring the row the keys moved to back into view.
+     */
+    keepKeyboardRowInView(): void {
+      if (this.keyboardShownId === null || !this.tabulator) return
+      const selected = this.tabulator.getSelectedRows()[0] as any
+      if (!selected || selected.getIndex() !== this.keyboardShownId) {
+        this.keyboardShownId = null
+        return
+      }
+      selected.scrollTo('nearest', false).catch(() => {})
+    },
+
+    /**
+     * While the keys are moving the highlight (its selection pending, or its
+     * page on the way), the table keeps that highlight: true tells the caller
+     * not to put the selection's own row back. Rows Tabulator loaded again
+     * are highlighted again.
+     */
+    keepKeyboardRow(): boolean {
+      if (this.keyNavRequestedPage !== null && Date.now() - this.keyNavRequestedAt < KEY_PAGE_TIMEOUT_MS) {
+        return true
+      }
+      if (this.keySelectTimer === null || this.keyboardRowId === null || !this.tabulator) return false
+      const row = this.tabulator.getRow(this.keyboardRowId as string | number) as any
+      if (row && !row.isSelected()) {
+        this.tabulator.deselectRow()
+        row.select()
+      }
+      if (row) row.scrollTo('nearest', false).catch(() => {})
+      return true
     },
 
     /**

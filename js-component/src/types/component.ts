@@ -122,6 +122,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   rowOverviewTitle?: string
   /** False hides the column menu */
   columnMenu?: boolean
+  /** False turns off stepping through the rows with the arrow keys */
+  keyboardNavigation?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */

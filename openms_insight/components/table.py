@@ -161,6 +161,7 @@ class Table(BaseComponent):
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
+        keyboard_navigation: bool = True,
         **kwargs,
     ):
         """
@@ -289,6 +290,15 @@ class Table(BaseComponent):
                   the table's filters.
                 Example: {'q_value': {'op': '<=', 'suggestions': [0.01, 0.001]},
                 'peptides': {'op': '>=', 'suggestions': [2, 3], 'default': 2}}
+            keyboard_navigation: Step through the rows with the keyboard while
+                the table has focus (after a row was clicked, or tabbed to):
+                Up and Down select the previous and next row, Page Up and Page
+                Down move by the rows in view, Home and End go to the first and
+                last row, across pages. Each row reached is highlighted at once
+                and selected as if clicked once no further key has been pressed
+                for 200 ms, so holding a key down does not rerun the app for
+                every row it passes. False leaves the keys to the browser.
+                Display-only, so not part of the cache configuration.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -303,6 +313,7 @@ class Table(BaseComponent):
         # Display-only, so not part of the cache config
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
+        self._keyboard_navigation = bool(keyboard_navigation)
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
@@ -1663,6 +1674,8 @@ class Table(BaseComponent):
             args["hiddenColumns"] = self._hidden_columns
         if not self._column_menu:
             args["columnMenu"] = False
+        if not self._keyboard_navigation:
+            args["keyboardNavigation"] = False
         if self._reset_sort:
             args["resetSort"] = True
         if self._reset_sort_on:
