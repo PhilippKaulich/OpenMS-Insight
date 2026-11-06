@@ -48,12 +48,24 @@
     <div v-if="showModifications && sequenceObject.modStart && !sequenceObject.modEnd" class="mod-marker mod-start-cont"></div>
     <div v-if="showModifications && !sequenceObject.modStart && sequenceObject.modEnd" class="mod-marker mod-end-cont"></div>
     <div v-if="showModifications && sequenceObject.modCenter" class="mod-marker mod-center-cont"></div>
-    <div v-if="showModifications && (sequenceObject.modEnd||isThisAAmodified)" class="rounded-lg mod-mass">{{ modMass }}
+    <!-- Residues the matched fragments allow a modification on -->
+    <div
+      v-if="showModifications && (sequenceObject.ambStart || sequenceObject.ambCenter || sequenceObject.ambEnd)"
+      class="amb-marker"
+      :class="{ 'amb-start': sequenceObject.ambStart, 'amb-open': !sequenceObject.ambEnd }"
+    ></div>
+    <div v-if="showModifications && (sequenceObject.modEnd||isThisAAmodified)" class="rounded-lg mod-mass" :class="{ 'mod-mass-ambiguous': !!sequenceObject.modNote }">{{ modMass }}{{ sequenceObject.modNote ? '?' : '' }}
       <v-tooltip activator="parent" class="foreground">
         {{ `Modification Mass: ${modMass} Da` }}
         <br />
-        {{ `Possible Modifications: ${sequenceObject.modLabels}` }}
-        <br />
+        <template v-if="sequenceObject.modLabels">
+          {{ `Possible Modifications: ${sequenceObject.modLabels}` }}
+          <br />
+        </template>
+        <template v-if="sequenceObject.modNote">
+          {{ `Ambiguous: ${sequenceObject.modNote}` }}
+          <br />
+        </template>
       </v-tooltip>
     </div>
     <div v-if="showFragments && showModifications && sequenceObject.modEnd && sequenceObject.aIon && !sequenceObject.bIon" class="rounded-lg mod-mass-a">{{ sequenceObject.modMass }}</div>
@@ -139,6 +151,9 @@
       </div>
       <div v-if="showInternal && internalDepth > 0">
         {{ `Internal fragments covering: ${internalDepth}` }}
+      </div>
+      <div v-if="!sequenceObject.modNote && (sequenceObject.ambStart || sequenceObject.ambCenter || sequenceObject.ambEnd)">
+        Possible site of an ambiguous modification
       </div>
     </v-tooltip>
   </div>
@@ -774,6 +789,34 @@ export default defineComponent({
 
 .mod-center-cont {
   width: 125%;
+}
+
+/* Dashed line under the residues a modification could sit on */
+.amb-marker {
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  width: 100%;
+  border-bottom: 2px dashed #e4572e;
+  pointer-events: none;
+}
+
+.amb-start {
+  left: 15%;
+  width: 85%;
+}
+
+/* Bridges the gap to the next residue of the window */
+.amb-open {
+  width: calc(100% + 4px);
+}
+
+.amb-start.amb-open {
+  width: calc(85% + 4px);
+}
+
+.mod-mass-ambiguous {
+  outline: 1px dashed #e4572e;
 }
 
 </style>

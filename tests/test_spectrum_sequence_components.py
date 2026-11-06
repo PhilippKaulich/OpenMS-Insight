@@ -788,6 +788,48 @@ class TestProteinSequenceView:
         # Not part of the cache: the same data cache serves both
         assert "modification_library" not in view._get_cache_config()
 
+    def test_edit_identifier(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [list("MK")],
+                "observed_mass": [300.0],
+                "edited": [True],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_edit",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        # Not editable by default
+        assert view._get_component_args()["editIdentifier"] is None
+        # The edited flag reaches the view with the entry
+        assert view._prepare_vue_data({"protein": 0})["sequenceData"]["edited"] is True
+
+        editable = ProteinSequenceView(
+            cache_id="seq_edit",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            edit_identifier="edit",
+        )
+        assert editable._get_component_args()["editIdentifier"] == "edit"
+        # Render-time option: the same cache serves both
+        assert "edit_identifier" not in editable._get_cache_config()
+        assert editable._get_cache_config() == view._get_cache_config()
+        restored = ProteinSequenceView(
+            cache_id="seq_edit",
+            cache_path=str(temp_cache_dir),
+            edit_identifier="edit",
+        )
+        assert restored._get_component_args()["editIdentifier"] == "edit"
+        assert restored.set_edit_identifier(None) is restored
+        assert restored._get_component_args()["editIdentifier"] is None
+
 
 def test_table_navigation_uses_render_state_manager():
     """Navigation state goes to the manager the table is rendered with, and

@@ -559,6 +559,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   variableModificationSuggestions?: Record<string, string[]> | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
+  /** Identifier edits of an identification are written to (null: not editable) */
+  editIdentifier?: string | null
   /** Fragment ion types (or fragmentation method) and tolerance to start from */
   settings?: FragmentSettings | null
   /** Sequence tag to mark (0-based residues) */

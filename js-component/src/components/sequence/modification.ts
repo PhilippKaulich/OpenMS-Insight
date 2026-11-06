@@ -93,6 +93,18 @@ export const defaultSuggestedModifications: Record<string, string[]> = {
   Y: ['Phospho (Y)', 'Nitro (Y)', 'Sulfo (Y)'],
 }
 
+/** The built-in modifications as a library, one entry per site, for
+ * matching a mass shift to names when the app gives no library. */
+export function builtInLibrary(): LibraryModification[] {
+  const entries: LibraryModification[] = []
+  for (const [site, names] of Object.entries(potentialModificationMap)) {
+    for (const name of names) {
+      entries.push({ id: `${name} (${site})`, mass: modificationMassMap[name], site })
+    }
+  }
+  return entries
+}
+
 /** One entry of a residue's modification menu. */
 export interface ModificationOption {
   title: string
