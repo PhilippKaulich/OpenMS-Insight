@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="volcano-plot">
     <div v-if="multiSelectEnabled && args.selectionPresets" class="volcano-select-bar">
       <span class="volcano-select-label">Select</span>
       <button type="button" class="volcano-select-button" :disabled="!presetCounts.changed" @click="selectPreset('changed')">
@@ -20,7 +20,10 @@
     </div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+    <div class="volcano-plot-area">
+      <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+      <MeasureHint v-if="args.measure" :measure="measure" />
+    </div>
   </div>
 </template>
 
@@ -31,6 +34,9 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { axisQuantity, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
 
 /**
  * Compute significance category for a point.
@@ -52,6 +58,7 @@ function computeSignificance(
 
 export default defineComponent({
   name: 'PlotlyVolcano',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<VolcanoPlotComponentArgs>,
@@ -65,9 +72,18 @@ export default defineComponent({
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
 
+    // Measuring: two points, labelled with their fold change and p-value differences
+    const measure = useMeasure(() => !!props.args.measure)
+    const measureSpec = computed<MeasureSpec>(() => ({
+      kind: 'points',
+      xQuantity: axisQuantity(props.args.xLabel, 'log2 Fold Change'),
+      yQuantity: axisQuantity(props.args.yLabel, '-log10(p-value)'),
+    }))
+
     // Use shared Plotly scatter composable
     const plotlyScatter = usePlotlyScatter({
       id: computed(() => `volcano-${props.index}`),
+      onPointClick: (point) => measure.pick({ x: Number(point.x), y: Number(point.y) }, measureSpec.value),
       interactivity: computed(() => props.args.interactivity || {}),
       getData: () => {
         const data = streamlitDataStore.allDataForDrawing?.volcanoData
@@ -81,6 +97,7 @@ export default defineComponent({
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      measure,
       multiSelectEnabled: multi.enabled,
       selectedCount: multi.selectedCount,
       multiSelectionKey: multi.selectionKey,
@@ -412,6 +429,24 @@ export default defineComponent({
       }))
     },
 
+    /** Identity of the plotted points: other data drops the measurements. */
+    measureKey(): string {
+      const x = this.args.log2fcColumn
+      const y = this.args.neglog10pColumn
+      return pointsKey(
+        this.volcanoData.map((row) => row[x]),
+        this.volcanoData.map((row) => row[y]),
+      )
+    },
+
+    /** Lines of the measurements. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+      })
+    },
+
     /**
      * Build Plotly layout.
      */
@@ -440,8 +475,8 @@ export default defineComponent({
           title: { text: this.args.yLabel || '-log10(p-value)' },
           rangemode: 'tozero',
         },
-        shapes: this.thresholdShapes,
-        annotations: this.pointAnnotations,
+        shapes: [...this.thresholdShapes, ...this.measureOverlay.shapes],
+        annotations: [...this.pointAnnotations, ...this.measureOverlay.annotations],
         margin: {
           l: 60,
           r: 20,
@@ -453,6 +488,26 @@ export default defineComponent({
   },
 
   watch: {
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      if (!this.isInitialized || !this.isDataReady) return
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -517,10 +572,14 @@ export default defineComponent({
 
         await Plotly.newPlot(
           this.id, this.plotData, this.layout,
-          this.getPlotConfig(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+          this.getPlotConfig([
+            ...(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
+            ...this.measure.modeBarButtons(),
+          ]),
         )
         this.setupClickHandler()
         this.setupSelectHandlers()
+        this.measure.bindLabelClicks(element)
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
@@ -633,6 +692,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.volcano-plot-area {
+  position: relative;
+}
+
 .volcano-select-bar {
   display: flex;
   flex-wrap: wrap;

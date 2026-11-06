@@ -32,6 +32,11 @@ export interface PlotlyScatterOptions {
   narrowThreshold?: number
   /** Selections a click sets besides `interactivity` (null clears one) */
   onSelect?: ComputedRef<Record<string, unknown> | undefined>
+  /**
+   * Sees a clicked point first; returning true consumes the click so it
+   * selects nothing (the measure tool in measure mode).
+   */
+  onPointClick?: (point: Plotly.PlotDatum) => boolean
 }
 
 export interface PlotlyScatterReturn {
@@ -59,7 +64,7 @@ export interface PlotlyScatterReturn {
 
 export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterReturn {
   const {
-    id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600, onSelect,
+    id, interactivity, getData, title, svgFilename, scrollZoom, narrowThreshold = 600, onSelect, onPointClick,
   } = options
 
   const streamlitDataStore = useStreamlitDataStore()
@@ -137,6 +142,9 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
     if (!plotElement) return
 
     plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {
+      const clicked = eventData.points?.[0]
+      if (clicked && onPointClick?.(clicked)) return
+
       const interactivityMap = interactivity.value
       if (!interactivityMap || Object.keys(interactivityMap).length === 0) {
         return

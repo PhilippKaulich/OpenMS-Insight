@@ -1,5 +1,6 @@
 <template>
-  <div>
+  <div class="heatmap-plot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
@@ -13,9 +14,13 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { axisQuantity } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -29,9 +34,18 @@ export default defineComponent({
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
 
+    // Measuring: two points, labelled with their x and y differences
+    const measure = useMeasure(() => !!props.args.measure)
+    const measureSpec = computed<MeasureSpec>(() => ({
+      kind: 'points',
+      xQuantity: axisQuantity(props.args.xLabel, props.args.xColumn || 'x'),
+      yQuantity: axisQuantity(props.args.yLabel, props.args.yColumn || 'y'),
+    }))
+
     // Use shared Plotly scatter composable
     const plotlyScatter = usePlotlyScatter({
       id: computed(() => `heatmap-${props.index}`),
+      onPointClick: (point) => measure.pick({ x: Number(point.x), y: Number(point.y) }, measureSpec.value),
       interactivity: computed(() => props.args.interactivity || {}),
       getData: () => {
         const data = streamlitDataStore.allDataForDrawing?.heatmapData
@@ -48,6 +62,7 @@ export default defineComponent({
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      measure,
       multiSelectEnabled: multi.enabled,
       selectedCount: multi.selectedCount,
       clearMultiSelect: multi.clear,
@@ -465,6 +480,17 @@ export default defineComponent({
     },
 
     /**
+     * Lines of the measurements. They are kept while zooming, which sends
+     * other points of the same data.
+     */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+      })
+    },
+
+    /**
      * Build Plotly layout.
      */
     layout(): Partial<Plotly.Layout> {
@@ -492,7 +518,8 @@ export default defineComponent({
         height: this.args.height || 400,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
         ...SELECTION_LAYOUT,
-        shapes: this.selectedBoxShapes,
+        shapes: [...this.selectedBoxShapes, ...this.measureOverlay.shapes],
+        annotations: this.measureOverlay.annotations,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           range: this.xRange,
@@ -512,6 +539,17 @@ export default defineComponent({
   },
 
   watch: {
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      if (!this.plotInitialized) return
+      void Plotly.relayout(this.id, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -662,6 +700,7 @@ export default defineComponent({
           console.debug('[PlotlyHeatmap] renderPlot: using Plotly.newPlot() (first render)')
           await Plotly.newPlot(this.id, this.data, this.layout, this.getHeatmapPlotConfig())
           this.setupPlotEventHandlers()
+          this.measure.bindLabelClicks(element)
           this.plotInitialized = true
         } else {
           // Subsequent renders: use react for efficient updates
@@ -702,6 +741,7 @@ export default defineComponent({
       }
       const buttons = [colorbarToggleButton]
       if (this.multiSelectEnabled) buttons.push(clearSelectionButton(() => this.clearMultiSelect()))
+      buttons.push(...this.measure.modeBarButtons())
       return this.getPlotConfig(buttons)
     },
 
@@ -747,6 +787,8 @@ export default defineComponent({
 
       // A click on a point inside a box also selects the box
       plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {
+        // In measure mode the click measured (see setup)
+        if (this.measure.active) return
         const point = eventData.points?.[0]
         if (point && typeof point.x === 'number' && typeof point.y === 'number') {
           this.selectBoxAt(point.x, point.y)
@@ -969,6 +1011,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.heatmap-plot {
+  position: relative;
+}
+
 .heatmap-container {
   position: relative;
   width: 100%;

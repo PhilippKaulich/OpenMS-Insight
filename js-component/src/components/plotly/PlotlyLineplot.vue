@@ -1,5 +1,8 @@
 <template>
-  <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  <div class="lineplot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -9,6 +12,9 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { LinePlotComponentArgs, PlotData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -28,6 +34,7 @@ const DEFAULT_CONFIG = {
 
 export default defineComponent({
   name: 'PlotlyLineplot',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<LinePlotComponentArgs>,
@@ -38,10 +45,11 @@ export default defineComponent({
       required: true,
     },
   },
-  setup() {
+  setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore }
+    const measure = useMeasure(() => !!props.args.measure)
+    return { streamlitDataStore, selectionStore, measure }
   },
   data() {
     return {
@@ -655,9 +663,42 @@ export default defineComponent({
           t: this.args.title ? 50 : 20,
           b: 50,
         },
-        shapes: this.annotationShapes,
-        annotations: this.peakAnnotations,
+        shapes: [...this.annotationShapes, ...this.measureOverlay.shapes],
+        annotations: [...this.peakAnnotations, ...this.measureOverlay.annotations],
       }
+    },
+
+    /**
+     * Differences along x. On an m/z axis they are matched to residue masses
+     * at 1+ and 2+; on any other axis only the difference is shown.
+     */
+    measureSpec(): MeasureSpec {
+      const isMz = isMzLabel(this.args.xLabel)
+      return {
+        kind: 'span',
+        xQuantity: isMz ? 'm/z' : axisQuantity(this.args.xLabel, 'x'),
+        charges: isMz ? MEASURE_CHARGES : [],
+        tolerance: this.args.measureTolerance,
+        residues: this.args.measureResidues,
+      }
+    },
+
+    measureTitle(): string {
+      return `Measure: click two peaks for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
+    },
+
+    /** Identity of the plotted peaks: other peaks drop the measurements. */
+    measureKey(): string {
+      return pointsKey(this.plotData?.x_values, this.plotData?.y_values)
+    },
+
+    /** Brackets of the measurements, spaced by the tallest visible peak. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+        yScale: this.yRange[1] / 1.8,
+      })
     },
 
     cssCustomProperties(): Record<string, string> {
@@ -670,6 +711,19 @@ export default defineComponent({
   },
 
   watch: {
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+
+    // Measurements added or removed. A full draw, as for a selection: a
+    // relayout would let Plotly autosize the figure to its container
+    'measure.revision'() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -787,6 +841,7 @@ export default defineComponent({
               }
             },
           },
+          ...this.measure.modeBarButtons(this.measureTitle),
         ]
 
         await Plotly.newPlot(this.id, this.traces, this.layout, {
@@ -815,6 +870,8 @@ export default defineComponent({
           plotElement.on('plotly_relayout', (eventData: any) => {
             this.onRelayout(eventData)
           })
+
+          this.measure.bindLabelClicks(plotElement)
         }
       } catch (error) {
         console.error('PlotlyLineplot: Error rendering plot:', error)
@@ -941,7 +998,33 @@ export default defineComponent({
       return [newLeft, newRight]
     },
 
+    /** Index of the peak nearest to x. */
+    nearestPeakIndex(x: number): number | undefined {
+      const xValues = this.plotData?.x_values
+      if (!xValues || xValues.length === 0) return undefined
+      let nearestIndex = 0
+      let nearestDistance = Infinity
+      for (let i = 0; i < xValues.length; i++) {
+        const distance = Math.abs(xValues[i] - x)
+        if (distance < nearestDistance) {
+          nearestDistance = distance
+          nearestIndex = i
+        }
+      }
+      return nearestIndex
+    },
+
     onPlotClick(eventData: any): void {
+      // In measure mode a click picks a peak to measure, not a selection
+      if (this.measure.active) {
+        const point = eventData?.points?.[0]
+        const index = point ? this.nearestPeakIndex(point.x) : undefined
+        if (index !== undefined && this.plotData) {
+          this.measure.pick({ x: this.plotData.x_values[index], y: this.plotData.y_values[index] }, this.measureSpec)
+        }
+        return
+      }
+
       // Only handle clicks if interactivity is configured
       if (!this.interactivity || Object.keys(this.interactivity).length === 0) {
         return
@@ -1025,6 +1108,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.lineplot {
+  position: relative;
+}
+
 .plot-container {
   position: relative;
   width: 100%;

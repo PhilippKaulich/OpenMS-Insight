@@ -5,6 +5,10 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.measure import (
+    measure_args,
+    validate_measure,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -64,6 +68,7 @@ class SeriesPlot(BaseComponent):
         font: dict[str, str] | None = None,
         y_range_mode: str = "nonnegative",
         hover_column: str | None = None,
+        measure: bool = True,
         **kwargs,
     ):
         """
@@ -101,6 +106,14 @@ class SeriesPlot(BaseComponent):
                 signed values such as mass errors).
             hover_column: Column whose text is shown when hovering a point
                 (e.g. a fragment name), above its x and y values.
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two points draws a
+                bracket labelled with their x difference ("ΔRT 12.400"). Esc
+                cancels a half-finished measurement, clicking a label removes
+                it and "Clear measurements" removes all; they are cleared when
+                other data is plotted and are part of the SVG download. With
+                measure mode off, clicks select as before. Render-time only:
+                not part of the cache.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):
@@ -127,6 +140,9 @@ class SeriesPlot(BaseComponent):
         self._font = dict(font) if font else None
         self._y_range_mode = y_range_mode
         self._hover_column = hover_column
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
 
         super().__init__(
             cache_id=cache_id,
@@ -269,4 +285,5 @@ class SeriesPlot(BaseComponent):
             args["svgFilename"] = self._svg_filename
         if self._font:
             args["font"] = self._font
+        args.update(measure_args(self._measure))
         return args
