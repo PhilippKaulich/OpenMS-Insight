@@ -6,17 +6,16 @@ data, enabling efficient visualization of datasets with millions of points.
 Supports both streaming (lazy) and eager downsampling approaches.
 """
 
+import importlib.util
 import math
 
 import numpy as np
 import polars as pl
 
-try:
-    from scipy.stats import binned_statistic_2d
-
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
+# scipy.stats is imported where it is used: importing it takes about half a
+# second (longer on a cold disk), which every app paid on its first page load
+# even when no heatmap was downsampled.
+HAS_SCIPY = importlib.util.find_spec("scipy") is not None
 
 
 def compute_optimal_bins(
@@ -190,6 +189,8 @@ def downsample_2d(
     x_array = collected[x_column].to_numpy()
     y_array = collected[y_column].to_numpy()
     intensity_array = collected[intensity_column].to_numpy()
+
+    from scipy.stats import binned_statistic_2d
 
     # Compute 2D bins
     count, _, _, mapping = binned_statistic_2d(

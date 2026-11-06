@@ -141,3 +141,16 @@ class TestDownsampleDescendingParameter:
         assert 500.0 in intensities
         assert 400.0 in intensities
         assert 300.0 in intensities
+
+
+def test_import_leaves_scipy_stats_unloaded():
+    """Importing the package must not load scipy.stats: it takes half a second
+    or more, and apps pay it on the first page load after every restart."""
+    import subprocess
+    import sys
+
+    code = "import sys, openms_insight; print('scipy.stats' in sys.modules)"
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "False"
