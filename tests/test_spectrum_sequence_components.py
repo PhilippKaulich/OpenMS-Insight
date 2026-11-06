@@ -736,6 +736,25 @@ class TestProteinSequenceView:
             is False
         )
 
+    def test_proforma_input_args(self, mock_streamlit, temp_cache_dir: Path):
+        view = ProteinSequenceView(
+            cache_id="seq_proforma_input",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaInput"] is False
+        assert view.set_proforma_input() is view
+        assert view._get_component_args()["proformaInput"] is True
+        assert "proforma_input" not in view._get_cache_config()
+
     def test_modification_picker_from_pyopenms(
         self, mock_streamlit, temp_cache_dir: Path
     ):

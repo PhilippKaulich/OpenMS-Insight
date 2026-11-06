@@ -411,14 +411,14 @@
         <!-- The example shows only while typing, under the raised label -->
         <v-textarea
           v-model="customSequenceInput"
-          label="Protein Sequence"
-          :placeholder="sequenceInputFocused ? 'Enter amino acid sequence (e.g., MKFLVNVALVF...)' : undefined"
+          :label="args.proformaInput ? 'Protein sequence or ProForma' : 'Protein Sequence'"
+          :placeholder="sequenceInputFocused ? (args.proformaInput ? 'e.g. MKFLVNVALVF... or <[Carbamidomethyl]@C>[Acetyl]-MK[Acetyl]S[+79.9663]...' : 'Enter amino acid sequence (e.g., MKFLVNVALVF...)') : undefined"
           @update:focused="sequenceInputFocused = $event"
           :error-messages="sequenceInputError"
           :rows="modificationItems.length > 0 ? 3 : 6"
           auto-grow
           counter
-          hint="Enter single-letter amino acid codes only"
+          :hint="args.proformaInput ? 'Single-letter codes, or ProForma with fixed, terminal and residue modifications' : 'Enter single-letter amino acid codes only'"
           persistent-hint
         >
           <template #prepend-inner>
@@ -494,7 +494,15 @@ import {
   localizeModifications,
   type ModificationLocalization,
 } from './modification-localization'
-import { fixedFromId, toProForma, type ProFormaModification } from './proforma'
+import {
+  findLibraryId,
+  fixedFromId,
+  formatMass,
+  parseProForma,
+  ProFormaError,
+  toProForma,
+  type ProFormaModification,
+} from './proforma'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -1038,6 +1046,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // An error about the input goes once the input changes
+    customSequenceInput() {
+      this.sequenceInputError = ''
+    },
     // The residue menus read the variable-modification library from the store
     'args.variableModificationLibrary': {
       handler(library) {
@@ -2039,7 +2051,97 @@ export default defineComponent({
       this.customSequenceInput = ''
       this.sequenceInputError = ''
     },
+    // A ProForma input as the view's sequence, fixed modification ids and
+    // per-residue masses; throws ProFormaError with a message for the dialog
+    readProForma(text: string): {
+      sequence: string
+      fixedIds: string[]
+      masses: Record<number, number>
+      labels: Record<number, string>
+    } {
+      const parsed = parseProForma(text)
+      const residues = parsed.sequence
+      const fixedLibrary = this.args.modificationLibrary ?? []
+      const variableLibrary = this.args.variableModificationLibrary ?? []
+      const fixedIds: string[] = []
+      for (const f of parsed.fixed) {
+        const residue = f.site === 'N-term' ? residues[0] : f.site === 'C-term' ? residues[residues.length - 1] : undefined
+        const id = findLibraryId(f.name, f.site, fixedLibrary.map((m) => m.id), residue)
+        if (!id || !this.args.modificationsIdentifier) {
+          throw new ProFormaError(`Unknown fixed modification ${f.name} on ${f.site}`)
+        }
+        if (!fixedIds.includes(id)) fixedIds.push(id)
+      }
+      const masses: Record<number, number> = {}
+      const labels: Record<number, string> = {}
+      for (const m of parsed.modifications) {
+        const site = m.index < 0 ? 'N-term' : m.index >= residues.length ? 'C-term' : residues[m.index]
+        const where = m.index < 0 ? 'the N-terminus' : m.index >= residues.length ? 'the C-terminus' : `${site}${m.index + 1}`
+        let mass = m.mass
+        let label = m.name
+        if (m.name) {
+          const residue = m.index < 0 ? residues[0] : residues[residues.length - 1]
+          for (const library of [variableLibrary, fixedLibrary]) {
+            const id = findLibraryId(m.name, site, library.map((e) => e.id), residue)
+            const entry = id ? library.find((e) => e.id === id) : undefined
+            if (entry) {
+              mass ??= entry.mass
+              label = entry.id
+              break
+            }
+          }
+        }
+        if (mass === undefined) {
+          throw new ProFormaError(`Unknown modification ${m.name} on ${where}: give its mass, e.g. [+42.0106]`)
+        }
+        masses[m.index] = (masses[m.index] ?? 0) + mass
+        const text = label ?? formatMass(mass)
+        labels[m.index] = labels[m.index] ? `${labels[m.index]} + ${text}` : text
+      }
+      return { sequence: residues, fixedIds, masses, labels }
+    },
     submitCustomSequence(): void {
+      const input = this.customSequenceInput
+      if (this.args.proformaInput && /[[\]<>(){}?-]/.test(input)) {
+        let read
+        try {
+          read = this.readProForma(input)
+        } catch (error) {
+          this.sequenceInputError = error instanceof Error ? error.message : String(error)
+          return
+        }
+        if (this.isEdited) {
+          if (read.fixedIds.length > 0) {
+            this.sequenceInputError = 'Fixed modifications cannot be set on an identification'
+            return
+          }
+          this.writeEdit({
+            action: 'update',
+            sequence: read.sequence,
+            start_position: 0,
+            end_position: read.sequence.length - 1,
+            modifications: Object.entries(read.masses).map(([index, mass]) => ({
+              start: Number(index),
+              end: Number(index),
+              mass_diff: mass,
+              labels: read.labels[Number(index)] ?? '',
+            })),
+          })
+        } else {
+          if (read.fixedIds.length > 0 && this.args.modificationsIdentifier) {
+            this.customModifications = [...new Set([...this.customModifications, ...read.fixedIds])]
+            this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...this.customModifications])
+          }
+          if (this.args.sequenceIdentifier) {
+            this.selectionStore.updateSelection(this.args.sequenceIdentifier, read.sequence)
+          }
+          this.variableModData.setAll(read.masses, read.labels)
+        }
+        this.sequenceDialog = false
+        this.customSequenceInput = ''
+        this.sequenceInputError = ''
+        return
+      }
       if (this.isEdited) {
         this.submitEditedSequence(this.customSequenceInput.toUpperCase().replace(/\s+/g, ''))
         this.sequenceDialog = false

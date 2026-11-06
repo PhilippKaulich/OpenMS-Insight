@@ -263,6 +263,7 @@ class ProteinSequenceView(BaseComponent):
         modifications_identifier: str | None = None,
         modifications: list[str] | None = None,
         proforma_copy: bool = False,
+        proforma_input: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
@@ -361,6 +362,11 @@ class ProteinSequenceView(BaseComponent):
             proforma_copy: Show a "Copy as ProForma" button that copies the
                 shown proteoform in ProForma 2.0 notation, with its fixed,
                 localized and user-set modifications.
+            proforma_input: The "Change sequence" dialog also reads ProForma
+                2.0: global fixed modifications (``<[Carbamidomethyl]@C>``,
+                looked up in ``modification_library``), terminal and residue
+                modifications by name (looked up in the libraries) or mass,
+                which become the residues' variable modifications.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -419,6 +425,7 @@ class ProteinSequenceView(BaseComponent):
         )
         # Per render, not cached
         self._proforma_copy = bool(proforma_copy)
+        self._proforma_input = bool(proforma_input)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
         )
@@ -718,6 +725,18 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_copy = bool(enabled)
         return self
 
+    def set_proforma_input(self, enabled: bool = True) -> "ProteinSequenceView":
+        """Let the "Change sequence" dialog read ProForma.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``proforma_input`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._proforma_input = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -730,6 +749,7 @@ class ProteinSequenceView(BaseComponent):
             "modificationsIdentifier": self._modifications_identifier,
             "modifications": self._modifications,
             "proformaCopy": self._proforma_copy,
+            "proformaInput": self._proforma_input,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,
