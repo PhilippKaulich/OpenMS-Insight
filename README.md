@@ -955,6 +955,14 @@ table(state_manager=state_manager, height=300)
 plot(state_manager=state_manager, height=400)
 ```
 
+### Theme
+
+Components follow the app's Streamlit theme. The light and dark colours are
+used as before. The theme's fonts (`font`, `codeFont`, `headingFont`) are
+loaded inside the components when the app declares them with
+`[[theme.fontFaces]]`. The primary colour is used for the selected table row,
+check boxes and the buttons in the table dialogs.
+
 ## Differential Expression Analysis
 
 `openms_insight.analysis` is the pipeline that feeds `VolcanoPlot`, `PCAPlot` and
