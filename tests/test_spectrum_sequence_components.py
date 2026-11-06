@@ -679,6 +679,37 @@ class TestProteinSequenceView:
         assert args["modificationsIdentifier"] == "fixed_mods"
         assert args["modifications"] == ["Carbamidomethyl (C)"]
 
+    def test_proforma_copy_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_proforma",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaCopy"] is False
+        assert view.set_proforma_copy() is view
+        assert view._get_component_args()["proformaCopy"] is True
+
+        # Not part of the cache: a view loaded from it starts from its own arg
+        cached = ProteinSequenceView(
+            cache_id="seq_proforma",
+            cache_path=str(temp_cache_dir),
+            proforma_copy=True,
+        )
+        assert cached._get_component_args()["proformaCopy"] is True
+        assert (
+            cached.set_proforma_copy(False)._get_component_args()["proformaCopy"]
+            is False
+        )
+
     def test_modification_picker_from_pyopenms(
         self, mock_streamlit, temp_cache_dir: Path
     ):

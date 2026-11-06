@@ -3,7 +3,8 @@
  * `imageFormat` argument names (see imageExport.ts).
  */
 
-import Plotly from 'plotly.js-dist-min'
+import type Plotly from 'plotly.js-dist-min'
+import { plotly } from '@/plotly/current'
 import { RASTER_SCALE, downloadTitle, type ImageFormat } from './imageExport'
 
 /** Icon of the download button of the spectrum views (LinePlot, DeconvolvedSpectrum). */
@@ -34,11 +35,11 @@ export function plotlyDownloadButton(options: PlotlyDownloadOptions): Plotly.Mod
   return {
     title: downloadTitle(format),
     name: 'toImageSvg',
-    icon: options.icon ?? Plotly.Icons.camera,
+    icon: options.icon ?? plotly().Icons.camera,
     click: (plotElement: Plotly.PlotlyHTMLElement) => {
       const current = options.format()
       const raster = current !== 'svg'
-      Plotly.downloadImage(plotElement, {
+      plotly().downloadImage(plotElement, {
         filename: options.filename(),
         format: current,
         width: raster ? null : (options.width ?? 1200),

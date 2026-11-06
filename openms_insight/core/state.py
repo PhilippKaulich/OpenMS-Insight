@@ -336,10 +336,16 @@ class StateManager:
         return modified
 
     def clear(self) -> None:
-        """Clear all selections and reset counters."""
-        self._state["selections"] = {}
-        self._state["selection_counter"] = 0
-        self._state["pagination_counter"] = 0
+        """Clear all selections.
+
+        The views still hold the selections, under the counters they last had
+        from Python. The cleared selections stay as None and both counters move
+        on, so the views take the cleared state instead of sending their old
+        selections back (each of which would be applied and cost a rerun).
+        """
+        self._state["selections"] = dict.fromkeys(self._state["selections"])
+        self._state["selection_counter"] += 1
+        self._state["pagination_counter"] += 1
 
     def __repr__(self) -> str:
         return (

@@ -60,6 +60,19 @@
             </v-tooltip>
           </v-btn>
           <v-btn
+            v-if="args.proformaCopy"
+            variant="text"
+            icon="mdi-code-brackets"
+            size="large"
+            :disabled="sequence.length === 0"
+            @click="copyProForma"
+          >
+            <v-icon>mdi-code-brackets</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Copy as ProForma
+            </v-tooltip>
+          </v-btn>
+          <v-btn
             v-if="shouldShowSequenceChangeButton"
             variant="text"
             icon="mdi-dna"
@@ -481,6 +494,7 @@ import {
   localizeModifications,
   type ModificationLocalization,
 } from './modification-localization'
+import { fixedFromId, toProForma, type ProFormaModification } from './proforma'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -1857,6 +1871,42 @@ export default defineComponent({
         this.copySnackbar = true
       } catch (error) {
         this.copySnackbarText = 'Failed to copy sequence to clipboard'
+        this.copySnackbar = true
+        console.error('Copy failed:', error)
+      }
+    },
+    proForma(): string {
+      // An edited identification carries its modifications in the residue
+      // menus' store (below) only
+      const searched = this.isEdited ? [] : this.modifications
+      const modifications: ProFormaModification[] = searched.map((m) => ({
+        start: m.start,
+        end: m.end,
+        mass: m.mass_diff,
+      }))
+      for (const [index, mass] of Object.entries(this.variableModifications)) {
+        if (mass) modifications.push({ start: Number(index), end: Number(index), mass })
+      }
+      return toProForma({
+        sequence: this.sequence,
+        start: this.sequence_start,
+        end: this.sequence_end,
+        fixed: (this.args.modifications ?? []).map(fixedFromId),
+        modifications,
+      })
+    },
+    async copyProForma(): Promise<void> {
+      try {
+        const text = this.proForma()
+        if (!text) return
+        if (!navigator.clipboard) {
+          throw new Error('Clipboard API not available')
+        }
+        await navigator.clipboard.writeText(text)
+        this.copySnackbarText = 'ProForma copied to clipboard!'
+        this.copySnackbar = true
+      } catch (error) {
+        this.copySnackbarText = 'Failed to copy ProForma to clipboard'
         this.copySnackbar = true
         console.error('Copy failed:', error)
       }
