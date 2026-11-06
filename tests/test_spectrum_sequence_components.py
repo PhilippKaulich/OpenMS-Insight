@@ -355,6 +355,32 @@ class TestDeconvolvedSpectrum:
         assert args["title"] == "Annotated Spectrum"
         assert args["massIdentifier"] == "mass"
         assert args["ladder"] is None
+        assert "fragmentMatchesIdentifier" not in args
+        assert "spectrumKeyColumn" not in args
+
+    def test_fragment_matches_identifier(
+        self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="anno_matches",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            fragment_matches_identifier="matches",
+            cache_path=str(temp_cache_dir),
+        )
+        args = spectrum._get_component_args()
+        assert args["fragmentMatchesIdentifier"] == "matches"
+        # Matches apply to the spectrum named by the first filter's column
+        assert args["spectrumKeyColumn"] == "scan_idx"
+        # Render-time option: not part of the cache
+        assert "fragment_matches_identifier" not in spectrum._get_cache_config()
+        restored = DeconvolvedSpectrum(
+            cache_id="anno_matches", cache_path=str(temp_cache_dir)
+        )
+        assert "fragmentMatchesIdentifier" not in restored._get_component_args()
+        assert restored.set_fragment_matches_identifier("matches") is restored
+        assert restored._get_component_args()["spectrumKeyColumn"] == "scan_idx"
 
     def test_ladder(self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra):
         spectrum = DeconvolvedSpectrum(
@@ -829,6 +855,54 @@ class TestProteinSequenceView:
         assert restored._get_component_args()["editIdentifier"] == "edit"
         assert restored.set_edit_identifier(None) is restored
         assert restored._get_component_args()["editIdentifier"] is None
+
+    def test_fragment_matches(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0, 1],
+                "scan_idx": [7, 9],
+                "sequence": [list("MK"), list("GA")],
+                "masses": [[1000.0], [500.0]],
+                "precursor_mass": [1000.0, 500.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_matches",
+            data=data,
+            filters={"protein": "hit_index"},
+            mass_column="masses",
+            precursor_mass_column="precursor_mass",
+            cache_path=str(temp_cache_dir),
+        )
+        # Nothing is published and no key is sent by default
+        assert view._get_component_args()["fragmentMatchesIdentifier"] is None
+        assert "key" not in view._prepare_vue_data({"protein": 1})["spectrumData"]
+
+        keyed = ProteinSequenceView(
+            cache_id="seq_matches_keyed",
+            data=data,
+            filters={"protein": "hit_index"},
+            mass_column="masses",
+            precursor_mass_column="precursor_mass",
+            spectrum_key_column="scan_idx",
+            fragment_matches_identifier="matches",
+            cache_path=str(temp_cache_dir),
+        )
+        assert keyed._get_component_args()["fragmentMatchesIdentifier"] == "matches"
+        # The spectrum key names the spectrum the matches were made on
+        assert keyed._prepare_vue_data({"protein": 1})["spectrumData"]["key"] == 9
+        # The key column shapes the cache, the identifier does not
+        assert keyed._get_cache_config()["spectrum_key_column"] == "scan_idx"
+        assert "fragment_matches_identifier" not in keyed._get_cache_config()
+        assert "spectrum_key_column" not in view._get_cache_config()
+
+        restored = ProteinSequenceView(
+            cache_id="seq_matches_keyed", cache_path=str(temp_cache_dir)
+        )
+        assert restored._prepare_vue_data({"protein": 0})["spectrumData"]["key"] == 7
+        assert restored._get_component_args()["fragmentMatchesIdentifier"] is None
+        assert restored.set_fragment_matches_identifier("matches") is restored
+        assert restored._get_component_args()["fragmentMatchesIdentifier"] == "matches"
 
 
 def test_table_navigation_uses_render_state_manager():

@@ -51,6 +51,15 @@ class DeconvolvedSpectrum(BaseComponent):
       a ladder mass switches to its raw peaks as in ``'annotated'``; a back button
       returns. Set the tag at render time with :meth:`set_ladder`.
 
+    With ``fragment_matches_identifier`` set to the identifier a
+    ``ProteinSequenceView`` writes its matched fragment ions to, every view
+    marks those ions on the spectrum the sequence view matched: the matched
+    masses (and in the m/z views their signal peaks) are coloured by the end
+    of the sequence they cover (N-terminal a/b/c, C-terminal x/y/z, internal)
+    and labelled with the ion's name. The marks follow the sequence view: an
+    edited sequence or modification, another ion type or tolerance redraws
+    them. A toolbar toggle hides them.
+
     In the m/z views, :meth:`set_envelope` adds the theoretical isotope envelope
     of the selected mass as open circles on its raw peaks, so the fit of the
     observed peaks can be judged by eye.
@@ -101,6 +110,7 @@ class DeconvolvedSpectrum(BaseComponent):
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
         image_format: str | None = None,
+        fragment_matches_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -132,7 +142,8 @@ class DeconvolvedSpectrum(BaseComponent):
             drilldown_title: Title while a ladder view shows the raw peaks of a
                 mass (default: "Annotated Spectrum").
             styling: Colour overrides: highlightColor, selectedColor,
-                unhighlightedColor, highlightHiddenColor and annotationColors
+                unhighlightedColor, highlightHiddenColor, the fragment ion
+                colours nTermColor, cTermColor and internalColor, and annotationColors
                 (massButton, selectedMassButton, sequenceArrow,
                 selectedSequenceArrow, background, buttonHover).
             config: Label layout overrides: xPosScalingFactor (27.5),
@@ -158,6 +169,13 @@ class DeconvolvedSpectrum(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            fragment_matches_identifier: Identifier a ``ProteinSequenceView``
+                writes its matched fragment ions to (its
+                ``fragment_matches_identifier``). The ions are marked when the
+                ``spectrum`` they were matched on equals this spectrum's value
+                of its first filter column (or when either is unknown), so give
+                the sequence view that column as ``spectrum_key_column``.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if view not in VIEWS:
@@ -188,6 +206,8 @@ class DeconvolvedSpectrum(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+        # Render-time option, kept out of the cache config
+        self._fragment_matches_identifier = fragment_matches_identifier
 
         super().__init__(
             cache_id=cache_id,
@@ -424,6 +444,20 @@ class DeconvolvedSpectrum(BaseComponent):
                 self._isolation_window["target"] = float(target_mz)
         return self
 
+    def set_fragment_matches_identifier(
+        self, identifier: str | None
+    ) -> "DeconvolvedSpectrum":
+        """Mark the fragment ions a ``ProteinSequenceView`` writes to ``identifier``.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``fragment_matches_identifier`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._fragment_matches_identifier = identifier
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         view = VIEWS[self._view]
         args: dict[str, Any] = {
@@ -448,6 +482,11 @@ class DeconvolvedSpectrum(BaseComponent):
         # Only when set, so the args of other callers stay as they were
         if self._isolation_window:
             args["isolationWindow"] = self._isolation_window
+        if self._fragment_matches_identifier:
+            args["fragmentMatchesIdentifier"] = self._fragment_matches_identifier
+            # The spectrum is told apart by its first filter column, which is
+            # always among the data sent to Vue
+            args["spectrumKeyColumn"] = next(iter(self._filters.values()), None)
         args.update(
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )

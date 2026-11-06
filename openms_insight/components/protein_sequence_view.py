@@ -255,6 +255,7 @@ class ProteinSequenceView(BaseComponent):
         mass_column: str | None = "masses",
         precursor_mass_column: str | None = "precursor_mass",
         fragmentation_column: str | None = None,
+        spectrum_key_column: str | None = None,
         mass_identifier: str | None = None,
         aa_identifier: str | None = None,
         sequence_identifier: str | None = None,
@@ -271,6 +272,7 @@ class ProteinSequenceView(BaseComponent):
         accent_color: str | None = None,
         fragment_identifier: str | None = None,
         edit_identifier: str | None = None,
+        fragment_matches_identifier: str | None = None,
         entry_title: str = "Identification",
         observed_mass_label: str = "Observed mass",
         image_format: str | None = None,
@@ -297,6 +299,10 @@ class ProteinSequenceView(BaseComponent):
                 None: no spectrum (fragments only from annotated_fragments).
             precursor_mass_column: Column with the precursor mass, shown against
                 the theoretical mass when no observed mass is given.
+            spectrum_key_column: Column identifying the spectrum of a row (e.g.
+                its scan index), sent with the matched fragments (see
+                ``fragment_matches_identifier``) so a spectrum view marks them
+                only on that spectrum.
             fragmentation_column: Column with the fragmentation method of the
                 spectrum (a ``fragmentation`` value of ``settings``, e.g.
                 'ETD' or 'HCD'; None or unknown keeps the current ion series).
@@ -374,6 +380,19 @@ class ProteinSequenceView(BaseComponent):
                 labels}; -1 the N-terminus, the sequence length the
                 C-terminus). ``'reset'``: back to the search result.
                 Render-time only: not part of the cache.
+            fragment_matches_identifier: Identifier the matched fragment
+                ions are written to whenever they change (another entry or
+                spectrum, an edited sequence or modification, the ion types,
+                the tolerance), so spectra can mark them: a dict with
+                ``spectrum`` (the value of ``spectrum_key_column``, or None),
+                ``tolerance`` ({'value', 'unit'}) and ``fragments``, one dict
+                per matched ion with ``name`` (e.g. 'b12'), ``ion`` (its ion
+                type, e.g. 'b' or 'z+1'), ``kind`` ('N', 'C' or 'I'),
+                ``mass`` (the observed mass), ``massIndex`` (its index in the
+                spectrum's mass list, or None) and, for annotated fragments,
+                ``charge`` and ``mz``. None while no spectrum is matched. Pass
+                the same identifier to ``DeconvolvedSpectrum``. Render-time
+                only: not part of the cache.
             entry_title: Heading of the mass summary of an entry with an
                 observed mass.
             observed_mass_label: Label of the entry's observed mass in that
@@ -390,6 +409,7 @@ class ProteinSequenceView(BaseComponent):
         self._mass_column = mass_column
         self._precursor_mass_column = precursor_mass_column
         self._fragmentation_column = fragmentation_column
+        self._spectrum_key_column = spectrum_key_column
         self._mass_identifier = mass_identifier
         self._aa_identifier = aa_identifier
         self._sequence_identifier = sequence_identifier
@@ -413,6 +433,8 @@ class ProteinSequenceView(BaseComponent):
         self._fragment_identifier = fragment_identifier
         # Render-time option, kept out of the cache config
         self._edit_identifier = edit_identifier
+        # Render-time option, kept out of the cache config
+        self._fragment_matches_identifier = fragment_matches_identifier
         self._entry_title = entry_title
         self._observed_mass_label = observed_mass_label
         # Sequence tag marked on the sequence (set per render, not cached)
@@ -432,6 +454,7 @@ class ProteinSequenceView(BaseComponent):
             mass_column=mass_column,
             precursor_mass_column=precursor_mass_column,
             fragmentation_column=fragmentation_column,
+            spectrum_key_column=spectrum_key_column,
             mass_identifier=mass_identifier,
             aa_identifier=aa_identifier,
             sequence_identifier=sequence_identifier,
@@ -461,6 +484,8 @@ class ProteinSequenceView(BaseComponent):
         }
         if self._fragmentation_column is not None:
             config["fragmentation_column"] = self._fragmentation_column
+        if self._spectrum_key_column is not None:
+            config["spectrum_key_column"] = self._spectrum_key_column
         if self._accent_color is not None:
             config["accent_color"] = self._accent_color
         if self._fragment_identifier is not None:
@@ -476,6 +501,7 @@ class ProteinSequenceView(BaseComponent):
         self._mass_column = config.get("mass_column")
         self._precursor_mass_column = config.get("precursor_mass_column")
         self._fragmentation_column = config.get("fragmentation_column")
+        self._spectrum_key_column = config.get("spectrum_key_column")
         self._mass_identifier = config.get("mass_identifier")
         self._aa_identifier = config.get("aa_identifier")
         self._sequence_identifier = config.get("sequence_identifier")
@@ -496,6 +522,7 @@ class ProteinSequenceView(BaseComponent):
                 self._mass_column,
                 self._precursor_mass_column,
                 self._fragmentation_column,
+                self._spectrum_key_column,
             )
             if c is not None
         ]
@@ -582,6 +609,10 @@ class ProteinSequenceView(BaseComponent):
                 )
                 if self._fragmentation_column is not None:
                     spectrum_data["fragmentation"] = row.get(self._fragmentation_column)
+                if self._spectrum_key_column is not None:
+                    spectrum_data["key"] = _json_safe(
+                        row.get(self._spectrum_key_column)
+                    )
         payload = {"sequenceData": sequence_data, "spectrumData": spectrum_data}
         data_hash = hashlib.md5(
             json.dumps(payload, sort_keys=True, default=str).encode()
@@ -661,6 +692,20 @@ class ProteinSequenceView(BaseComponent):
         self._edit_identifier = identifier
         return self
 
+    def set_fragment_matches_identifier(
+        self, identifier: str | None
+    ) -> "ProteinSequenceView":
+        """Write the matched fragment ions to ``identifier`` for spectra to mark.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``fragment_matches_identifier`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._fragment_matches_identifier = identifier
+        return self
+
     def set_proforma_copy(self, enabled: bool = True) -> "ProteinSequenceView":
         """Show or hide the "Copy as ProForma" button.
 
@@ -694,6 +739,7 @@ class ProteinSequenceView(BaseComponent):
             "accentColor": self._accent_color,
             "fragmentIdentifier": self._fragment_identifier,
             "editIdentifier": self._edit_identifier,
+            "fragmentMatchesIdentifier": self._fragment_matches_identifier,
             "entryTitle": self._entry_title,
             "observedMassLabel": self._observed_mass_label,
         }

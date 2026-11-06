@@ -507,7 +507,35 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, Mea
   } | null
   /** Isolation window shaded in the m/z views */
   isolationWindow?: { lower: number; upper: number; target?: number } | null
+  /** Identifier a ProteinSequenceView writes its matched fragment ions to */
+  fragmentMatchesIdentifier?: string | null
+  /** Data column whose value tells this spectrum apart (FragmentMatches.spectrum) */
+  spectrumKeyColumn?: string | null
   height?: number
+}
+
+/** A fragment ion matched by a ProteinSequenceView, for spectra to mark. */
+export interface MatchedFragmentIon {
+  /** e.g. 'b12' */
+  name: string
+  /** Ion type, e.g. 'b' or 'z+1' */
+  ion: string
+  kind: 'N' | 'C' | 'I'
+  /** Observed (deconvolved) mass */
+  mass: number
+  /** Index of the mass in the spectrum's mass list, or null */
+  massIndex: number | null
+  /** Annotated fragments: the charge and m/z of their envelope */
+  charge?: number
+  mz?: number
+}
+
+/** What a ProteinSequenceView writes to fragmentMatchesIdentifier. */
+export interface FragmentMatches {
+  /** The spectrum the fragments were matched on (spectrum_key_column), or null */
+  spectrum: unknown
+  tolerance: { value: number; unit: string }
+  fragments: MatchedFragmentIon[]
 }
 
 /**
@@ -559,6 +587,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   variableModificationSuggestions?: Record<string, string[]> | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
+  /** Identifier the matched fragment ions are written to (FragmentMatches) */
+  fragmentMatchesIdentifier?: string | null
   /** Identifier edits of an identification are written to (null: not editable) */
   editIdentifier?: string | null
   /** Fragment ion types (or fragmentation method) and tolerance to start from */

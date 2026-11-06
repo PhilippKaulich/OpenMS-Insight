@@ -639,6 +639,8 @@ spectrum(key="spectrum", state_manager=state_manager)
 - `annotated`: the raw peaks, with the signal peaks of the selected mass highlighted and each charge state labelled `z=N`.
 - `ladder`: the masses with a sequence tag drawn as a ladder, set per render with `set_ladder(masses, sequence)`. Clicking a ladder mass shows its raw peaks.
 
+**Fragment ions of a sequence view.** With `fragment_matches_identifier=` (or `set_fragment_matches_identifier()` per render) set to the identifier a `ProteinSequenceView` publishes its matched fragments to, the spectrum colours the masses and raw peaks those ions explain by kind (N-terminal, C-terminal, internal) and labels them. Raw peaks are the signal peaks of a matched mass and, for annotated fragments with a charge, the isotope envelope at that charge. The marks follow the sequence view: changing the ion types, the sequence or its modifications updates them. They apply only to the spectrum the matches were made on, compared through the spectrum's first filter column. A mode bar button hides or shows them.
+
 ### SeriesPlot
 
 Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
@@ -701,6 +703,8 @@ The expected columns are listed in `ProteinSequenceView.SEQUENCE_COLUMNS` and th
 Every modification the view applies (one set in a residue menu, or one of an edited identification) is localized from the matched fragments: a fragment that matches only with the mass shift places it inside the fragment, one that matches only without it places it outside. When several residues remain, or the shift fits several library modifications at those residues, the view marks the residues with a dashed line and the modification with a `?`, and says why in its tooltip and in the list of modifications.
 
 `edit_identifier=` (or `set_edit_identifier()` per render) lets the user edit an identification: a pencil button starts from the search result, the residue menus and the "change sequence" dialog then change the sequence and its modifications, and a reset button goes back. Each change is written to that identifier as a dict with `action` (`edit`, `update` or `reset`) and a fresh `nonce`; the app keeps the edit and renders the view again with the edited entry (`edited=True`, fragment masses of the unmodified sequence, its modifications localized on single residues).
+
+`fragment_matches_identifier=` (or `set_fragment_matches_identifier()`) publishes the matched fragments (name, ion type, kind, mass, index of the matched mass and, for annotated fragments, charge and m/z) with the tolerance, for a `DeconvolvedSpectrum` to mark. Give `spectrum_key_column=` (the spectrum's id column, e.g. `scan_idx`) so a spectrum showing another scan ignores them.
 
 ### ProteinStructureView
 

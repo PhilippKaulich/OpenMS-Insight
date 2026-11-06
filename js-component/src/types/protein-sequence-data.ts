@@ -112,6 +112,8 @@ export type MatchedSpectrum = {
   precursorMass?: number | null
   // Fragmentation method the spectrum was acquired with (see FragmentSettings)
   fragmentation?: string | null
+  // Identifies the spectrum (spectrum_key_column), sent with the matched fragments
+  key?: unknown
 }
 
 // Sequence tag marked on the sequence (0-based residues, inclusive)
