@@ -38,6 +38,7 @@ import {
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { readableTextOn } from '@/utils/appTheme'
 import { imageFormatOf } from '@/utils/imageExport'
 import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
@@ -584,7 +585,7 @@ export default defineComponent({
             yref: 'y',
             text: 'z=' + charge,
             showarrow: false,
-            font: { size: 15 },
+            font: { size: 15, color: readableTextOn(this.styling.annotationColors.massButton) },
           })
         })
         return { shapes: buttonShapes, annotations: buttonAnnotations, traces: buttonTraces }
@@ -632,7 +633,7 @@ export default defineComponent({
           yref: 'y',
           text: mass.toFixed(2),
           showarrow: false,
-          font: { size: 15, family },
+          font: { size: 15, family, color: readableTextOn(fillcolor) },
         })
       }
 

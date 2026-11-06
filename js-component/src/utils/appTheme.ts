@@ -119,3 +119,21 @@ export function applyAppTheme(theme: AppTheme | undefined): void {
     root.dataset.insightThemed = ''
   }
 }
+
+/**
+ * Black or white, whichever reads better on `fill` (a #rgb or #rrggbb colour),
+ * by WCAG relative luminance. Labels drawn on a coloured box use it, so a
+ * dark box such as the OpenMS blue gets white text and a light one dark text.
+ */
+export function readableTextOn(fill: string | undefined, dark = '#231f20', light = '#ffffff'): string {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((fill ?? '').trim())
+  if (!m) return dark
+  const hex = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1]
+  const channel = (i: number): number => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  const lum = 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+  // Contrast with white is (1.05)/(lum+0.05); with black (lum+0.05)/0.05.
+  return 1.05 / (lum + 0.05) >= (lum + 0.05) / 0.05 ? light : dark
+}
