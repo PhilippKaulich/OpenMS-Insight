@@ -79,6 +79,9 @@ export default defineComponent({
     const DEBOUNCE_MS = 100 // 100ms debounce window
 
     const sendStateToStreamlit = () => {
+      // Before its first render the view holds nothing Python does not know,
+      // and each value sent would cost the page a rerun
+      if (streamlitDataStore.renderData === null) return
       const currentCounter = selectionStore.$state.counter
       const currentHash = streamlitDataStore.hash || null
       const currentAnnotations = streamlitDataStore.annotations

@@ -10,7 +10,8 @@
  */
 
 import { ref, computed, type Ref, type ComputedRef } from 'vue'
-import Plotly from 'plotly.js-dist-min'
+import type Plotly from 'plotly.js-dist-min'
+import { plotly } from '@/plotly/current'
 import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
