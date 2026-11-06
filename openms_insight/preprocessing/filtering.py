@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from ..core.multi_select import match_selection, selection_key
+from ..core.multi_select import filter_selection, selection_key
 
 
 def optimize_for_transfer(
@@ -348,7 +348,7 @@ def _filter_and_collect(
             return (df_pandas, data_hash)
 
         # One value, or any value of a multi-selection
-        data = data.filter(match_selection(column, selected_value))
+        data = filter_selection(data, column, selected_value)
 
     # Collect to Polars DataFrame
     # Note: Type optimization (Int64→Int32, Float64→Float32) is applied at cache
@@ -437,7 +437,7 @@ def filter_by_selection(
     for identifier, column in interactivity.items():
         selected_value = state.get(identifier)
         if selected_value is not None:
-            data = data.filter(match_selection(column, selected_value))
+            data = filter_selection(data, column, selected_value)
 
     return data
 

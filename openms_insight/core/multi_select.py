@@ -11,6 +11,11 @@ the same set, and any component or page can read it with
 A multi-selection is a selection level like any other: a component with
 ``filters={'proteins': 'accession'}`` shows the rows whose accession is in the
 set, just as it shows the rows of one selected value for a single selection.
+
+A filter column may hold a list per row (the modifications of a proteoform,
+say): the row is shown when one of its values is selected. And
+``filter_defaults={'shift': ALL}`` makes a filter show every row while nothing
+is selected, instead of none, so clearing a selection lifts the filter.
 """
 
 from __future__ import annotations
@@ -35,12 +40,42 @@ def selection_key(value: Any) -> Any:
     return value
 
 
-def match_selection(column: str, value: Any) -> pl.Expr:
+#: A ``filter_defaults`` value: while the filter's identifier has no
+#: selection, every row is shown. A string, so it survives the JSON manifest
+#: of a cached component.
+ALL = "__openms_insight_all_rows__"
+
+
+def match_selection(column: str, value: Any, dtype: Any = None) -> pl.Expr:
     """Rows of ``column`` matching a selection: the one selected value, or any
-    of the values of a multi-selection (a list)."""
+    of the values of a multi-selection (a list). With the column's ``dtype``
+    a list column matches when one of its values is selected. ``ALL``
+    matches every row."""
+    if isinstance(value, str) and value == ALL:
+        return pl.lit(True)
+    is_list = dtype is not None and isinstance(dtype, (pl.List, pl.Array))
     if isinstance(value, (list, tuple)):
-        return pl.col(column).is_in([_int_if_whole(v) for v in value])
+        values = [_int_if_whole(v) for v in value]
+        if is_list:
+            return (
+                pl.col(column)
+                .list.eval(pl.element().is_in(values))
+                .list.any()
+                .fill_null(False)
+            )
+        return pl.col(column).is_in(values)
+    if is_list:
+        return pl.col(column).list.contains(_int_if_whole(value)).fill_null(False)
     return pl.col(column) == _int_if_whole(value)
+
+
+def filter_selection(data: pl.LazyFrame, column: str, value: Any) -> pl.LazyFrame:
+    """``data`` narrowed to the rows matching a selection (``match_selection``
+    with the column's type looked up)."""
+    if isinstance(value, str) and value == ALL:
+        return data
+    dtype = data.collect_schema().get(column)
+    return data.filter(match_selection(column, value, dtype))
 
 
 def normalize_multi_select(multi_select: dict[str, str] | None) -> dict[str, str]:

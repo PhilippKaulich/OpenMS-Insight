@@ -117,6 +117,18 @@ annotations = Table(
     filters={"identification": "id_idx"},
     filter_defaults={"identification": -1},  # Use -1 when identification is None
 )
+
+# Two filters on one table. ALL shows every row while nothing is selected, so
+# unselecting a mass shift lifts that filter and keeps the protein one. A list
+# column ("shift_ids": [1, 3]) matches when one of its values is selected.
+from openms_insight import ALL
+
+proteoforms = Table(
+    cache_id="proteoforms",
+    data_path="proteoforms.parquet",
+    filters={"protein": "protein_id", "mass_shift": "shift_ids"},
+    filter_defaults={"mass_shift": ALL},
+)
 ```
 
 ---
@@ -747,7 +759,7 @@ All components accept these common arguments:
 | `data_path` | `str` | `None` | Path to parquet file (preferred for memory efficiency) |
 | `data` | `pl.LazyFrame` | `None` | Polars LazyFrame (alternative to data_path) |
 | `filters` | `Dict[str, str]` | `None` | Map identifier -> column for filtering |
-| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None |
+| `filter_defaults` | `Dict[str, Any]` | `None` | Default values when selection is None (`ALL`: every row) |
 | `interactivity` | `Dict[str, str]` | `None` | Map identifier -> column for click actions |
 | `cache_path` | `str` | `"."` | Base directory for cache storage |
 | `regenerate_cache` | `bool` | `False` | Force cache regeneration |
