@@ -9,6 +9,8 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { Plot3DComponentArgs } from '@/types/component'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 // Floor the stems and trace starts drop to. Far below zero so the vertical
 // segment always reaches the bottom of the z range, which starts at 0.
@@ -221,28 +223,17 @@ export default defineComponent({
       if (!element) return
       const height = this.args.height || 800
       // react keeps the WebGL scene of the previous render; newPlot builds a new one
-      // exportFormat 'png': Plotly's own download button
-      const exportButtons =
-        this.args.exportFormat === 'png'
-          ? {}
-          : {
-              modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-              modeBarButtonsToAdd: [
-                {
-                  title: 'Download as SVG',
-                  name: 'toImageSvg',
-                  icon: Plotly.Icons.camera,
-                  click: (plotElement: HTMLElement) => {
-                    Plotly.downloadImage(plotElement, {
-                      filename: this.args.svgFilename || this.title || 'plot3d',
-                      height,
-                      width: height,
-                      format: 'svg',
-                    })
-                  },
-                },
-              ],
-            }
+      const exportButtons = {
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        modeBarButtonsToAdd: [
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.svgFilename || this.title || 'plot3d',
+            width: height,
+            height,
+          }),
+        ],
+      }
       await Plotly.react(element, this.traces, this.layout, {
         ...exportButtons,
         responsive: true,

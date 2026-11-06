@@ -34,7 +34,12 @@
       </div>
       <div class="d-flex justify-end px-4 mb-4">
         <div>
-          <SvgScreenshot :element-id="sequencePartId" :filename="args.svgFilename" :color="accentColor" />
+          <ImageScreenshot
+            :element-id="sequencePartId"
+            :filename="args.svgFilename"
+            :format="args.imageFormat"
+            :color="accentColor"
+          />
           <SequenceViewInformation :color="accentColor" />
           <v-btn
             variant="text"
@@ -46,6 +51,19 @@
             <v-icon>mdi-content-copy</v-icon>
             <v-tooltip activator="parent" location="bottom">
               Copy sequence to clipboard
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="args.proformaCopy"
+            variant="text"
+            icon="mdi-code-brackets"
+            size="large"
+            :disabled="sequence.length === 0"
+            @click="copyProForma"
+          >
+            <v-icon>mdi-code-brackets</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Copy as ProForma
             </v-tooltip>
           </v-btn>
           <v-btn
@@ -283,6 +301,24 @@
         :theme="theme"
         @select="onInternalFragmentSelected"
       />
+      <!-- Variable modifications set on residues, with the library only -->
+      <div
+        v-if="variableModData.library !== null && appliedVariableModifications.length > 0"
+        class="d-flex flex-wrap align-center px-2 pb-2 variable-modification-list"
+      >
+        <span class="text-body-2 mr-2">Variable modifications:</span>
+        <v-chip
+          v-for="mod in appliedVariableModifications"
+          :key="mod.index"
+          size="small"
+          class="mr-1 mb-1"
+          closable
+          @click:close="variableModData.updateVariableModifications(mod.index, 0)"
+        >
+          {{ mod.text }}
+        </v-chip>
+        <span class="text-body-2 ml-1">{{ variableModificationTotal }}</span>
+      </div>
     </div>
     <div v-if="(maxCoverage > 0) && showTags" class="scale-container" title="Sequence Tag Coverage">
       <div class="scale-text"> {{ maxCoverage + "x" }}</div>
@@ -413,10 +449,11 @@ import type { ColumnDefinition } from 'tabulator-tables'
 import FragmentTable from './FragmentTable.vue'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
-import SvgScreenshot from './SvgScreenshot.vue'
+import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
 import { extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
+import { fixedFromId, toProForma, type ProFormaModification } from './proforma'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -462,7 +499,7 @@ export default defineComponent({
     FragmentTable,
     AminoAcidCell,
     ProteinTerminalCell,
-    SvgScreenshot,
+    ImageScreenshot,
     InternalFragmentTrack,
   },
   props: {
@@ -888,6 +925,30 @@ export default defineComponent({
       return false
     },
     // Sequence change button computed properties
+    // Applied variable modifications, in sequence order: site, name, mass
+    appliedVariableModifications(): { index: number; text: string }[] {
+      const masses = this.variableModData.variableModifications ?? {}
+      const labels = this.variableModData.variableModLabels ?? {}
+      return Object.entries(masses)
+        .map(([key, mass]) => ({ index: Number(key), mass }))
+        .filter((m) => m.mass !== undefined && m.mass !== 0 && !Number.isNaN(m.mass))
+        .sort((a, b) => a.index - b.index)
+        .map(({ index, mass }) => {
+          let site: string
+          if (index < 0) site = 'N-term'
+          else if (index >= this.sequence.length) site = 'C-term'
+          else site = `${this.sequence[index]}${index + 1}`
+          const name = labels[index] ?? ''
+          const shift = mass.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })
+          return { index, text: `${site} ${name ? name + ' ' : ''}${shift} Da` }
+        })
+    },
+    variableModificationTotal(): string {
+      const total = Object.values(this.variableModData.variableModifications ?? {})
+        .filter((m) => m && !Number.isNaN(m))
+        .reduce((a, b) => a + b, 0)
+      return `Total ${total.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })} Da`
+    },
     modificationItems(): { title: string; value: string }[] {
       return (this.args.modificationLibrary ?? []).map((m) => {
         const sign = m.mass >= 0 ? '+' : ''
@@ -899,6 +960,16 @@ export default defineComponent({
     },
   },
   watch: {
+    // The residue menus read the variable-modification library from the store
+    'args.variableModificationLibrary': {
+      handler(library) {
+        this.variableModData.setLibrary(library, this.args.variableModificationSuggestions)
+      },
+      immediate: true,
+    },
+    'args.variableModificationSuggestions'(suggested) {
+      this.variableModData.setLibrary(this.args.variableModificationLibrary, suggested)
+    },
     // A new spectrum (or entry) arrives: rematch the fragments
     spectrum() {
       this.recomputeFragments()
@@ -1615,6 +1686,39 @@ export default defineComponent({
         this.copySnackbar = true
       } catch (error) {
         this.copySnackbarText = 'Failed to copy sequence to clipboard'
+        this.copySnackbar = true
+        console.error('Copy failed:', error)
+      }
+    },
+    proForma(): string {
+      const modifications: ProFormaModification[] = this.modifications.map((m) => ({
+        start: m.start,
+        end: m.end,
+        mass: m.mass_diff,
+      }))
+      for (const [index, mass] of Object.entries(this.variableModifications)) {
+        if (mass) modifications.push({ start: Number(index), end: Number(index), mass })
+      }
+      return toProForma({
+        sequence: this.sequence,
+        start: this.sequence_start,
+        end: this.sequence_end,
+        fixed: (this.args.modifications ?? []).map(fixedFromId),
+        modifications,
+      })
+    },
+    async copyProForma(): Promise<void> {
+      try {
+        const text = this.proForma()
+        if (!text) return
+        if (!navigator.clipboard) {
+          throw new Error('Clipboard API not available')
+        }
+        await navigator.clipboard.writeText(text)
+        this.copySnackbarText = 'ProForma copied to clipboard!'
+        this.copySnackbar = true
+      } catch (error) {
+        this.copySnackbarText = 'Failed to copy ProForma to clipboard'
         this.copySnackbar = true
         console.error('Copy failed:', error)
       }

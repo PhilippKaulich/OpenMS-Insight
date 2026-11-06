@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
     measure_args,
@@ -49,6 +50,10 @@ class DeconvolvedSpectrum(BaseComponent):
       carry the residue explaining the gap (hover: the mass difference). Clicking
       a ladder mass switches to its raw peaks as in ``'annotated'``; a back button
       returns. Set the tag at render time with :meth:`set_ladder`.
+
+    In the m/z views, :meth:`set_envelope` adds the theoretical isotope envelope
+    of the selected mass as open circles on its raw peaks, so the fit of the
+    observed peaks can be judged by eye.
 
     All views share the annotation toggle, the same zoom rules (the
     view fits the highlighted masses and narrows until their labels no longer
@@ -95,6 +100,7 @@ class DeconvolvedSpectrum(BaseComponent):
         measure: bool = True,
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -131,7 +137,8 @@ class DeconvolvedSpectrum(BaseComponent):
                 selectedSequenceArrow, background, buttonHover).
             config: Label layout overrides: xPosScalingFactor (27.5),
                 xPosScalingThreshold (30).
-            svg_filename: File name for the SVG download.
+            svg_filename: File name (without extension) of the image download;
+                the extension follows the image format.
             measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two masses draws a
                 bracket labelled with their difference ("Δmass 128.095 ≈ K"),
@@ -140,13 +147,17 @@ class DeconvolvedSpectrum(BaseComponent):
                 drill-down) the difference is m/z and matched at 1+ and 2+. Esc
                 cancels a half-finished measurement, clicking a label removes it
                 and "Clear measurements" removes all; they are cleared when
-                other data is plotted and are part of the SVG download. With
+                other data is plotted and are part of the image download. With
                 measure mode off, clicks select masses as before. Render-time
                 only: not part of the cache.
             measure_tolerance: Residue matching tolerance in Da per point
                 (default 0.02); a difference matches within twice this.
             measure_residues: Extra named masses to match besides the 20
                 standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if view not in VIEWS:
@@ -165,11 +176,18 @@ class DeconvolvedSpectrum(BaseComponent):
         self._drilldown_title = drilldown_title
         # Sequence tag drawn in the 'ladder' view (set per render, not cached)
         self._ladder: dict[str, Any] | None = None
+        # Theoretical isotope envelope of one mass (set per render, not cached)
+        self._envelope: dict[str, Any] | None = None
+        # Isolation window marked in the m/z views (set per render, not cached)
+        self._isolation_window: dict[str, float] | None = None
 
         # Render-time options, kept out of the cache config (see core/measure.py)
         self._measure = validate_measure(measure)
         self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
         self._measure_residues = validate_measure_residues(measure_residues)
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -230,6 +248,8 @@ class DeconvolvedSpectrum(BaseComponent):
         self._svg_filename = config.get("svg_filename", "spectrum")
         self._drilldown_title = config.get("drilldown_title")
         self._ladder = None
+        self._envelope = None
+        self._isolation_window = None
 
     def _data_columns(self) -> list[str]:
         """Columns this view draws from (filter columns are added separately)."""
@@ -331,6 +351,79 @@ class DeconvolvedSpectrum(BaseComponent):
             }
         return self
 
+    def set_envelope(
+        self,
+        mass_index: int | None,
+        peaks: list[dict[str, Any]] | None,
+    ) -> "DeconvolvedSpectrum":
+        """
+        Set the theoretical isotope envelope drawn for the next render.
+
+        The m/z views ('annotated', and 'ladder' drilled down to a mass) draw
+        the peaks as open circles while the mass at ``mass_index`` is selected,
+        and only once the zoom puts neighbouring isotopes of a peak's charge
+        (1.00235 / charge m/z apart, or the nearest other peak without a
+        charge) at least 8 pixels apart.
+
+        Args:
+            mass_index: Index of the mass in the spectrum's mass list (the value
+                ``mass_identifier`` holds when it is selected). None clears the
+                envelope.
+            peaks: One dict per theoretical peak with ``mz`` and ``intensity``,
+                and optionally ``charge`` and ``isotope`` (shown on hover).
+                None or empty clears the envelope.
+
+        Returns:
+            Self for method chaining.
+        """
+        if mass_index is None or not peaks:
+            self._envelope = None
+            return self
+        envelope: dict[str, Any] = {
+            "massIndex": int(mass_index),
+            "mzs": [float(p["mz"]) for p in peaks],
+            "intensities": [float(p["intensity"]) for p in peaks],
+        }
+        for key, name in (("charge", "charges"), ("isotope", "isotopes")):
+            if all(p.get(key) is not None for p in peaks):
+                envelope[name] = [int(p[key]) for p in peaks]
+        self._envelope = envelope
+        return self
+
+    def set_isolation_window(
+        self,
+        lower_mz: float | None,
+        upper_mz: float | None = None,
+        target_mz: float | None = None,
+    ) -> "DeconvolvedSpectrum":
+        """
+        Mark an isolation window in the m/z views for the next render.
+
+        The window is shaded from ``lower_mz`` to ``upper_mz``, with a dashed
+        line at ``target_mz`` when given. Use it on a precursor (MS1) spectrum
+        to show the m/z range isolated for a fragmentation spectrum. It is
+        drawn in the m/z views only: ``'annotated'``, and ``'ladder'`` drilled
+        down to a mass.
+
+        Args:
+            lower_mz: Lower edge of the window. None clears the window.
+            upper_mz: Upper edge of the window.
+            target_mz: Isolation target, or None.
+
+        Returns:
+            Self for method chaining.
+        """
+        if lower_mz is None or upper_mz is None or not upper_mz > lower_mz:
+            self._isolation_window = None
+        else:
+            self._isolation_window = {
+                "lower": float(lower_mz),
+                "upper": float(upper_mz),
+            }
+            if target_mz is not None:
+                self._isolation_window["target"] = float(target_mz)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         view = VIEWS[self._view]
         args: dict[str, Any] = {
@@ -348,9 +441,15 @@ class DeconvolvedSpectrum(BaseComponent):
             "svgFilename": self._svg_filename,
             "ladder": self._ladder,
         }
+        if self._envelope:
+            args["envelope"] = self._envelope
         if self._drilldown_title:
             args["drilldownTitle"] = self._drilldown_title
+        # Only when set, so the args of other callers stay as they were
+        if self._isolation_window:
+            args["isolationWindow"] = self._isolation_window
         args.update(
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
+        args.update(image_format_args(self._image_format))
         return args

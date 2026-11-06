@@ -5,6 +5,7 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -81,6 +82,7 @@ class Plot3D(BaseComponent):
         title_bold: bool = True,
         border: bool = True,
         export_format: str = "svg",
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -116,11 +118,17 @@ class Plot3D(BaseComponent):
             y_dtick: Tick spacing on the y axis (e.g. 1 for charge states).
             camera_eye: Initial camera position, e.g. {'x': 2.5, 'y': 0, 'z': 0.2}.
             show_legend: Show the legend.
-            svg_filename: File name for the SVG download (default: title).
+            svg_filename: File name (without extension) of the image download
+                (default: title); the extension follows the image format.
             title_bold: Draw the title in bold.
             border: Draw a border around the plot.
-            export_format: 'svg' (a "Download as SVG" button) or 'png'
-                (Plotly's own PNG download).
+            export_format: Deprecated, use image_format. 'png' downloads PNG
+                (unless image_format is given); 'svg' (default) follows
+                image_format.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if mode not in ("stems", "lines"):
@@ -151,6 +159,9 @@ class Plot3D(BaseComponent):
         self._title_bold = title_bold
         self._border = border
         self._export_format = export_format
+
+        # Render-time option, kept out of the cache config (see core/image_format.py)
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         super().__init__(
             cache_id=cache_id,
@@ -350,6 +361,7 @@ class Plot3D(BaseComponent):
             args["titleBold"] = False
         if not self._border:
             args["border"] = False
-        if self._export_format != "svg":
-            args["exportFormat"] = self._export_format
+        # export_format='png' (older API) asks for PNG unless image_format is set
+        legacy = "png" if self._export_format == "png" else None
+        args.update(image_format_args(self._image_format or legacy))
         return args

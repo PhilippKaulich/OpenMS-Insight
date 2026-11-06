@@ -15,6 +15,8 @@ import type { SeriesPlotComponentArgs } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 let plotIdCounter = 0
 
@@ -233,19 +235,11 @@ export default defineComponent({
       await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: Plotly.Icons.camera,
-            click: (plotElement: HTMLElement) => {
-              Plotly.downloadImage(plotElement, {
-                filename: this.args.svgFilename || this.args.title || 'plot',
-                height: this.args.height || 400,
-                width: 1200,
-                format: 'svg',
-              })
-            },
-          },
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.svgFilename || this.args.title || 'plot',
+            height: this.args.height || 400,
+          }),
           ...this.measure.modeBarButtons(this.measureTitle),
         ],
         responsive: true,

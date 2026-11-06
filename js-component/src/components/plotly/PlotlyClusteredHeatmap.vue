@@ -47,6 +47,7 @@ export default defineComponent({
       interactivity: computed(() => ({})),
       getData: () => [],
       title: computed(() => props.args.title),
+      imageFormat: computed(() => props.args.imageFormat),
     })
 
     const multi = useMultiSelect(computed(() => props.args.multiSelect))

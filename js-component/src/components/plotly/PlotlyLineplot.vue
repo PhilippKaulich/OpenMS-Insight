@@ -15,6 +15,8 @@ import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -30,6 +32,23 @@ const DEFAULT_CONFIG = {
   xPosScalingFactor: 80,
   xPosScalingThreshold: 500,
   minAnnotationWidth: 40,
+}
+
+/**
+ * Min and max of the finite values, without spreading the array into
+ * Math.min/Math.max (which overflows the call stack on profile spectra with
+ * a few hundred thousand points). Returns [0, 1] when there are none.
+ */
+function finiteExtent(values: ArrayLike<number>): [number, number] {
+  let min = Infinity
+  let max = -Infinity
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i]
+    if (!Number.isFinite(v)) continue
+    if (v < min) min = v
+    if (v > max) max = v
+  }
+  return min <= max ? [min, max] : [0, 1]
 }
 
 export default defineComponent({
@@ -252,9 +271,7 @@ export default defineComponent({
 
       if (!this.isDataReady || !this.plotData) return [0, 1]
 
-      const xValues = this.plotData.x_values
-      const minX = Math.min(...xValues)
-      const maxX = Math.max(...xValues)
+      const [minX, maxX] = finiteExtent(this.plotData.x_values)
       const padding = (maxX - minX) * 0.02
 
       return [minX - padding, maxX + padding]
@@ -821,30 +838,19 @@ export default defineComponent({
         }
 
         const modeBarButtons = [
-          {
-            title: 'Download as SVG',
-            name: 'toImageSvg',
-            icon: {
-              width: 1792,
-              height: 1792,
-              path: 'M1152 1376v-160q0-14-9-23t-23-9h-96v-512q0-14-9-23t-23-9h-320q-14 0-23 9t-9 23v160q0 14 9 23t23 9h96v320h-96q-14 0-23 9t-9 23v160q0 14 9 23t23 9h320q14 0 23-9t9-23zm-128-896v-160q0-14-9-23t-23-9h-192q-14 0-23 9t-9 23v160q0 14 9 23t23 9h192q14 0 23-9t9-23zm640 416q0 209-103 385.5t-279.5 279.5-385.5 103-385.5-103-279.5-279.5-103-385.5 103-385.5 279.5-279.5 385.5-103 385.5 103 279.5 279.5 103 385.5z',
-            },
-            click: () => {
-              const element = document.getElementById(this.id)
-              if (element) {
-                Plotly.downloadImage(element, {
-                  filename: this.args.title || 'plot',
-                  height: 400,
-                  width: 1200,
-                  format: 'svg',
-                })
-              }
-            },
-          },
+          plotlyDownloadButton({
+            format: () => imageFormatOf(this.args.imageFormat),
+            filename: () => this.args.title || 'plot',
+            icon: SPECTRUM_DOWNLOAD_ICON,
+          }),
           ...this.measure.modeBarButtons(this.measureTitle),
         ]
 
-        await Plotly.newPlot(this.id, this.traces, this.layout, {
+        // Plotly.react updates the existing plot in place. On a zoom only the
+        // layout changes (the traces are cached computed values), so the trace
+        // SVG is not rebuilt, and the event listeners stay attached.
+        const needsListeners = !(element as any)._insightListeners
+        await Plotly.react(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
           modeBarButtonsToAdd: modeBarButtons,
           scrollZoom: true,
@@ -862,7 +868,8 @@ export default defineComponent({
 
         // Add event listeners
         const plotElement = document.getElementById(this.id) as any
-        if (plotElement) {
+        if (plotElement && needsListeners) {
+          plotElement._insightListeners = true
           plotElement.on('plotly_click', (eventData: any) => {
             this.onPlotClick(eventData)
           })
@@ -973,14 +980,14 @@ export default defineComponent({
       } else {
         // No annotated neighbors - zoom to show 20% of total data range
         const xValues = this.plotData.x_values
-        const dataRange = Math.max(...xValues) - Math.min(...xValues)
+        const [dataMin, dataMax] = finiteExtent(xValues)
+        const dataRange = dataMax - dataMin
         rangeWidth = dataRange * 0.2
       }
 
       // Center on selected peak, clamped to data bounds
       const xValues = this.plotData.x_values
-      const minX = Math.min(...xValues)
-      const maxX = Math.max(...xValues)
+      const [minX, maxX] = finiteExtent(xValues)
 
       let newLeft = selectedPeak.x - rangeWidth / 2
       let newRight = selectedPeak.x + rangeWidth / 2
@@ -1099,6 +1106,9 @@ export default defineComponent({
         await Plotly.newPlot(this.id, this.getFallbackData(), fallbackLayout, {
           staticPlot: true,
         })
+        // newPlot drops the event listeners; the next renderPlot adds them again.
+        const element = document.getElementById(this.id) as any
+        if (element) element._insightListeners = false
       } catch (error) {
         console.error('PlotlyLineplot: Failed to render fallback:', error)
       }

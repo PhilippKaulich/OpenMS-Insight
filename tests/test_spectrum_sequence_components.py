@@ -374,6 +374,73 @@ class TestDeconvolvedSpectrum:
         spectrum.set_ladder(None)
         assert spectrum._get_component_args()["ladder"] is None
 
+    def test_set_envelope(
+        self, mock_streamlit, sample_deconvolved_spectra, temp_cache_dir
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="envelope",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            cache_path=str(temp_cache_dir),
+        )
+        assert "envelope" not in spectrum._get_component_args()
+        spectrum.set_envelope(
+            2,
+            [
+                {"mz": 501.0, "intensity": 10, "charge": 2, "isotope": 0},
+                {"mz": 501.5, "intensity": 8.5, "charge": 2, "isotope": 1},
+            ],
+        )
+        assert spectrum._get_component_args()["envelope"] == {
+            "massIndex": 2,
+            "mzs": [501.0, 501.5],
+            "intensities": [10.0, 8.5],
+            "charges": [2, 2],
+            "isotopes": [0, 1],
+        }
+        # Charges and isotopes are optional
+        spectrum.set_envelope(0, [{"mz": 1.5, "intensity": 3}])
+        assert spectrum._get_component_args()["envelope"] == {
+            "massIndex": 0,
+            "mzs": [1.5],
+            "intensities": [3.0],
+        }
+        spectrum.set_envelope(None, [{"mz": 1.5, "intensity": 3}])
+        assert "envelope" not in spectrum._get_component_args()
+        spectrum.set_envelope(1, [])
+        assert "envelope" not in spectrum._get_component_args()
+
+    def test_isolation_window(
+        self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra
+    ):
+        spectrum = DeconvolvedSpectrum(
+            cache_id="window",
+            data=sample_deconvolved_spectra,
+            filters={"scan": "scan_idx"},
+            view="annotated",
+            cache_path=str(temp_cache_dir),
+        )
+        assert "isolationWindow" not in spectrum._get_component_args()
+
+        spectrum.set_isolation_window(1300.0, 1305.0, target_mz=1302.5)
+        assert spectrum._get_component_args()["isolationWindow"] == {
+            "lower": 1300.0,
+            "upper": 1305.0,
+            "target": 1302.5,
+        }
+        spectrum.set_isolation_window(1300, 1305)
+        assert spectrum._get_component_args()["isolationWindow"] == {
+            "lower": 1300.0,
+            "upper": 1305.0,
+        }
+        # Cleared by None or an empty window
+        spectrum.set_isolation_window(1305.0, 1300.0)
+        assert "isolationWindow" not in spectrum._get_component_args()
+        spectrum.set_isolation_window(1300.0, 1305.0)
+        spectrum.set_isolation_window(None)
+        assert "isolationWindow" not in spectrum._get_component_args()
+
     def test_deconvolved_view_needs_no_peaks(self, mock_streamlit, temp_cache_dir):
         data = pl.LazyFrame(
             {"scan_idx": [0], "masses": [[1.0]], "intensities": [[2.0]]}
@@ -612,6 +679,37 @@ class TestProteinSequenceView:
         assert args["modificationsIdentifier"] == "fixed_mods"
         assert args["modifications"] == ["Carbamidomethyl (C)"]
 
+    def test_proforma_copy_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_proforma",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaCopy"] is False
+        assert view.set_proforma_copy() is view
+        assert view._get_component_args()["proformaCopy"] is True
+
+        # Not part of the cache: a view loaded from it starts from its own arg
+        cached = ProteinSequenceView(
+            cache_id="seq_proforma",
+            cache_path=str(temp_cache_dir),
+            proforma_copy=True,
+        )
+        assert cached._get_component_args()["proformaCopy"] is True
+        assert (
+            cached.set_proforma_copy(False)._get_component_args()["proformaCopy"]
+            is False
+        )
+
     def test_modification_picker_from_pyopenms(
         self, mock_streamlit, temp_cache_dir: Path
     ):
@@ -647,6 +745,46 @@ class TestProteinSequenceView:
         assert view._get_component_args()["modificationLibrary"] == library
         with pytest.raises(ValueError):
             view.set_modification_picker("unimod")
+        assert view._get_component_args()["variableModificationLibrary"] is None
+
+    def test_variable_modification_library_args(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        view = ProteinSequenceView(
+            cache_id="seq_varmods",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["M"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            variable_modification_library=[
+                {"id": "Oxidation (M)", "mass": 15.994915, "site": "M"},
+            ],
+        )
+        args = view._get_component_args()
+        assert args["variableModificationLibrary"] == [
+            {"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}
+        ]
+        # separate from the dialog's fixed-modification picker
+        assert args["modificationLibrary"] is None
+        # None: the menu's built-in suggestions
+        assert args["variableModificationSuggestions"] is None
+        view.set_variable_modification_library(
+            [{"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}],
+            suggested={"M": ["Oxidation (M)"]},
+        )
+        assert view._get_component_args()["variableModificationSuggestions"] == {
+            "M": ["Oxidation (M)"]
+        }
+        assert view.set_variable_modification_library(None) is view
+        assert view._get_component_args()["variableModificationLibrary"] is None
+        with pytest.raises(ValueError):
+            view.set_variable_modification_library("unimod")
         # Not part of the cache: the same data cache serves both
         assert "modification_library" not in view._get_cache_config()
 

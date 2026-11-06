@@ -106,7 +106,7 @@ export default defineComponent({
   setup(props) {
     const streamlitDataStore = useStreamlitDataStore()
 
-    // Use shared Plotly scatter composable (resize, theme, SVG export).
+    // Use shared Plotly scatter composable (resize, theme, image download).
     // Click handling is NOT taken from here - see setupPcaClickHandler().
     const plotlyScatter = usePlotlyScatter({
       id: computed(() => `pca-${props.index}`),
@@ -116,6 +116,7 @@ export default defineComponent({
         return (data as PCAData[]) || []
       },
       title: computed(() => props.args.title),
+      imageFormat: computed(() => props.args.imageFormat),
     })
 
     return {

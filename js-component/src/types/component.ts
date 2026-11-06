@@ -30,6 +30,14 @@ export interface MeasureArgs {
 }
 
 /**
+ * The image download of a view (see utils/imageExport.ts).
+ */
+export interface ImageExportArgs {
+  /** Format of the download: set_image_format() or the component's image_format. */
+  imageFormat?: 'svg' | 'png' | 'jpeg' | 'webp'
+}
+
+/**
  * Interactivity mapping: identifier name -> column name
  */
 export type InteractivityMapping = Record<string, string>
@@ -136,7 +144,7 @@ export interface TableComponentArgs extends BaseComponentArgs {
 /**
  * Line plot component arguments.
  */
-export interface LinePlotComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface LinePlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
   title: string
   xLabel?: string
@@ -177,7 +185,7 @@ export interface LinePlotConfig {
 /**
  * Heatmap component arguments.
  */
-export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyHeatmap'
   title?: string
   svgFilename?: string
@@ -230,7 +238,7 @@ export interface HeatmapBox {
 /**
  * PCA plot component arguments.
  */
-export interface PCAPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface PCAPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyPca'
   /** Column name for the x-axis principal component (e.g. "PC1") */
   xColumn: string
@@ -261,7 +269,7 @@ export type PCAData = Record<string, unknown>
 /**
  * SequenceView component arguments.
  */
-export interface SequenceViewComponentArgs extends BaseComponentArgs {
+export interface SequenceViewComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'SequenceView'
   title?: string
   height?: number
@@ -276,7 +284,7 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
 /**
  * VolcanoPlot component arguments.
  */
-export interface VolcanoPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface VolcanoPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyVolcano'
   /** Column name for log2 fold change (x-axis) */
   log2fcColumn: string
@@ -334,7 +342,7 @@ export interface DendrogramData {
 /**
  * ClusteredHeatmap component arguments.
  */
-export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs {
+export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'PlotlyClusteredHeatmap'
   idCol: string
   /** Row labels (e.g. protein names), in clustered/rendered order. */
@@ -375,10 +383,10 @@ export type VolcanoData = Record<string, unknown>
 /**
  * MirrorPlot component arguments.
  */
-export interface MirrorPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface MirrorPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string
-  /** File name (without extension) for the SVG download. */
+  /** File name (without extension) of the image download. */
   svgFilename?: string
   /** Label shown inside the top half of the figure. */
   titleTop?: string
@@ -406,7 +414,7 @@ export interface MirrorPlotStyling {
 /**
  * Series plot component arguments.
  */
-export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlySeries'
   font?: { family?: string; color?: string; size?: number }
   xColumn: string
@@ -433,11 +441,10 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs 
 /**
  * 3D plot component arguments.
  */
-export interface Plot3DComponentArgs extends BaseComponentArgs {
+export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'Plotly3D'
   titleBold?: boolean
   border?: boolean
-  exportFormat?: 'svg' | 'png'
   xColumn: string
   yColumn: string
   zColumn: string
@@ -465,7 +472,7 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
 /**
  * Deconvolved spectrum component arguments.
  */
-export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, MeasureArgs {
+export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
   componentType: 'PlotlyDeconvolvedSpectrum'
   view: 'deconvolved' | 'annotated' | 'ladder'
   title: string
@@ -483,19 +490,30 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, Mea
     selectedColor?: string
     unhighlightedColor?: string
     highlightHiddenColor?: string
+    isolationWindowColor?: string
     annotationColors?: Record<string, string>
   }
   config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
   svgFilename?: string
   /** Sequence tag drawn in the ladder view */
   ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  /** Theoretical isotope envelope of one mass, drawn on its raw peaks */
+  envelope?: {
+    massIndex: number
+    mzs: number[]
+    intensities: number[]
+    charges?: number[]
+    isotopes?: number[]
+  } | null
+  /** Isolation window shaded in the m/z views */
+  isolationWindow?: { lower: number; upper: number; target?: number } | null
   height?: number
 }
 
 /**
  * ProteinStructureView component arguments.
  */
-export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
+export interface ProteinStructureViewComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'ProteinStructureView'
   title?: string
   /** Identifier holding the selected residue (0-based position in the sequence) */
@@ -515,7 +533,7 @@ export interface ProteinStructureViewComponentArgs extends BaseComponentArgs {
 /**
  * ProteinSequenceView component arguments.
  */
-export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
+export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, ImageExportArgs {
   componentType: 'ProteinSequenceView'
   title?: string
   /** Label of the annotation summary line */
@@ -532,6 +550,13 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs {
   modificationsIdentifier?: string | null
   // Ids preselected in the picker
   modifications?: string[] | null
+  /** Show the "Copy as ProForma" button */
+  proformaCopy?: boolean
+  // Variable modifications the residue menus offer (instead of the built-in list)
+  variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
+  // Library ids suggested per site (residue letter, 'N-term', 'C-term');
+  // null: the built-in suggestions
+  variableModificationSuggestions?: Record<string, string[]> | null
   /** Identifier the selected fragment's bounds are written to */
   fragmentIdentifier?: string | null
   /** Fragment ion types (or fragmentation method) and tolerance to start from */

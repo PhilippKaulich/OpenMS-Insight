@@ -25,6 +25,7 @@ import { stateValues, useStreamlitDataStore } from './stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { Streamlit, type RenderData } from 'streamlit-component-lib'
 import type { ComponentArgs, ComponentLayout } from './types/component'
+import { downloadTitle, imageFormatOf } from './utils/imageExport'
 // Each view is its own chunk, so a page with several views does not load and
 // run Plotly in every table's frame
 const TabulatorTable = defineAsyncComponent(() => import('./components/tabulator/TabulatorTable.vue'))
@@ -287,6 +288,21 @@ export default defineComponent({
           console.warn(`Unknown component type: ${componentType}`)
           return null
       }
+    },
+  },
+  watch: {
+    /**
+     * A view that is not drawn again when only the image format changes keeps
+     * the tooltip of its download button; the button itself reads the format
+     * when clicked (see utils/imageExport.ts).
+     */
+    'componentArgs.imageFormat'(format: unknown) {
+      this.$nextTick(() => {
+        const title = downloadTitle(imageFormatOf(format))
+        document.querySelectorAll('.modebar-btn[data-title^="Download as"]').forEach((button) => {
+          button.setAttribute('data-title', title)
+        })
+      })
     },
   },
   created() {

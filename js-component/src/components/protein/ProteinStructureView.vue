@@ -38,7 +38,7 @@
         </v-btn>
         <v-btn variant="text" icon="mdi-camera" size="small" :disabled="!loaded" @click="downloadImage">
           <v-icon>mdi-camera</v-icon>
-          <v-tooltip activator="parent" location="bottom">Save image (PNG)</v-tooltip>
+          <v-tooltip activator="parent" location="bottom">{{ downloadImageTitle }}</v-tooltip>
         </v-btn>
       </div>
     </div>
@@ -85,6 +85,7 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { ProteinStructureViewComponentArgs } from '@/types/component'
+import { type ImageFormat, convertRaster, downloadTitle, imageFileName, imageFormatOf, saveImage } from '@/utils/imageExport'
 import type { FragmentSelection, MatchedSpectrum, SequenceData } from '@/types/protein-sequence-data'
 import { settingsIons, toleranceUnit } from './fragment-ions'
 import {
@@ -158,6 +159,14 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Format of the image download: SVG is saved as PNG (see downloadImage) */
+    rasterFormat(): Exclude<ImageFormat, 'svg'> {
+      const format = imageFormatOf(this.args.imageFormat)
+      return format === 'svg' ? 'png' : format
+    },
+    downloadImageTitle(): string {
+      return downloadTitle(this.rasterFormat)
+    },
     theme(): Theme | undefined {
       return this.streamlitDataStore.theme
     },
@@ -611,12 +620,12 @@ export default defineComponent({
       this.viewer.zoom(1.4)
       this.viewer.render()
     },
-    downloadImage(): void {
+    /** The 3D scene is a WebGL canvas, with no vector form: SVG is saved as PNG. */
+    async downloadImage(): Promise<void> {
       if (this.viewer === undefined) return
-      const link = document.createElement('a')
-      link.href = this.viewer.pngURI()
-      link.download = `${this.structure?.accession ?? 'structure'}.png`
-      link.click()
+      const name = this.structure?.accession ?? 'structure'
+      const image = await convertRaster(this.viewer.pngURI(), this.rasterFormat)
+      saveImage(image.url, imageFileName(name, image.format))
     },
   },
 })

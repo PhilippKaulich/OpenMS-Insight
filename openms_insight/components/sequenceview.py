@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from ..core.cache import atomic_write, cache_lock
+from ..core.image_format import image_format_args, validate_image_format
 from ..core.registry import register_component
 from ..preprocessing.filtering import optimize_for_transfer
 
@@ -515,6 +516,8 @@ class SequenceView:
         title: str | None = None,
         height: int = 400,
         regenerate_cache: bool = False,
+        svg_filename: str | None = None,
+        image_format: str | None = None,
         **kwargs,
     ):
         """
@@ -547,11 +550,21 @@ class SequenceView:
             regenerate_cache: If True, rebuild the cache even when one matching this
                 configuration already exists. Needed when the data behind a
                 LazyFrame or file source changed but cache_id and config did not.
+            svg_filename: File name (without extension) of the image download
+                of the sequence (default: title, then "sequence"); the
+                extension follows the image format. Render-time only.
+            image_format: Format of the image download: 'svg', 'png', 'jpeg'
+                or 'webp'. None (default) follows
+                ``openms_insight.set_image_format()`` (default 'svg') when the
+                component is drawn. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         self._cache_id = cache_id
         self._cache_path = Path(cache_path)
         self._cache_dir = self._cache_path / cache_id
+        # Render-time options, kept out of the cache config (see core/image_format.py)
+        self._svg_filename = svg_filename
+        self._image_format = validate_image_format(image_format, allow_none=True)
 
         # Determine if data is provided (creation mode vs reconstruction mode)
         has_sequence_data = sequence_data is not None or sequence_data_path is not None
@@ -1023,7 +1036,11 @@ class SequenceView:
         if self._interactivity:
             args["interactivity"] = self._interactivity
 
+        if self._svg_filename:
+            args["svgFilename"] = self._svg_filename
+
         args.update(self._config)
+        args.update(image_format_args(self._image_format))
         return args
 
     def export_fragment_ions(self, include_unmatched: bool = False) -> pl.DataFrame:

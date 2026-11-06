@@ -292,7 +292,7 @@ mirror(state_manager=state_manager, height=600)
 - `highlight_column`, `annotation_column`: Shared schema for highlights and label text
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
-- `svg_filename`: File name for the modebar's "Download as SVG" button (default: `title`, then `mirror_plot`)
+- `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
 - `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
 
 **Behavior:**
@@ -805,7 +805,7 @@ the matching on `LinePlot`, `MirrorPlot` and `DeconvolvedSpectrum`.
 Several measurements can stay on a plot. Esc cancels a half-finished one,
 clicking a label removes that measurement and the **Clear measurements** button (×)
 next to the ruler removes all. They are
-plain Plotly shapes and annotations, so the SVG download includes them. They are
+plain Plotly shapes and annotations, so the image download includes them. They are
 cleared when other data is plotted (a `Heatmap` keeps them while zooming). With
 measure mode off, clicks select as they always did.
 
@@ -814,6 +814,51 @@ configuration, so switching the tool on or off never rebuilds a cache.
 `ClusteredHeatmap` (a categorical matrix: there is no distance between two
 samples' columns) and `Plot3D` (a click in 3D does not pick comparable points)
 have no measure tool.
+
+### Image downloads (`image_format`)
+
+Every component that offers an image download saves in one format: SVG by
+default, or PNG, JPEG or WebP. Pick it once for all components, for example
+from a settings widget on every page run:
+
+```python
+import openms_insight
+
+openms_insight.set_image_format(st.session_state.get("image-format", "svg"))
+openms_insight.get_image_format()  # 'svg', 'png', 'jpeg' or 'webp'
+```
+
+A component's `image_format` argument (default `None`: follow
+`set_image_format()`) overrides it for that component:
+
+```python
+LinePlot(
+    cache_id="spectrum",
+    data=peaks,
+    x_column="mz",
+    y_column="intensity",
+    image_format="png",
+)
+```
+
+| Component | Download button | Notes |
+|-----------|-----------------|-------|
+| `LinePlot`, `MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum` | Plotly mode bar | |
+| `Heatmap`, `VolcanoPlot`, `PCAPlot`, `ClusteredHeatmap` | Plotly mode bar | |
+| `Plot3D` | Plotly mode bar | WebGL scene: Plotly embeds it as a picture, also in SVG. `export_format="png"` (older API) still means PNG unless `image_format` is given |
+| `SequenceView`, `ProteinSequenceView` | Download button above the sequence | Saved from the page (dom-to-image) |
+| `ProteinStructureView` | Camera button | WebGL scene with no vector form: `"svg"` saves a PNG |
+
+The mode bar button reads "Download as SVG" (or PNG, JPEG, WebP). SVG keeps the
+size the plots always had; PNG, JPEG and WebP are drawn at twice the size the
+view has on screen. A browser that cannot write WebP from a page (Safari) saves
+PNG instead. The file name comes from `svg_filename` where a component has it
+(otherwise its title); the extension follows the format.
+
+Inside a Streamlit session `set_image_format()` is kept per session, so users
+of one app can pick different formats; outside a session it is process wide.
+The format is a render-time setting, not part of the cache configuration:
+changing it never rebuilds a cache.
 
 ## Memory-Efficient Preprocessing
 

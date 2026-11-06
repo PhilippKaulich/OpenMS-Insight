@@ -27,6 +27,8 @@ import type { DeconvolvedSpectrumComponentArgs } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { imageFormatOf } from '@/utils/imageExport'
+import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
 type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
@@ -57,6 +59,9 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
+  // Circles of the theoretical isotope envelope (set_envelope)
+  envelopeColor: '#D62728',
+  isolationWindowColor: '#7F7F7F',
   annotationColors: {
     massButton: '#E4572E',
     selectedMassButton: '#F3A712',
@@ -69,6 +74,10 @@ const DEFAULT_STYLING = {
 
 // Stick plots draw each peak as x,x,x / floor,y,floor
 const STICK_FLOOR = -10000000
+/** m/z distance between neighbouring isotopes at charge 1 (C13 - C12). */
+const ISOTOPE_SPACING = 1.00235
+/** Envelope circles show once neighbouring isotopes are this many pixels apart. */
+const ENVELOPE_MIN_SPACING_PX = 8
 
 const TOGGLE_ANNOTATIONS_ICON = {
   width: 1792,
@@ -79,11 +88,6 @@ const TOGGLE_PEAKS_ICON = {
   width: 1792,
   height: 1792,
   path: 'M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z',
-}
-const SVG_ICON = {
-  width: 1792,
-  height: 1792,
-  path: 'M1152 1376v-160q0-14-9-23t-23-9h-96v-512q0-14-9-23t-23-9h-320q-14 0-23 9t-9 23v160q0 14 9 23t23 9h96v320h-96q-14 0-23 9t-9 23v160q0 14 9 23t23 9h320q14 0 23-9t9-23zm-128-896v-160q0-14-9-23t-23-9h-192q-14 0-23 9t-9 23v160q0 14 9 23t23 9h192q14 0 23-9t9-23zm640 416q0 209-103 385.5t-279.5 279.5-385.5 103-385.5-103-279.5-279.5-103-385.5 103-385.5 279.5-279.5 385.5-103 385.5 103 279.5 279.5 103 385.5z',
 }
 
 let plotIdCounter = 0
@@ -218,6 +222,114 @@ export default defineComponent({
     ladderJson(): string {
       return JSON.stringify(this.args.ladder ?? null)
     },
+    envelopeJson(): string {
+      return JSON.stringify(this.args.envelope ?? null)
+    },
+    /** Theoretical isotope envelope of the selected mass as open circles on
+     * its raw peaks; drawn only while the mass it was computed for is selected. */
+    envelopeTrace(): Plotly.Data | null {
+      const envelope = this.args.envelope
+      if (!envelope || !this.isMzMode || !this.annotationsVisible) return null
+      if (envelope.massIndex !== this.selectedMassIndex) return null
+      const n = Math.min(envelope.mzs.length, envelope.intensities.length)
+      if (n === 0) return null
+      // Circles only where the zoom puts neighbouring isotopes far enough apart
+      // to tell them apart; zoomed out they would merge into one red smear.
+      const [x0, x1] = this.xRange
+      const pixelsPerMz = this.xAxisPixelLength() / Math.max(x1 - x0, 1e-9)
+      const spacing = this.envelopeIsotopeSpacing(envelope.mzs.slice(0, n), envelope.charges)
+      const x: number[] = []
+      const y: number[] = []
+      const hover: string[] = []
+      for (let i = 0; i < n; i++) {
+        if (spacing[i] * pixelsPerMz < ENVELOPE_MIN_SPACING_PX) continue
+        const charge = envelope.charges?.[i]
+        const isotope = envelope.isotopes?.[i]
+        x.push(envelope.mzs[i])
+        y.push(envelope.intensities[i])
+        hover.push(
+          `Theoretical m/z ${envelope.mzs[i].toFixed(4)}` +
+            (charge !== undefined ? `<br>z=${charge}` : '') +
+            (isotope !== undefined ? `, isotope ${isotope}` : ''),
+        )
+      }
+      if (x.length === 0) return null
+      return {
+        x,
+        y,
+        mode: 'markers',
+        type: 'scatter',
+        name: 'Theoretical envelope',
+        marker: {
+          symbol: 'circle-open',
+          size: 9,
+          color: this.styling.envelopeColor,
+          line: { width: 1.5, color: this.styling.envelopeColor },
+        },
+        hoverinfo: 'text',
+        hovertext: hover,
+      } as Plotly.Data
+    },
+    isolationWindowJson(): string {
+      return JSON.stringify(this.args.isolationWindow ?? null)
+    },
+    /** The isolation window, in the m/z views only */
+    isolationWindow(): { lower: number; upper: number; target?: number } | null {
+      const window = this.args.isolationWindow
+      if (!window || !this.isMzMode) return null
+      if (!Number.isFinite(window.lower) || !Number.isFinite(window.upper)) return null
+      return window
+    },
+    isolationWindowShapes(): Partial<Plotly.Shape>[] {
+      const window = this.isolationWindow
+      if (!window) return []
+      const color = this.styling.isolationWindowColor
+      const shapes: Partial<Plotly.Shape>[] = [
+        {
+          type: 'rect',
+          xref: 'x',
+          yref: 'paper',
+          x0: window.lower,
+          x1: window.upper,
+          y0: 0,
+          y1: 1,
+          fillcolor: color,
+          opacity: 0.25,
+          line: { width: 0 },
+          layer: 'below',
+        },
+      ]
+      if (window.target !== undefined && Number.isFinite(window.target)) {
+        shapes.push({
+          type: 'line',
+          xref: 'x',
+          yref: 'paper',
+          x0: window.target,
+          x1: window.target,
+          y0: 0,
+          y1: 1,
+          line: { color, width: 1, dash: 'dash' },
+          layer: 'below',
+        })
+      }
+      return shapes
+    },
+    isolationWindowAnnotations(): Partial<Plotly.Annotations>[] {
+      const window = this.isolationWindow
+      if (!window) return []
+      return [
+        {
+          x: (window.lower + window.upper) / 2,
+          y: 1,
+          xref: 'x',
+          yref: 'paper',
+          yanchor: 'bottom',
+          text: `Isolation window ${window.lower.toFixed(2)}–${window.upper.toFixed(2)}`,
+          showarrow: false,
+          font: { size: 11, color: this.styling.isolationWindowColor },
+        },
+      ]
+    },
     ladderKey(): unknown {
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
     },
@@ -339,8 +451,12 @@ export default defineComponent({
         : highlighted.map((a) => a.mass).filter((m) => !isNaN(m))
       if (values.length === 0) return [0, 1]
 
-      // Raw peaks of the highlighted masses: all of them
-      if (this.isMzMode) return [Math.min(...values) * 0.98, Math.max(...values) * 1.02]
+      // Raw peaks of the highlighted masses: all of them, and the isolation window
+      if (this.isMzMode) {
+        const window = this.isolationWindow
+        if (window) values.push(window.lower, window.upper)
+        return [Math.min(...values) * 0.98, Math.max(...values) * 1.02]
+      }
 
       // Masses: centre on them, then narrow until their labels stop overlapping
       const xcenter = values.reduce((sum, mass) => sum + mass, 0) / values.length
@@ -568,6 +684,7 @@ export default defineComponent({
           marker: { color: this.styling.selectedColor },
         } as Plotly.Data,
       ]
+      if (this.envelopeTrace) traces.push(this.envelopeTrace)
       if (this.annotationsVisible) traces.push(...this.annotationData.traces)
       return traces
     },
@@ -601,8 +718,16 @@ export default defineComponent({
           color: this.theme?.textColor,
           family: this.theme?.font,
         },
-        shapes: [...this.annotationData.shapes, ...this.measureOverlay.shapes],
-        annotations: [...this.annotationData.annotations, ...this.measureOverlay.annotations],
+        shapes: [
+          ...this.isolationWindowShapes,
+          ...this.annotationData.shapes,
+          ...this.measureOverlay.shapes,
+        ],
+        annotations: [
+          ...this.isolationWindowAnnotations,
+          ...this.annotationData.annotations,
+          ...this.measureOverlay.annotations,
+        ],
       }
     },
     /**
@@ -680,6 +805,12 @@ export default defineComponent({
     ladderJson() {
       this.requestGraph()
     },
+    envelopeJson() {
+      this.requestGraph()
+    },
+    isolationWindowJson() {
+      this.requestGraph()
+    },
     selectedMassIndex() {
       this.manual = false
       this.requestGraph()
@@ -740,6 +871,33 @@ export default defineComponent({
         groups.push({ charge, center })
       })
       return groups
+    },
+    /** Width in pixels of the x axis: the plot area without the margins. */
+    xAxisPixelLength(): number {
+      const element = document.getElementById(this.id) as
+        | (HTMLElement & { _fullLayout?: { xaxis?: { _length?: number } } })
+        | null
+      const length = element?._fullLayout?.xaxis?._length
+      if (length && length > 0) return length
+      const width = this.plotWidth()
+      return width > 0 ? Math.max(width - 160, 100) : 1000
+    },
+    /** m/z distance from each envelope peak to the next isotope of its charge:
+     * the isotope spacing over the charge, or, without charges, the distance to
+     * the nearest other peak. */
+    envelopeIsotopeSpacing(mzs: number[], charges?: number[]): number[] {
+      if (charges && charges.length >= mzs.length) {
+        return mzs.map((_, i) => (charges[i] > 0 ? ISOTOPE_SPACING / charges[i] : Infinity))
+      }
+      const order = mzs.map((_, i) => i).sort((a, b) => mzs[a] - mzs[b])
+      const spacing = new Array<number>(mzs.length).fill(Infinity)
+      for (let k = 0; k < order.length; k++) {
+        const here = mzs[order[k]]
+        const before = k > 0 ? here - mzs[order[k - 1]] : Infinity
+        const after = k < order.length - 1 ? mzs[order[k + 1]] - here : Infinity
+        spacing[order[k]] = Math.min(before, after)
+      }
+      return spacing
     },
     plotWidth(): number {
       const element = document.getElementById(this.id)
@@ -960,22 +1118,13 @@ export default defineComponent({
           },
         })
       }
-      modeBarButtons.push({
-        title: 'Download as SVG',
-        name: 'toImageSvg',
-        icon: SVG_ICON,
-        click: () => {
-          const plotElement = document.getElementById(this.id)
-          if (plotElement) {
-            Plotly.downloadImage(plotElement, {
-              filename: this.args.svgFilename || 'spectrum',
-              height: 400,
-              width: 1200,
-              format: 'svg',
-            })
-          }
-        },
-      })
+      modeBarButtons.push(
+        plotlyDownloadButton({
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || 'spectrum',
+          icon: SPECTRUM_DOWNLOAD_ICON,
+        }) as unknown as Record<string, unknown>,
+      )
       modeBarButtons.push(...(this.measure.modeBarButtons(this.measureTitle) as unknown as Array<Record<string, unknown>>))
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
