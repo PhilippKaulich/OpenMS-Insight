@@ -288,6 +288,24 @@
         :theme="theme"
         @select="onInternalFragmentSelected"
       />
+      <!-- Variable modifications set on residues, with the library only -->
+      <div
+        v-if="variableModData.library !== null && appliedVariableModifications.length > 0"
+        class="d-flex flex-wrap align-center px-2 pb-2 variable-modification-list"
+      >
+        <span class="text-body-2 mr-2">Variable modifications:</span>
+        <v-chip
+          v-for="mod in appliedVariableModifications"
+          :key="mod.index"
+          size="small"
+          class="mr-1 mb-1"
+          closable
+          @click:close="variableModData.updateVariableModifications(mod.index, 0)"
+        >
+          {{ mod.text }}
+        </v-chip>
+        <span class="text-body-2 ml-1">{{ variableModificationTotal }}</span>
+      </div>
     </div>
     <div v-if="(maxCoverage > 0) && showTags" class="scale-container" title="Sequence Tag Coverage">
       <div class="scale-text"> {{ maxCoverage + "x" }}</div>
@@ -893,6 +911,30 @@ export default defineComponent({
       return false
     },
     // Sequence change button computed properties
+    // Applied variable modifications, in sequence order: site, name, mass
+    appliedVariableModifications(): { index: number; text: string }[] {
+      const masses = this.variableModData.variableModifications ?? {}
+      const labels = this.variableModData.variableModLabels ?? {}
+      return Object.entries(masses)
+        .map(([key, mass]) => ({ index: Number(key), mass }))
+        .filter((m) => m.mass !== undefined && m.mass !== 0 && !Number.isNaN(m.mass))
+        .sort((a, b) => a.index - b.index)
+        .map(({ index, mass }) => {
+          let site: string
+          if (index < 0) site = 'N-term'
+          else if (index >= this.sequence.length) site = 'C-term'
+          else site = `${this.sequence[index]}${index + 1}`
+          const name = labels[index] ?? ''
+          const shift = mass.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })
+          return { index, text: `${site} ${name ? name + ' ' : ''}${shift} Da` }
+        })
+    },
+    variableModificationTotal(): string {
+      const total = Object.values(this.variableModData.variableModifications ?? {})
+        .filter((m) => m && !Number.isNaN(m))
+        .reduce((a, b) => a + b, 0)
+      return `Total ${total.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })} Da`
+    },
     modificationItems(): { title: string; value: string }[] {
       return (this.args.modificationLibrary ?? []).map((m) => {
         const sign = m.mass >= 0 ? '+' : ''
@@ -904,6 +946,16 @@ export default defineComponent({
     },
   },
   watch: {
+    // The residue menus read the variable-modification library from the store
+    'args.variableModificationLibrary': {
+      handler(library) {
+        this.variableModData.setLibrary(library, this.args.variableModificationSuggestions)
+      },
+      immediate: true,
+    },
+    'args.variableModificationSuggestions'(suggested) {
+      this.variableModData.setLibrary(this.args.variableModificationLibrary, suggested)
+    },
     // A new spectrum (or entry) arrives: rematch the fragments
     spectrum() {
       this.recomputeFragments()

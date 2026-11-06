@@ -714,6 +714,46 @@ class TestProteinSequenceView:
         assert view._get_component_args()["modificationLibrary"] == library
         with pytest.raises(ValueError):
             view.set_modification_picker("unimod")
+        assert view._get_component_args()["variableModificationLibrary"] is None
+
+    def test_variable_modification_library_args(
+        self, mock_streamlit, temp_cache_dir: Path
+    ):
+        view = ProteinSequenceView(
+            cache_id="seq_varmods",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["M"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            variable_modification_library=[
+                {"id": "Oxidation (M)", "mass": 15.994915, "site": "M"},
+            ],
+        )
+        args = view._get_component_args()
+        assert args["variableModificationLibrary"] == [
+            {"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}
+        ]
+        # separate from the dialog's fixed-modification picker
+        assert args["modificationLibrary"] is None
+        # None: the menu's built-in suggestions
+        assert args["variableModificationSuggestions"] is None
+        view.set_variable_modification_library(
+            [{"id": "Oxidation (M)", "mass": 15.994915, "site": "M"}],
+            suggested={"M": ["Oxidation (M)"]},
+        )
+        assert view._get_component_args()["variableModificationSuggestions"] == {
+            "M": ["Oxidation (M)"]
+        }
+        assert view.set_variable_modification_library(None) is view
+        assert view._get_component_args()["variableModificationLibrary"] is None
+        with pytest.raises(ValueError):
+            view.set_variable_modification_library("unimod")
         # Not part of the cache: the same data cache serves both
         assert "modification_library" not in view._get_cache_config()
 

@@ -75,20 +75,29 @@
       location="end"
       :open-on-click="false"
       :close-on-content-click="false"
-      width="200px"
+      :width="hasLibrary ? '360px' : '200px'"
     >
       <v-list>
         <v-list-item>
+          <ModificationPicker
+            v-if="hasLibrary"
+            :site="aminoAcid"
+            :options="modificationsForSelect"
+            :suggested="variableModData.suggested"
+            :selected="selectedModification"
+            @pick="updateSelectedModification"
+          />
           <v-select
+            v-else
             v-model="selectedModification"
             clearable
             label="Modification"
             density="compact"
             :items="modificationsForSelect"
+            item-title="title"
+            item-value="value"
             @update:model-value="updateSelectedModification"
-            @click:clear="selectedModification = undefined"
-          >
-          </v-select>
+          />
         </v-list-item>
         <v-list-item v-if="customSelected">
           <v-form @submit.prevent>
@@ -143,11 +152,8 @@ import type { SequenceData } from '@/types/protein-sequence-data'
 import type { Theme } from 'streamlit-component-lib'
 import type { PropType } from 'vue'
 import { defineComponent } from 'vue'
-import {
-  potentialModificationMap,
-  type KnownModification,
-  modificationMassMap,
-} from '@/components/sequence/modification'
+import { modificationOptions, type ModificationOption } from '@/components/sequence/modification'
+import ModificationPicker from './ModificationPicker.vue'
 
 // Provided by ProteinSequenceView. The defaults let the legend's example
 // cells render outside a view.
@@ -159,6 +165,7 @@ interface SequenceViewContext {
 
 export default defineComponent({
   name: 'ProteinAminoAcidCell',
+  components: { ModificationPicker },
   inject: {
     sequenceView: {
       default: (): SequenceViewContext => ({
@@ -229,7 +236,7 @@ export default defineComponent({
   data() {
     return {
       menuOpen: false,
-      selectedModification: undefined as KnownModification | undefined,
+      selectedModification: undefined as string | undefined,
       customSelected: false,
       customModMass: '0' as string,
     }
@@ -308,8 +315,15 @@ export default defineComponent({
       }
       return (length ?? 0) - this.index
     },
-    modificationsForSelect(): string[] {
-      return ['None', 'Custom', ...this.potentialModifications]
+    modificationsForSelect(): ModificationOption[] {
+      return modificationOptions(this.aminoAcid, this.variableModData.library)
+    },
+    hasLibrary(): boolean {
+      return this.variableModData.library !== null
+    },
+    // This residue's entry in the store (0 or undefined: unmodified)
+    storedModificationMass(): number | undefined {
+      return this.variableModData.variableModifications[this.index]
     },
     aminoAcidCellStyles(): Record<string, string> {
       // Get coverage and scale between 0.1 and 1.0
@@ -347,9 +361,6 @@ export default defineComponent({
         'sequence-amino-acid': !this.fixedModification,
         'sequence-amino-acid-highlighted': this.fixedModification,
       }
-    },
-    potentialModifications(): KnownModification[] {
-      return potentialModificationMap[this.aminoAcid] ?? []
     },
     isThisAAmodified(): boolean {
       const variableModifications = this.variableModData.variableModifications ?? {}
@@ -401,13 +412,25 @@ export default defineComponent({
       if (this.customModMass !== '0') {
         return parseFloat(this.customModMass).toLocaleString('en-US', { signDisplay: 'always' })
       }
+      // The residue's variable modification, also after the residues are rebuilt
+      if (this.storedModificationMass) {
+        return parseFloat(this.storedModificationMass.toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      }
       return this.sequenceObject.modMass
     }
   },
   watch: {
     selectedModification() {
-      if ((this.selectedModification !== undefined) && (modificationMassMap[this.selectedModification] !== undefined)) {
-        this.sequenceObject.modMass = parseFloat(modificationMassMap[this.selectedModification].toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      if (this.selectedModification !== undefined) {
+        this.sequenceObject.modMass = parseFloat(this.optionMass(this.selectedModification).toFixed(2)).toLocaleString('en-US', { signDisplay: 'always' })
+      }
+    },
+    // Removed elsewhere (the list of applied modifications)
+    storedModificationMass(mass: number | undefined) {
+      if (!mass) {
+        this.selectedModification = undefined
+        this.customSelected = false
+        this.customModMass = '0'
       }
     },
     showTags() {
@@ -436,24 +459,32 @@ export default defineComponent({
         this.$emit('selected', this.index)
       }
     },
-    updateSelectedModification(modification: 'None' | 'Custom' | KnownModification) {
-      if (modification === 'None') {
-        this.selectedModification = undefined
-      } else if (modification === 'Custom') {
+    optionMass(value: string | undefined): number {
+      return this.modificationsForSelect.find((o) => o.value === value)?.mass ?? 0
+    },
+    updateSelectedModification(modification: string | null) {
+      if (modification === 'Custom') {
         this.customSelected = true
         return
-      } else {
-        this.selectedModification = modification as KnownModification
       }
+      this.selectedModification =
+        modification === null || modification === 'None' ? undefined : modification
       this.toggleMenuOpen()
       this.customSelected = false
+      this.customModMass = '0'
       this.variableModData.updateVariableModifications(
         this.index,
-        this.selectedModification ? modificationMassMap[this.selectedModification] : 0
+        this.optionMass(this.selectedModification),
+        this.selectedModification
       )
     },
     updateCustomModification() {
-      this.variableModData.updateVariableModifications(this.index, parseFloat(this.customModMass))
+      this.selectedModification = undefined
+      this.variableModData.updateVariableModifications(
+        this.index,
+        parseFloat(this.customModMass),
+        'Custom'
+      )
       this.toggleMenuOpen()
     },
   },
