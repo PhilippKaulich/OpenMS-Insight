@@ -18,6 +18,22 @@ export type SequenceData = {
   fragment_masses_z: number[][]
   annotated_fragments?: AnnotatedFragment[] | null
   annotation_summary?: AnnotationSummary | null
+  // The entry was edited in the view (see editIdentifier): its modifications
+  // are the user's and are not part of the fragment masses
+  edited?: boolean | null
+}
+
+// What an edit of an identification writes to editIdentifier. 'edit' starts
+// editing the search result, 'reset' goes back to it, 'update' carries the
+// edited sequence and modifications (positions in `sequence`, start == end;
+// -1 the N-terminus, the sequence length the C-terminus).
+export type IdentificationEdit = {
+  action: 'edit' | 'update' | 'reset'
+  nonce: number
+  sequence?: string
+  start_position?: number
+  end_position?: number
+  modifications?: ModificationData[]
 }
 
 // A fragment isotope envelope annotated on the raw spectrum by an external tool.

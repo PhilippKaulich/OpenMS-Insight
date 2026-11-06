@@ -9,6 +9,13 @@ export type SequenceObject = {
   modEnd? : boolean
   modMass? : string
   modLabels? : string
+  // Window of residues the matched fragments allow a modification in
+  ambStart? : boolean
+  ambCenter? : boolean
+  ambEnd? : boolean
+  // Where the fragments place this residue's modification, when it is not
+  // localized to this residue alone
+  modNote? : string
   aIon: boolean
   bIon: boolean
   cIon: boolean

@@ -698,6 +698,10 @@ ProteinSequenceView(
 
 The expected columns are listed in `ProteinSequenceView.SEQUENCE_COLUMNS` and the class docstring. Pass `sequence=` (a dict with those columns) for one fixed sequence. `entry_title` and `observed_mass_label` name the entry in the header.
 
+Every modification the view applies (one set in a residue menu, or one of an edited identification) is localized from the matched fragments: a fragment that matches only with the mass shift places it inside the fragment, one that matches only without it places it outside. When several residues remain, or the shift fits several library modifications at those residues, the view marks the residues with a dashed line and the modification with a `?`, and says why in its tooltip and in the list of modifications.
+
+`edit_identifier=` (or `set_edit_identifier()` per render) lets the user edit an identification: a pencil button starts from the search result, the residue menus and the "change sequence" dialog then change the sequence and its modifications, and a reset button goes back. Each change is written to that identifier as a dict with `action` (`edit`, `update` or `reset`) and a fresh `nonce`; the app keeps the edit and renders the view again with the edited entry (`edited=True`, fragment masses of the unmodified sequence, its modifications localized on single residues).
+
 ### ProteinStructureView
 
 3D structure of a protein (PDB or mmCIF, drawn with 3Dmol.js), coloured by the fragment evidence of a sequence entry. It takes the same data as `ProteinSequenceView`, aligns the sequence to the structure's chains, and shares residue and fragment selection with a sequence view. Residues outside the entry's start..end positions are not shown.

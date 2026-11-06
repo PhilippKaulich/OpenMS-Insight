@@ -24,6 +24,12 @@
           <span class="summary-label">{{ item.label }}</span>
           <span class="summary-value">{{ item.value }}</span>
         </span>
+        <v-chip v-if="isEdited" size="small" color="warning" variant="tonal" class="summary-pair">
+          Edited
+          <v-tooltip activator="parent" location="bottom">
+            Sequence and modifications differ from the search result
+          </v-tooltip>
+        </v-chip>
       </div>
       <div v-if="annotationSummaryItems.length > 0" class="summary-line summary-line-secondary text-body-2 mt-1">
         <span class="summary-title font-weight-bold">{{ args.annotationTitle ?? 'Fragment annotation' }}</span>
@@ -63,6 +69,30 @@
             <v-icon>mdi-dna</v-icon>
             <v-tooltip activator="parent" location="bottom">
               Change sequence
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="canStartEdit"
+            variant="text"
+            icon="mdi-pencil"
+            size="large"
+            @click="startEdit"
+          >
+            <v-icon>mdi-pencil</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Edit sequence and modifications
+            </v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="isEdited"
+            variant="text"
+            icon="mdi-restore"
+            size="large"
+            @click="resetEdit"
+          >
+            <v-icon>mdi-restore</v-icon>
+            <v-tooltip activator="parent" location="bottom">
+              Reset to the search result
             </v-tooltip>
           </v-btn>
           <v-btn
@@ -290,19 +320,24 @@
       />
       <!-- Variable modifications set on residues, with the library only -->
       <div
-        v-if="variableModData.library !== null && appliedVariableModifications.length > 0"
+        v-if="(variableModData.library !== null || isEdited || hasLocalizationNotes) && appliedVariableModifications.length > 0"
         class="d-flex flex-wrap align-center px-2 pb-2 variable-modification-list"
       >
-        <span class="text-body-2 mr-2">Variable modifications:</span>
+        <span class="text-body-2 mr-2">{{ isEdited ? 'Modifications:' : 'Variable modifications:' }}</span>
         <v-chip
           v-for="mod in appliedVariableModifications"
           :key="mod.index"
           size="small"
           class="mr-1 mb-1"
+          :color="mod.note ? 'warning' : undefined"
+          :prepend-icon="mod.note ? 'mdi-help-circle-outline' : undefined"
           closable
           @click:close="variableModData.updateVariableModifications(mod.index, 0)"
         >
           {{ mod.text }}
+          <v-tooltip v-if="mod.note" activator="parent" location="bottom">
+            Ambiguous: {{ mod.note }}
+          </v-tooltip>
         </v-chip>
         <span class="text-body-2 ml-1">{{ variableModificationTotal }}</span>
       </div>
@@ -427,6 +462,7 @@ import type {
   FragmentSettings,
   ModificationData,
   FragmentSelection,
+  IdentificationEdit,
   MatchedSpectrum,
   SequenceTag,
   SequenceData,
@@ -439,7 +475,12 @@ import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
-import { extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
+import { builtInLibrary, extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
+import {
+  describeLocalization,
+  localizeModifications,
+  type ModificationLocalization,
+} from './modification-localization'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -477,6 +518,17 @@ const toFixedFormatter = (decimalPlaces?: number) => (cell: { getValue: () => un
 }
 
 let viewIdCounter = 0
+
+// Same residues and masses (labels aside), for localized modifications
+function sameModifications(a: ModificationData[], b: ModificationData[]): boolean {
+  const key = (list: ModificationData[]) =>
+    list
+      .filter((m) => m.start === m.end && m.mass_diff)
+      .map((m) => `${m.start}:${m.mass_diff.toFixed(6)}`)
+      .sort()
+      .join('|')
+  return key(a) === key(b)
+}
 
 export default defineComponent({
   name: 'ProteinSequenceView',
@@ -645,6 +697,8 @@ export default defineComponent({
       SEQUENCE_DIALOG_HEIGHT,
       // Modification ids picked in the change-sequence dialog
       customModifications: [] as string[],
+      // Where the matched fragments place each modification set on a residue
+      localizations: [] as ModificationLocalization[],
       customSequenceInput: '' as string,
       sequenceInputError: '' as string,
       sequenceInputFocused: false,
@@ -869,10 +923,22 @@ export default defineComponent({
       return (explained_cleavage / (this.sequence_end - this.sequence_start)) * 100
     },
     disableVariableModifications(): boolean {
-      if (this.showIdentification) {
+      // An identification's modifications are its search's, until it is edited
+      if (this.showIdentification && !this.isEdited) {
         return true
       }
       return false
+    },
+    // The entry was edited in this view (the app returns it with edited: true)
+    isEdited(): boolean {
+      return this.showIdentification && !!this.args.editIdentifier && this.entry?.edited === true
+    },
+    canStartEdit(): boolean {
+      return this.showIdentification && !!this.args.editIdentifier && !this.isEdited
+        && this.sequence.length > 0
+    },
+    hasLocalizationNotes(): boolean {
+      return this.localizations.some((l) => describeLocalization(l, this.sequence) !== '')
     },
     showIdentification(): boolean {
       if (this.entryObservedMass !== undefined) {
@@ -912,7 +978,7 @@ export default defineComponent({
     },
     // Sequence change button computed properties
     // Applied variable modifications, in sequence order: site, name, mass
-    appliedVariableModifications(): { index: number; text: string }[] {
+    appliedVariableModifications(): { index: number; text: string; note: string }[] {
       const masses = this.variableModData.variableModifications ?? {}
       const labels = this.variableModData.variableModLabels ?? {}
       return Object.entries(masses)
@@ -926,7 +992,9 @@ export default defineComponent({
           else site = `${this.sequence[index]}${index + 1}`
           const name = labels[index] ?? ''
           const shift = mass.toLocaleString('en-US', { signDisplay: 'always', maximumFractionDigits: 4 })
-          return { index, text: `${site} ${name ? name + ' ' : ''}${shift} Da` }
+          const loc = this.localizations.find((l) => l.index === index)
+          const note = loc && (loc.ambiguous || loc.misplaced || loc.conflict) ? describeLocalization(loc, this.sequence) : ''
+          return { index, text: `${site} ${name ? name + ' ' : ''}${shift} Da`, note }
         })
     },
     variableModificationTotal(): string {
@@ -942,7 +1010,17 @@ export default defineComponent({
       })
     },
     shouldShowSequenceChangeButton(): boolean {
-      return !this.showIdentification && !!this.args.sequenceIdentifier
+      return (!this.showIdentification && !!this.args.sequenceIdentifier) || this.isEdited
+    },
+    // The edited identification's modifications as the store holds them
+    storeModifications(): ModificationData[] {
+      const masses = this.variableModData.variableModifications ?? {}
+      const labels = this.variableModData.variableModLabels ?? {}
+      return Object.entries(masses)
+        .map(([key, mass]) => ({ index: Number(key), mass }))
+        .filter((m) => m.mass && !Number.isNaN(m.mass))
+        .sort((a, b) => a.index - b.index)
+        .map(({ index, mass }) => ({ start: index, end: index, mass_diff: mass, labels: labels[index] ?? '' }))
     },
   },
   watch: {
@@ -969,8 +1047,22 @@ export default defineComponent({
     // stale residue selection and re-reads the settings.
     entryKey() {
       this.setSelectedAA(undefined)
+      this.syncStoreFromEntry()
       this.recomputeFragments()
       this.updateSettings()
+    },
+    // A modification set or removed on an edited identification: the app
+    // keeps the edit, so it outlasts a rerun and a reload
+    'variableModData.variableMod'() {
+      if (!this.isEdited) return
+      if (sameModifications(this.storeModifications, this.entry?.modifications ?? [])) return
+      this.writeEdit({
+        action: 'update',
+        sequence: this.sequence.join(''),
+        start_position: this.sequence_start_reported,
+        end_position: this.sequence_end_reported,
+        modifications: this.storeModifications,
+      })
     },
     // Selected sequence tag; cleared when the app resets it on a new entry.
     // By value: the arguments arrive as a new object on every rerun
@@ -1034,6 +1126,7 @@ export default defineComponent({
   },
   mounted() {
     this.setSelectedAA(undefined)
+    this.syncStoreFromEntry()
     this.updateSettings()
     this.recomputeFragments()
     // The view grows and shrinks with the sequence and the fragment table:
@@ -1126,14 +1219,22 @@ export default defineComponent({
         this.massTitle = this.args.entryTitle ?? 'Identification'
         let observed_mass = '-'
         let delta_mass = '-'
+        // An edited entry's mass is that of its unmodified sequence: add the
+        // modifications set in the view
+        let theoretical = this.theoreticalMass
+        if (this.isEdited) {
+          Object.values(this.variableModifications).forEach((m) => {
+            if (m && !Number.isNaN(m)) theoretical += m
+          })
+        }
         if (this.entryObservedMass > 0) {
           observed_mass = this.entryObservedMass.toFixed(2)
-          delta_mass = Math.abs(this.theoreticalMass - this.entryObservedMass).toFixed(2)
+          delta_mass = Math.abs(theoretical - this.entryObservedMass).toFixed(2)
         }
 
 
         this.massData = [
-          { label: 'Theoretical protein mass', value: this.theoreticalMass.toFixed(2) },
+          { label: this.isEdited ? 'Theoretical mass' : 'Theoretical protein mass', value: theoretical.toFixed(2) },
           { label: this.args.observedMassLabel ?? 'Observed mass', value: observed_mass },
           { label: 'Δ Mass (Da)', value: delta_mass },
         ]
@@ -1256,7 +1357,7 @@ export default defineComponent({
               if (iontype.text === 'x' || iontype.text === 'y' || iontype.text === 'z')
                 // if this is suffix, add modification mass string from the theoretical index (reverse)
                 Object.entries(this.variableModifications).forEach(([varIndex, varMass]) => {
-                  if (sequence_size - parseInt(varIndex) <= aaIndex) {
+                  if (parseInt(varIndex) >= sequence_size - theoIndex) {
                     theoretical_mass += varMass
                   }
                 })
@@ -1626,7 +1727,9 @@ export default defineComponent({
       })
     },
     prepareAmbigiousModifications() {
-      this.modifications.forEach((modification) => {
+      // An edited entry's modifications are in the store, drawn per residue
+      const fromData = this.isEdited ? [] : this.modifications
+      fromData.forEach((modification) => {
         const start = modification.start
         const end = modification.end
         const mass = modification.mass_diff.toFixed(2)
@@ -1646,6 +1749,88 @@ export default defineComponent({
           }
         }
       })
+      this.prepareModificationLocalization()
+    },
+    // Where the matched fragments place each modification set on a residue:
+    // a window of several possible residues (or several modifications of the
+    // same mass) is marked on the sequence and in the list of modifications
+    prepareModificationLocalization(): void {
+      this.localizations = []
+      if (this.usesAnnotator || this.spectrum === undefined || this.sequence.length === 0) return
+      if (this.variableModData.isEmpty) return
+      if (this.sequenceObjects.length !== this.sequence.length) return
+      const extraMasses = Object.entries(extraFragmentTypeObject)
+        .filter(([type]) => this.ionTypesExtra[type as ExtraFragmentType] || type === 'default')
+        .flatMap(([, list]) => list.map((e) => e.typeMass))
+      const series = this.selectedIonSeries.filter((s) => {
+        if (isPrefixIon(s.base) && this.sequence_start_reported < 0) return false
+        if (isSuffixIon(s.base) && this.sequence_end_reported < 0) return false
+        return true
+      })
+      const reference = this.spectrum.precursorMass || this.entryObservedMass || this.theoreticalMass
+      const localizations = localizeModifications({
+        sequence: this.sequence,
+        start: this.sequence_start,
+        end: this.sequence_end,
+        fragmentMasses: (base) => this.getFragmentMasses(base),
+        series,
+        extraMasses,
+        observedMasses: toRaw(this.spectrum.masses ?? []),
+        tolerance: this.fragmentMassTolerance,
+        unit: this.toleranceUnit,
+        modifications: toRaw(this.variableModifications),
+        library: this.variableModData.library ?? builtInLibrary(),
+        referenceMass: reference ?? 0,
+      })
+      for (const loc of localizations) {
+        const note = describeLocalization(loc, this.sequence)
+        const object = this.sequenceObjects[loc.index]
+        if (object && (loc.ambiguous || loc.misplaced || loc.conflict) && note) {
+          object.modNote = note
+        }
+        // The window the fragments allow, when it holds more than one candidate
+        if (loc.conflict || loc.evidence === 0) continue
+        if (!(loc.candidates.length > 1 || loc.misplaced)) continue
+        for (let i = loc.lo; i <= loc.hi; i++) {
+          const o = this.sequenceObjects[i]
+          if (!o) continue
+          o.ambStart = o.ambStart || i === loc.lo
+          o.ambEnd = o.ambEnd || i === loc.hi
+          o.ambCenter = o.ambCenter || (i !== loc.lo && i !== loc.hi)
+        }
+      }
+      this.localizations = localizations
+    },
+    // In an editable identification, the store holds the shown entry's
+    // modifications: the search's are only in the fragment masses
+    syncStoreFromEntry(): void {
+      if (!this.args.editIdentifier) return
+      if (this.isEdited) {
+        const masses: Record<number, number> = {}
+        const labels: Record<number, string> = {}
+        for (const m of this.modifications) {
+          if (m.start !== m.end || !m.mass_diff) continue
+          masses[m.start] = m.mass_diff
+          if (m.labels) labels[m.start] = m.labels
+        }
+        if (!sameModifications(this.storeModifications, this.modifications)) {
+          this.variableModData.setAll(masses, labels)
+        }
+      } else if (this.showIdentification && !this.variableModData.isEmpty) {
+        this.variableModData.clear()
+      }
+    },
+    writeEdit(edit: Omit<IdentificationEdit, 'nonce'>): void {
+      const id = this.args.editIdentifier
+      if (!id) return
+      // A new nonce each time: the app applies every edit once
+      this.selectionStore.updateSelection(id, { ...edit, nonce: Date.now() })
+    },
+    startEdit(): void {
+      this.writeEdit({ action: 'edit' })
+    },
+    resetEdit(): void {
+      this.writeEdit({ action: 'reset' })
     },
     setSelectedAA(position?: number): void {
       const id = this.args.aaIdentifier
@@ -1715,10 +1900,38 @@ export default defineComponent({
     },
     // Sequence change dialog methods
     openSequenceDialog(): void {
-      this.customSequenceInput = ''
+      // An edited identification starts from its own residues
+      this.customSequenceInput = this.isEdited
+        ? this.sequence.slice(this.sequence_start, this.sequence_end + 1).join('')
+        : ''
       this.customModifications = [...(this.args.modifications ?? [])]
       this.sequenceInputError = ''
       this.sequenceDialog = true
+    },
+    // The edited residues become the whole sequence; a modification stays on
+    // its residue while that residue is unchanged
+    submitEditedSequence(residues: string): void {
+      if (residues.length === 0) return
+      const offset = this.sequence_start
+      const old = this.sequence
+      const modifications: ModificationData[] = []
+      for (const m of this.storeModifications) {
+        let index = m.start
+        if (index < 0) index = -1
+        else if (index >= old.length) index = residues.length
+        else {
+          index -= offset
+          if (index < 0 || index >= residues.length || residues[index] !== old[m.start]) continue
+        }
+        modifications.push({ ...m, start: index, end: index })
+      }
+      this.writeEdit({
+        action: 'update',
+        sequence: residues,
+        start_position: 0,
+        end_position: residues.length - 1,
+        modifications,
+      })
     },
     closeSequenceDialog(): void {
       this.sequenceDialog = false
@@ -1726,6 +1939,13 @@ export default defineComponent({
       this.sequenceInputError = ''
     },
     submitCustomSequence(): void {
+      if (this.isEdited) {
+        this.submitEditedSequence(this.customSequenceInput.toUpperCase().replace(/\s+/g, ''))
+        this.sequenceDialog = false
+        this.customSequenceInput = ''
+        this.sequenceInputError = ''
+        return
+      }
       // The picked modifications first, so the rebuild for the sequence uses them
       if (this.args.modificationsIdentifier && this.modificationItems.length > 0) {
         this.selectionStore.updateSelection(

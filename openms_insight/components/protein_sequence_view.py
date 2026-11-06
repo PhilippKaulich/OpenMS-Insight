@@ -33,6 +33,7 @@ SEQUENCE_COLUMNS: tuple[str, ...] = (
     "modifications",
     "annotated_fragments",
     "annotation_summary",
+    "edited",
 )
 
 
@@ -198,7 +199,8 @@ class ProteinSequenceView(BaseComponent):
       ``modifications`` (list of {start, end, mass_diff, labels}),
       ``fixed_modifications`` (residues carrying a fixed modification),
       ``annotated_fragments`` and ``annotation_summary`` (fragments annotated
-      by an external tool, see ``AnnotatedFragment`` in the Vue types).
+      by an external tool, see ``AnnotatedFragment`` in the Vue types),
+      ``edited`` (True for an entry the user edited, see ``edit_identifier``).
     - Spectrum columns: ``mass_column`` (list of deconvolved masses) and
       ``precursor_mass_column``.
 
@@ -208,7 +210,20 @@ class ProteinSequenceView(BaseComponent):
 
     Without annotated fragments, fragments are matched here against the
     spectrum's masses within the tolerance (ppm), honouring variable
-    modifications the user sets on residues (right click).
+    modifications the user sets on residues (right click). For each such
+    modification the view works out from the matched fragments which residues
+    it can sit on: fragments that match only with its mass shift place it
+    inside them, fragments that match only without it place it outside. When
+    several residues remain (or the shift fits several modifications of the
+    library at those residues), the view marks the residues with a dashed
+    line and lists the alternatives in the tooltip and the list of applied
+    modifications; it also notes a modification the fragments place on other
+    residues.
+
+    With ``edit_identifier``, an identification can be edited: a pencil
+    button asks the app to start from the search result, after which the
+    residue menus, the "change sequence" dialog and a reset button write
+    edits (see ``edit_identifier``).
 
     Example:
         view = ProteinSequenceView(
@@ -254,6 +269,7 @@ class ProteinSequenceView(BaseComponent):
         svg_filename: str = "sequence",
         accent_color: str | None = None,
         fragment_identifier: str | None = None,
+        edit_identifier: str | None = None,
         entry_title: str = "Identification",
         observed_mass_label: str = "Observed mass",
         image_format: str | None = None,
@@ -339,6 +355,21 @@ class ProteinSequenceView(BaseComponent):
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
                 ``ProteinStructureView``.
+            edit_identifier: Identifier edits of an identification are
+                written to, each a dict with ``action`` and a fresh ``nonce``
+                (apply each nonce once). None (default): identifications are
+                not editable. ``'edit'``: the user wants to edit the shown
+                identification; the app then gives the entry with
+                ``edited=True``, fragment masses of the unmodified sequence,
+                no annotated fragments, and the search's modifications each
+                on one residue (``start == end``). The view sets those on
+                the residues, matches fragments here, and adds them to the
+                theoretical mass. ``'update'``: the edited entry, with
+                ``sequence`` (string), ``start_position``, ``end_position``
+                and ``modifications`` (list of {start, end, mass_diff,
+                labels}; -1 the N-terminus, the sequence length the
+                C-terminus). ``'reset'``: back to the search result.
+                Render-time only: not part of the cache.
             entry_title: Heading of the mass summary of an entry with an
                 observed mass.
             observed_mass_label: Label of the entry's observed mass in that
@@ -374,6 +405,8 @@ class ProteinSequenceView(BaseComponent):
         self._image_format = validate_image_format(image_format, allow_none=True)
         self._accent_color = accent_color
         self._fragment_identifier = fragment_identifier
+        # Render-time option, kept out of the cache config
+        self._edit_identifier = edit_identifier
         self._entry_title = entry_title
         self._observed_mass_label = observed_mass_label
         # Sequence tag marked on the sequence (set per render, not cached)
@@ -610,6 +643,18 @@ class ProteinSequenceView(BaseComponent):
         self._variable_modification_suggestions = suggested
         return self
 
+    def set_edit_identifier(self, identifier: str | None) -> "ProteinSequenceView":
+        """Make identifications editable, writing edits to ``identifier``.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``edit_identifier`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._edit_identifier = identifier
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -629,6 +674,7 @@ class ProteinSequenceView(BaseComponent):
             **image_format_args(self._image_format),
             "accentColor": self._accent_color,
             "fragmentIdentifier": self._fragment_identifier,
+            "editIdentifier": self._edit_identifier,
             "entryTitle": self._entry_title,
             "observedMassLabel": self._observed_mass_label,
         }

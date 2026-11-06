@@ -33,6 +33,15 @@ export const useModificationStore = defineStore('variable-mod', {
       }
       this.variableModLabels = labels
     },
+    // Replace every modification at once (an edited identification's own)
+    setAll(masses: Record<number, number>, labels: Record<number, string>) {
+      this.variableMod = { ...masses }
+      this.variableModLabels = { ...labels }
+    },
+    clear() {
+      this.variableMod = {}
+      this.variableModLabels = {}
+    },
     setLibrary(
       library: LibraryModification[] | null | undefined,
       suggested?: Record<string, string[]> | null
