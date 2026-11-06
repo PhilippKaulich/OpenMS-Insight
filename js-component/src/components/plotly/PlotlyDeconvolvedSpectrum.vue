@@ -57,6 +57,8 @@ const DEFAULT_STYLING = {
   selectedColor: '#F3A712',
   unhighlightedColor: 'lightblue',
   highlightHiddenColor: '#1f77b4',
+  // Circles of the theoretical isotope envelope (set_envelope)
+  envelopeColor: '#D62728',
   isolationWindowColor: '#7F7F7F',
   annotationColors: {
     massButton: '#E4572E',
@@ -70,6 +72,10 @@ const DEFAULT_STYLING = {
 
 // Stick plots draw each peak as x,x,x / floor,y,floor
 const STICK_FLOOR = -10000000
+/** m/z distance between neighbouring isotopes at charge 1 (C13 - C12). */
+const ISOTOPE_SPACING = 1.00235
+/** Envelope circles show once neighbouring isotopes are this many pixels apart. */
+const ENVELOPE_MIN_SPACING_PX = 8
 
 const TOGGLE_ANNOTATIONS_ICON = {
   width: 1792,
@@ -218,6 +224,54 @@ export default defineComponent({
     },
     ladderJson(): string {
       return JSON.stringify(this.args.ladder ?? null)
+    },
+    envelopeJson(): string {
+      return JSON.stringify(this.args.envelope ?? null)
+    },
+    /** Theoretical isotope envelope of the selected mass as open circles on
+     * its raw peaks; drawn only while the mass it was computed for is selected. */
+    envelopeTrace(): Plotly.Data | null {
+      const envelope = this.args.envelope
+      if (!envelope || !this.isMzMode || !this.annotationsVisible) return null
+      if (envelope.massIndex !== this.selectedMassIndex) return null
+      const n = Math.min(envelope.mzs.length, envelope.intensities.length)
+      if (n === 0) return null
+      // Circles only where the zoom puts neighbouring isotopes far enough apart
+      // to tell them apart; zoomed out they would merge into one red smear.
+      const [x0, x1] = this.xRange
+      const pixelsPerMz = this.xAxisPixelLength() / Math.max(x1 - x0, 1e-9)
+      const spacing = this.envelopeIsotopeSpacing(envelope.mzs.slice(0, n), envelope.charges)
+      const x: number[] = []
+      const y: number[] = []
+      const hover: string[] = []
+      for (let i = 0; i < n; i++) {
+        if (spacing[i] * pixelsPerMz < ENVELOPE_MIN_SPACING_PX) continue
+        const charge = envelope.charges?.[i]
+        const isotope = envelope.isotopes?.[i]
+        x.push(envelope.mzs[i])
+        y.push(envelope.intensities[i])
+        hover.push(
+          `Theoretical m/z ${envelope.mzs[i].toFixed(4)}` +
+            (charge !== undefined ? `<br>z=${charge}` : '') +
+            (isotope !== undefined ? `, isotope ${isotope}` : ''),
+        )
+      }
+      if (x.length === 0) return null
+      return {
+        x,
+        y,
+        mode: 'markers',
+        type: 'scatter',
+        name: 'Theoretical envelope',
+        marker: {
+          symbol: 'circle-open',
+          size: 9,
+          color: this.styling.envelopeColor,
+          line: { width: 1.5, color: this.styling.envelopeColor },
+        },
+        hoverinfo: 'text',
+        hovertext: hover,
+      } as Plotly.Data
     },
     isolationWindowJson(): string {
       return JSON.stringify(this.args.isolationWindow ?? null)
@@ -633,6 +687,7 @@ export default defineComponent({
           marker: { color: this.styling.selectedColor },
         } as Plotly.Data,
       ]
+      if (this.envelopeTrace) traces.push(this.envelopeTrace)
       if (this.annotationsVisible) traces.push(...this.annotationData.traces)
       return traces
     },
@@ -753,6 +808,9 @@ export default defineComponent({
     ladderJson() {
       this.requestGraph()
     },
+    envelopeJson() {
+      this.requestGraph()
+    },
     isolationWindowJson() {
       this.requestGraph()
     },
@@ -816,6 +874,33 @@ export default defineComponent({
         groups.push({ charge, center })
       })
       return groups
+    },
+    /** Width in pixels of the x axis: the plot area without the margins. */
+    xAxisPixelLength(): number {
+      const element = document.getElementById(this.id) as
+        | (HTMLElement & { _fullLayout?: { xaxis?: { _length?: number } } })
+        | null
+      const length = element?._fullLayout?.xaxis?._length
+      if (length && length > 0) return length
+      const width = this.plotWidth()
+      return width > 0 ? Math.max(width - 160, 100) : 1000
+    },
+    /** m/z distance from each envelope peak to the next isotope of its charge:
+     * the isotope spacing over the charge, or, without charges, the distance to
+     * the nearest other peak. */
+    envelopeIsotopeSpacing(mzs: number[], charges?: number[]): number[] {
+      if (charges && charges.length >= mzs.length) {
+        return mzs.map((_, i) => (charges[i] > 0 ? ISOTOPE_SPACING / charges[i] : Infinity))
+      }
+      const order = mzs.map((_, i) => i).sort((a, b) => mzs[a] - mzs[b])
+      const spacing = new Array<number>(mzs.length).fill(Infinity)
+      for (let k = 0; k < order.length; k++) {
+        const here = mzs[order[k]]
+        const before = k > 0 ? here - mzs[order[k - 1]] : Infinity
+        const after = k < order.length - 1 ? mzs[order[k + 1]] - here : Infinity
+        spacing[order[k]] = Math.min(before, after)
+      }
+      return spacing
     },
     plotWidth(): number {
       const element = document.getElementById(this.id)

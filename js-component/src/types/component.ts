@@ -490,6 +490,14 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, Mea
   svgFilename?: string
   /** Sequence tag drawn in the ladder view */
   ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  /** Theoretical isotope envelope of one mass, drawn on its raw peaks */
+  envelope?: {
+    massIndex: number
+    mzs: number[]
+    intensities: number[]
+    charges?: number[]
+    isotopes?: number[]
+  } | null
   /** Isolation window shaded in the m/z views */
   isolationWindow?: { lower: number; upper: number; target?: number } | null
   height?: number

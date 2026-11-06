@@ -50,6 +50,10 @@ class DeconvolvedSpectrum(BaseComponent):
       a ladder mass switches to its raw peaks as in ``'annotated'``; a back button
       returns. Set the tag at render time with :meth:`set_ladder`.
 
+    In the m/z views, :meth:`set_envelope` adds the theoretical isotope envelope
+    of the selected mass as open circles on its raw peaks, so the fit of the
+    observed peaks can be judged by eye.
+
     All views share the annotation toggle, the same zoom rules (the
     view fits the highlighted masses and narrows until their labels no longer
     overlap) and SVG export.
@@ -165,6 +169,8 @@ class DeconvolvedSpectrum(BaseComponent):
         self._drilldown_title = drilldown_title
         # Sequence tag drawn in the 'ladder' view (set per render, not cached)
         self._ladder: dict[str, Any] | None = None
+        # Theoretical isotope envelope of one mass (set per render, not cached)
+        self._envelope: dict[str, Any] | None = None
         # Isolation window marked in the m/z views (set per render, not cached)
         self._isolation_window: dict[str, float] | None = None
 
@@ -232,6 +238,7 @@ class DeconvolvedSpectrum(BaseComponent):
         self._svg_filename = config.get("svg_filename", "spectrum")
         self._drilldown_title = config.get("drilldown_title")
         self._ladder = None
+        self._envelope = None
         self._isolation_window = None
 
     def _data_columns(self) -> list[str]:
@@ -334,6 +341,45 @@ class DeconvolvedSpectrum(BaseComponent):
             }
         return self
 
+    def set_envelope(
+        self,
+        mass_index: int | None,
+        peaks: list[dict[str, Any]] | None,
+    ) -> "DeconvolvedSpectrum":
+        """
+        Set the theoretical isotope envelope drawn for the next render.
+
+        The m/z views ('annotated', and 'ladder' drilled down to a mass) draw
+        the peaks as open circles while the mass at ``mass_index`` is selected,
+        and only once the zoom puts neighbouring isotopes of a peak's charge
+        (1.00235 / charge m/z apart, or the nearest other peak without a
+        charge) at least 8 pixels apart.
+
+        Args:
+            mass_index: Index of the mass in the spectrum's mass list (the value
+                ``mass_identifier`` holds when it is selected). None clears the
+                envelope.
+            peaks: One dict per theoretical peak with ``mz`` and ``intensity``,
+                and optionally ``charge`` and ``isotope`` (shown on hover).
+                None or empty clears the envelope.
+
+        Returns:
+            Self for method chaining.
+        """
+        if mass_index is None or not peaks:
+            self._envelope = None
+            return self
+        envelope: dict[str, Any] = {
+            "massIndex": int(mass_index),
+            "mzs": [float(p["mz"]) for p in peaks],
+            "intensities": [float(p["intensity"]) for p in peaks],
+        }
+        for key, name in (("charge", "charges"), ("isotope", "isotopes")):
+            if all(p.get(key) is not None for p in peaks):
+                envelope[name] = [int(p[key]) for p in peaks]
+        self._envelope = envelope
+        return self
+
     def set_isolation_window(
         self,
         lower_mz: float | None,
@@ -385,6 +431,8 @@ class DeconvolvedSpectrum(BaseComponent):
             "svgFilename": self._svg_filename,
             "ladder": self._ladder,
         }
+        if self._envelope:
+            args["envelope"] = self._envelope
         if self._drilldown_title:
             args["drilldownTitle"] = self._drilldown_title
         # Only when set, so the args of other callers stay as they were
