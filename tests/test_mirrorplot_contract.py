@@ -1,6 +1,7 @@
 """Contract tests for MirrorPlot."""
 
 import pandas as pd
+import pytest
 
 from openms_insight import MirrorPlot
 
@@ -248,6 +249,154 @@ class TestMirrorPlotComponentArgs:
         )
         loaded = MirrorPlot(cache_id="named", cache_path=str(temp_cache_dir))
         assert loaded._get_component_args()["svgFilename"] == "psm_scan_42"
+
+
+class TestMirrorPlotMeasure:
+    def _make(self, temp_cache_dir, data, **overrides):
+        defaults = {
+            "cache_id": "test_measure",
+            "data": data,
+            "cache_path": str(temp_cache_dir),
+            "filters_top": {"spectrum_top": "scan_id"},
+            "filters_bottom": {"spectrum_bottom": "scan_id"},
+            "interactivity": {"selected_peak": "peak_id"},
+            "x_column": "mass",
+            "y_column": "intensity",
+        }
+        defaults.update(overrides)
+        return MirrorPlot(**defaults)
+
+    def test_on_by_default_and_never_in_the_cache_config(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        """measure is on by default, and no measure option reaches the cache."""
+        plain = self._make(temp_cache_dir, sample_lineplot_data, cache_id="plain")
+        args = plain._get_component_args()
+        assert args["measure"] is True
+        assert args["measureTolerance"] == 0.02
+        assert "measureResidues" not in args
+        config = plain._get_cache_config()
+        assert not any(key.startswith("measure") for key in config)
+
+        off = self._make(
+            temp_cache_dir,
+            sample_lineplot_data,
+            cache_id="off",
+            measure=False,
+            measure_tolerance=0.05,
+            measure_residues={"M(Oxidation)": 147.0354},
+        )
+        args = off._get_component_args()
+        assert args["measure"] is False
+        assert "measureTolerance" not in args
+        assert "measureResidues" not in args
+        assert off._compute_config_hash() == plain._compute_config_hash()
+
+    def test_measure_args_reach_vue(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        comp = self._make(temp_cache_dir, sample_lineplot_data, measure=True)
+        args = comp._get_component_args()
+        assert args["measure"] is True
+        assert args["measureTolerance"] == 0.02
+        assert "measureResidues" not in args
+
+        comp = self._make(
+            temp_cache_dir,
+            sample_lineplot_data,
+            cache_id="measure_custom",
+            measure=True,
+            measure_tolerance=0.005,
+            measure_residues={"M(Oxidation)": 147.0354},
+        )
+        args = comp._get_component_args()
+        assert args["measureTolerance"] == 0.005
+        assert args["measureResidues"] == {"M(Oxidation)": 147.0354}
+
+    def test_measure_options_apply_when_loading_a_cache(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        """Loading by cache_id takes the measure options passed now, not the
+        ones the cache was built with: they are not stored in it."""
+        self._make(
+            temp_cache_dir,
+            sample_lineplot_data,
+            cache_id="measured",
+            measure_tolerance=0.01,
+            measure_residues={"C(Carbamidomethyl)": 160.03065},
+        )
+        loaded = MirrorPlot(cache_id="measured", cache_path=str(temp_cache_dir))
+        args = loaded._get_component_args()
+        assert args["measure"] is True
+        assert args["measureTolerance"] == 0.02
+        assert "measureResidues" not in args
+
+        loaded = MirrorPlot(
+            cache_id="measured",
+            cache_path=str(temp_cache_dir),
+            measure_residues={"C(Carbamidomethyl)": 160.03065},
+        )
+        assert loaded._get_component_args()["measureResidues"] == {
+            "C(Carbamidomethyl)": 160.03065
+        }
+
+    def test_measure_can_be_switched_off_when_loading_a_cache(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data
+    ):
+        self._make(temp_cache_dir, sample_lineplot_data, cache_id="plain_cache")
+        loaded = MirrorPlot(
+            cache_id="plain_cache", cache_path=str(temp_cache_dir), measure=False
+        )
+        assert loaded._get_component_args()["measure"] is False
+
+    def test_measure_plot_from_data_path_reuses_its_cache(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data, tmp_path
+    ):
+        """A data_path plot (built in a subprocess) with measure options finds
+        its cache again on the next construction instead of rebuilding it, also
+        when the options change."""
+        parquet = tmp_path / "peaks.parquet"
+        sample_lineplot_data.collect().write_parquet(parquet)
+        options = {
+            "data_path": str(parquet),
+            "cache_id": "measured_path",
+            "measure": True,
+            "measure_residues": {"M(Oxidation)": 147.0354},
+        }
+        first = self._make(temp_cache_dir, None, **options)
+        manifest = first._get_manifest_path()
+        before = manifest.stat().st_mtime_ns
+
+        second = self._make(temp_cache_dir, None, **options)
+        assert manifest.stat().st_mtime_ns == before
+        args = second._get_component_args()
+        assert args["measure"] is True
+        assert args["measureResidues"] == {"M(Oxidation)": 147.0354}
+
+        third = self._make(temp_cache_dir, None, **{**options, "measure": False})
+        assert manifest.stat().st_mtime_ns == before
+        assert third._get_component_args()["measure"] is False
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"measure_tolerance": -0.1},
+            {"measure_tolerance": float("nan")},
+            {"measure_tolerance": "0.02"},
+            {"measure_residues": [("X", 100.0)]},
+            {"measure_residues": {"": 100.0}},
+            {"measure_residues": {"X": 0}},
+            {"measure_residues": {"X": "heavy"}},
+            {"measure": "yes"},
+            {"measure": 1},
+            {"measure": None},
+        ],
+    )
+    def test_invalid_measure_options_raise(
+        self, mock_streamlit, temp_cache_dir, sample_lineplot_data, overrides
+    ):
+        with pytest.raises(ValueError, match="measure"):
+            self._make(temp_cache_dir, sample_lineplot_data, **overrides)
 
 
 class TestMirrorPlotDynamicAnnotations:

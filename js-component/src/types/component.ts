@@ -18,6 +18,18 @@ export interface BaseComponentArgs {
 }
 
 /**
+ * The measure tool of the 2D plots (see composables/useMeasure.ts).
+ */
+export interface MeasureArgs {
+  /** Show the "Measure" button: click two points to measure their distance. */
+  measure?: boolean
+  /** Per-point tolerance in Da; a difference matches a residue within twice this. */
+  measureTolerance?: number
+  /** Extra named masses matched besides the standard amino-acid residues. */
+  measureResidues?: Record<string, number>
+}
+
+/**
  * Interactivity mapping: identifier name -> column name
  */
 export type InteractivityMapping = Record<string, string>
@@ -110,6 +122,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   rowOverviewTitle?: string
   /** False hides the column menu */
   columnMenu?: boolean
+  /** False turns off stepping through the rows with the arrow keys */
+  keyboardNavigation?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
@@ -122,7 +136,7 @@ export interface TableComponentArgs extends BaseComponentArgs {
 /**
  * Line plot component arguments.
  */
-export interface LinePlotComponentArgs extends BaseComponentArgs {
+export interface LinePlotComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
   title: string
   xLabel?: string
@@ -163,7 +177,7 @@ export interface LinePlotConfig {
 /**
  * Heatmap component arguments.
  */
-export interface HeatmapComponentArgs extends BaseComponentArgs {
+export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlyHeatmap'
   title?: string
   svgFilename?: string
@@ -216,7 +230,7 @@ export interface HeatmapBox {
 /**
  * PCA plot component arguments.
  */
-export interface PCAPlotComponentArgs extends BaseComponentArgs {
+export interface PCAPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlyPca'
   /** Column name for the x-axis principal component (e.g. "PC1") */
   xColumn: string
@@ -262,7 +276,7 @@ export interface SequenceViewComponentArgs extends BaseComponentArgs {
 /**
  * VolcanoPlot component arguments.
  */
-export interface VolcanoPlotComponentArgs extends BaseComponentArgs {
+export interface VolcanoPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlyVolcano'
   /** Column name for log2 fold change (x-axis) */
   log2fcColumn: string
@@ -361,7 +375,7 @@ export type VolcanoData = Record<string, unknown>
 /**
  * MirrorPlot component arguments.
  */
-export interface MirrorPlotComponentArgs extends BaseComponentArgs {
+export interface MirrorPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string
   /** File name (without extension) for the SVG download. */
@@ -392,7 +406,7 @@ export interface MirrorPlotStyling {
 /**
  * Series plot component arguments.
  */
-export interface SeriesPlotComponentArgs extends BaseComponentArgs {
+export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlySeries'
   font?: { family?: string; color?: string; size?: number }
   xColumn: string
@@ -451,7 +465,7 @@ export interface Plot3DComponentArgs extends BaseComponentArgs {
 /**
  * Deconvolved spectrum component arguments.
  */
-export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs {
+export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, MeasureArgs {
   componentType: 'PlotlyDeconvolvedSpectrum'
   view: 'deconvolved' | 'annotated' | 'ladder'
   title: string

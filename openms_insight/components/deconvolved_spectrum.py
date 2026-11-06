@@ -5,6 +5,13 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.measure import (
+    DEFAULT_MEASURE_TOLERANCE,
+    measure_args,
+    validate_measure,
+    validate_measure_residues,
+    validate_measure_tolerance,
+)
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -85,6 +92,9 @@ class DeconvolvedSpectrum(BaseComponent):
         config: dict[str, Any] | None = None,
         svg_filename: str = "spectrum",
         drilldown_title: str | None = None,
+        measure: bool = True,
+        measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
+        measure_residues: dict[str, float] | None = None,
         **kwargs,
     ):
         """
@@ -122,6 +132,21 @@ class DeconvolvedSpectrum(BaseComponent):
             config: Label layout overrides: xPosScalingFactor (27.5),
                 xPosScalingThreshold (30).
             svg_filename: File name for the SVG download.
+            measure: Show a "Measure" button in the mode bar (default True;
+                False hides it). In measure mode, clicking two masses draws a
+                bracket labelled with their difference ("Δmass 128.095 ≈ K"),
+                matched to amino-acid residue masses as a neutral mass (1+
+                only). Between raw peaks (the 'annotated' view, or a ladder
+                drill-down) the difference is m/z and matched at 1+ and 2+. Esc
+                cancels a half-finished measurement, clicking a label removes it
+                and "Clear measurements" removes all; they are cleared when
+                other data is plotted and are part of the SVG download. With
+                measure mode off, clicks select masses as before. Render-time
+                only: not part of the cache.
+            measure_tolerance: Residue matching tolerance in Da per point
+                (default 0.02); a difference matches within twice this.
+            measure_residues: Extra named masses to match besides the 20
+                standard residues, e.g. ``{"M(Oxidation)": 147.0354}``.
             **kwargs: Additional configuration options.
         """
         if view not in VIEWS:
@@ -140,6 +165,11 @@ class DeconvolvedSpectrum(BaseComponent):
         self._drilldown_title = drilldown_title
         # Sequence tag drawn in the 'ladder' view (set per render, not cached)
         self._ladder: dict[str, Any] | None = None
+
+        # Render-time options, kept out of the cache config (see core/measure.py)
+        self._measure = validate_measure(measure)
+        self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
+        self._measure_residues = validate_measure_residues(measure_residues)
 
         super().__init__(
             cache_id=cache_id,
@@ -320,4 +350,7 @@ class DeconvolvedSpectrum(BaseComponent):
         }
         if self._drilldown_title:
             args["drilldownTitle"] = self._drilldown_title
+        args.update(
+            measure_args(self._measure, self._measure_tolerance, self._measure_residues)
+        )
         return args

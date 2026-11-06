@@ -163,6 +163,7 @@ Table(
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 - `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
 - `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+- `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
 keep, a text pattern, or for numbers "at least", "at most" or a range. Every
@@ -292,11 +293,13 @@ mirror(state_manager=state_manager, height=600)
 - `title_top`, `title_bottom`: In-figure labels for each half (rendered inside the plot, not above it)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
 - `svg_filename`: File name for the modebar's "Download as SVG" button (default: `title`, then `mirror_plot`)
+- `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
 - Tick labels show absolute intensity on both sides — the bottom half is flipped only for layout, not for the displayed values
 - Marker traces are kept in addition to stick shapes so Plotly fires `plotly_click` events; the click handler picks the side via `curveNumber` and routes the row's interactivity column value to the shared selection
+- In measure mode the two peaks of a measurement must be in the same half; a click in the other half starts a new measurement there
 - `set_top_dynamic_annotations(...)` / `set_bottom_dynamic_annotations(...)` allow another component (e.g. a `SequenceView`) to push fragment-ion annotations into one half without invalidating the cache
 
 ### Heatmap
@@ -775,6 +778,42 @@ table = Table(..., multi_select={"proteins": "accession"})
 picked_only = Table(..., filters={"proteins": "accession"})  # the picked rows
 picked = state_manager.get_selection("proteins")  # e.g. ["P0A6Y8", "P0A7V0"] or None
 ```
+
+### Measuring (`measure`)
+
+Every 2D plot has a **Measure** button (a ruler) in its Plotly mode bar: `LinePlot`,
+`MirrorPlot`, `SeriesPlot`, `DeconvolvedSpectrum`, `Heatmap`, `VolcanoPlot` and
+`PCAPlot`. It is on by default; `measure=False` removes it. Pressing it switches
+clicks from selecting to measuring: click a point, then a second one. While measuring
+the ruler is highlighted and a short note sits over the plot's top-left corner; the
+plot keeps its height.
+
+| Component | What a measurement shows |
+|-----------|--------------------------|
+| `LinePlot` | A bracket above the two peaks labelled with the x difference: `Δm/z 128.059` when the x-axis label is m/z, otherwise `Δ<x label>`. On an m/z axis the difference is matched to residue masses at 1+ and 2+ (`≈ Q/K`, `≈ G (2+)`) |
+| `MirrorPlot` | As `LinePlot` on an m/z axis; both peaks must be in the same half |
+| `DeconvolvedSpectrum` | Between masses: `Δmass 128.095 ≈ K`, matched as a neutral mass (1+ only). Between raw peaks (`'annotated'`, a ladder drill-down): `Δm/z`, matched at 1+ and 2+ |
+| `SeriesPlot` | A bracket labelled with the x difference only (`ΔRT 12.400`) |
+| `Heatmap`, `VolcanoPlot`, `PCAPlot` | A line between the two points labelled with the x and y differences, from the first point to the second (`Δlog2 Fold Change +2.150`, `Δ-log10(p-value) −1.300`), using the axis labels |
+
+Residues are the 20 standard amino acids, monoisotopic, I and L shown as `I/L`,
+closest first. `measure_tolerance` (default `0.02` Da per point; a difference
+matches within twice that, since both points carry the error) and
+`measure_residues` (extra named masses, e.g. `{"M(Oxidation)": 147.0354}`) tune
+the matching on `LinePlot`, `MirrorPlot` and `DeconvolvedSpectrum`.
+
+Several measurements can stay on a plot. Esc cancels a half-finished one,
+clicking a label removes that measurement and the **Clear measurements** button (×)
+next to the ruler removes all. They are
+plain Plotly shapes and annotations, so the SVG download includes them. They are
+cleared when other data is plotted (a `Heatmap` keeps them while zooming). With
+measure mode off, clicks select as they always did.
+
+The measure options are render-time settings: they are not part of the cache
+configuration, so switching the tool on or off never rebuilds a cache.
+`ClusteredHeatmap` (a categorical matrix: there is no distance between two
+samples' columns) and `Plot3D` (a click in 3D does not pick comparable points)
+have no measure tool.
 
 ## Memory-Efficient Preprocessing
 

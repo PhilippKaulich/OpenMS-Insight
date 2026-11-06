@@ -1,5 +1,8 @@
 <template>
-  <div :id="id" class="pca-container"></div>
+  <div class="pca-plot">
+    <MeasureHint v-if="args.measure" :measure="measure" />
+    <div :id="id" class="pca-container"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -8,6 +11,9 @@ import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import type { PCAPlotComponentArgs, PCAData } from '@/types/component'
+import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { axisQuantity, pointsKey } from '@/utils/measure'
+import MeasureHint from './MeasureHint.vue'
 
 /** Default qualitative palette, shared with PlotlyHeatmap's categorical mode. */
 const DEFAULT_GROUP_COLORS = [
@@ -86,6 +92,7 @@ function computeEllipse(xs: number[], ys: number[], nPoints = 60): { x: number[]
 
 export default defineComponent({
   name: 'PlotlyPca',
+  components: { MeasureHint },
   props: {
     args: {
       type: Object as PropType<PCAPlotComponentArgs>,
@@ -114,6 +121,7 @@ export default defineComponent({
     return {
       streamlitDataStore,
       ...plotlyScatter,
+      measure: useMeasure(() => !!props.args.measure),
     }
   },
   data() {
@@ -300,6 +308,33 @@ export default defineComponent({
       }
     },
 
+    /** Two points, labelled with their differences along both components. */
+    measureSpec(): MeasureSpec {
+      return {
+        kind: 'points',
+        xQuantity: axisQuantity(this.args.xLabel, this.args.xColumn || 'x'),
+        yQuantity: axisQuantity(this.args.yLabel, this.args.yColumn || 'y'),
+      }
+    },
+
+    /** Identity of the plotted points: other data drops the measurements. */
+    measureKey(): string {
+      const x = this.args.xColumn
+      const y = this.args.yColumn
+      return `${x}|${y}|${pointsKey(
+        this.pcaData.map((row) => row[x]),
+        this.pcaData.map((row) => row[y]),
+      )}`
+    },
+
+    /** Lines of the measurements. */
+    measureOverlay(): MeasureOverlay {
+      return this.measure.overlay({
+        color: this.theme?.textColor || '#262730',
+        background: this.theme?.backgroundColor || 'white',
+      })
+    },
+
     /**
      * Build Plotly layout.
      */
@@ -338,11 +373,33 @@ export default defineComponent({
           t: this.args.title ? 80 : 40,
           b: 60,
         },
+        shapes: this.measureOverlay.shapes,
+        annotations: this.measureOverlay.annotations,
       }
     },
   },
 
   watch: {
+    measureKey: {
+      handler(key: string) {
+        this.measure.setDataKey(key)
+      },
+      immediate: true,
+    },
+
+    // Measurements added or removed: redraw the overlay only. The height goes
+    // along, or the relayout autosizes the figure to its container
+    'measure.revision'() {
+      if (!this.isInitialized || !this.isDataReady) return
+      const element = document.getElementById(this.id)
+      if (!element || !(element as unknown as { _fullLayout?: unknown })._fullLayout) return
+      void Plotly.relayout(element, {
+        shapes: this.layout.shapes,
+        annotations: this.layout.annotations,
+        height: this.layout.height,
+      })
+    },
+
     isDataReady: {
       handler(newVal: boolean) {
         if (newVal && this.isInitialized) {
@@ -385,8 +442,9 @@ export default defineComponent({
           return
         }
 
-        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig())
+        await Plotly.newPlot(this.id, this.plotData, this.layout, this.getPlotConfig(this.measure.modeBarButtons()))
         this.setupPcaClickHandler()
+        this.measure.bindLabelClicks(element)
 
         // Update Streamlit iframe height after plot is rendered
         this.$nextTick(() => {
@@ -410,6 +468,11 @@ export default defineComponent({
       if (!plotElement) return
 
       plotElement.on('plotly_click', (eventData: Plotly.PlotMouseEvent) => {
+        // In measure mode a click picks a point to measure, not a selection
+        const clicked = eventData.points?.[0]
+        if (clicked && this.measure.pick({ x: Number(clicked.x), y: Number(clicked.y) }, this.measureSpec)) {
+          return
+        }
         const interactivityMap = this.args.interactivity || {}
         if (Object.keys(interactivityMap).length === 0) return
         if (!eventData.points || eventData.points.length === 0) return
@@ -464,6 +527,10 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.pca-plot {
+  position: relative;
+}
+
 .pca-container {
   position: relative;
   width: 100%;
