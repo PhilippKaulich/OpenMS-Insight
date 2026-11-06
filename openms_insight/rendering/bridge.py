@@ -638,6 +638,7 @@ def _validate_interactivity_selections(
     # the top and the bottom scan at once, which is never satisfiable, so every
     # selection would be judged missing and cleared the moment it was made.
     group_predicates: list[pl.Expr] = []
+    schema = data.collect_schema()
     for filters, filter_defaults in filter_groups:
         if not filters:
             # An unfiltered view shows every row, so the union admits everything and
@@ -655,7 +656,7 @@ def _validate_interactivity_selections(
                 # Awaiting filter - no data to validate against
                 return False
 
-            term = match_selection(column, selected_value)
+            term = match_selection(column, selected_value, schema.get(column))
             predicate = term if predicate is None else (predicate & term)
 
         if predicate is not None:

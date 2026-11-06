@@ -23,6 +23,7 @@ from .components.table import Table
 from .components.volcanoplot import VolcanoPlot
 from .core.base import BaseComponent
 from .core.cache import CacheMissError
+from .core.multi_select import ALL
 from .core.image_format import IMAGE_FORMATS, get_image_format, set_image_format
 from .core.registry import get_component_class, register_component
 from .core.state import StateManager
@@ -41,6 +42,7 @@ __all__ = [
     "register_component",
     "get_component_class",
     "CacheMissError",
+    "ALL",
     # Components
     "Table",
     "LinePlot",

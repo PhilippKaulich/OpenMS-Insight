@@ -441,3 +441,70 @@ def test_volcano_selection_presets_are_optional(
     assert with_presets._get_component_args()["selectionPresets"] is True
     again = VolcanoPlot(cache_id="volcano_presets", cache_path=str(temp_cache_dir))
     assert again._get_component_args()["selectionPresets"] is True
+
+
+# -- List columns and the ALL default --------------------------------------------
+
+
+@pytest.fixture
+def forms() -> pl.LazyFrame:
+    # The shifts of each proteoform; the last carries none
+    return pl.LazyFrame(
+        {
+            "id": [0, 1, 2, 3],
+            "group": [1, 1, 2, 2],
+            "shifts": [[1], [1, 3], [2], []],
+        }
+    )
+
+
+def test_list_column_matches_one_of_its_values(mock_streamlit, temp_cache_dir, forms):
+    from openms_insight.preprocessing.filtering import filter_and_collect_cached
+
+    frame, _ = filter_and_collect_cached(forms, {"shift": "shifts"}, {"shift": 1})
+    assert frame["id"].tolist() == [0, 1]
+    frame, _ = filter_and_collect_cached(forms, {"shift": "shifts"}, {"shift": 3.0})
+    assert frame["id"].tolist() == [1]
+    frame, _ = filter_and_collect_cached(forms, {"shift": "shifts"}, {"shift": [2, 3]})
+    assert frame["id"].tolist() == [1, 2]
+
+
+def test_all_default_shows_every_row_until_something_is_selected(
+    mock_streamlit, temp_cache_dir, forms
+):
+    from openms_insight import ALL
+    from openms_insight.preprocessing.filtering import filter_and_collect_cached
+
+    filters = {"shift": "shifts", "group": "group"}
+    defaults = {"shift": ALL}
+    frame, _ = filter_and_collect_cached(
+        forms, filters, {"shift": None, "group": 2}, filter_defaults=defaults
+    )
+    assert frame["id"].tolist() == [2, 3]
+    frame, _ = filter_and_collect_cached(
+        forms, filters, {"shift": 1, "group": 1}, filter_defaults=defaults
+    )
+    assert frame["id"].tolist() == [0, 1]
+
+
+def test_table_with_two_filters_and_an_all_default(
+    mock_streamlit, temp_cache_dir, forms
+):
+    from openms_insight import ALL
+
+    table = Table(
+        cache_id="tbl_two_filters",
+        data=forms,
+        cache_path=str(temp_cache_dir),
+        index_field="id",
+        column_definitions=[{"field": "id", "title": "ID"}],
+        filters={"group": "group", "shift": "shifts"},
+        filter_defaults={"shift": ALL},
+    )
+    rows = lambda state: sorted(table._prepare_vue_data(state)["tableData"]["id"])
+    assert rows({"group": 1, "shift": None}) == [0, 1]
+    assert rows({"group": 1, "shift": 3}) == [1]
+    assert rows({"group": 2, "shift": 3}) == []
+    # The default survives the cached manifest
+    again = Table(cache_id="tbl_two_filters", cache_path=str(temp_cache_dir))
+    assert sorted(again._prepare_vue_data({"group": 2})["tableData"]["id"]) == [2, 3]
