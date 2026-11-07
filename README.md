@@ -460,8 +460,7 @@ ClusteredHeatmap(
     linkage_method="average",
     linkage_metric="euclidean",
     title="Protein Abundance",
-    colorscale="RdBu",
-    reversescale=True,
+    intensity_label="Z-score",
     group_colors={"Control": "#1f77b4", "Treatment": "#d62728"},
 )(state_manager=state_manager, height=600)
 ```
@@ -471,7 +470,8 @@ ClusteredHeatmap(
 - `metadata`: Optional `sample_id` -> `group` table. When given, a group color bar is drawn above the heatmap
 - `row_cluster` / `col_cluster`: Cluster that axis and draw its dendrogram (left for rows, top for columns). Skipped automatically when the axis has fewer than 2 entries
 - `linkage_method` / `linkage_metric`: Passed through to `scipy.cluster.hierarchy.linkage`
-- `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label
+- `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label. Without a `colorscale`, cells use a diverging scale centred on 0 (blue, the page colour, orange) that follows the app's light or dark theme, which suits z-scores
+- Layout: the heatmap fills the component's width. Row labels sit right of the heatmap; when the rows are too close to label them all, every n-th one is labelled (the heading of the label column says which) and long labels are cut. Hovering a cell shows its full row label, sample, group and value
 - `group_colors`: Map group value -> color for the annotation bar. Groups without an explicit color get one from a default palette
 
 **No `filters` or `interactivity`.** Unlike the other components, `ClusteredHeatmap`
