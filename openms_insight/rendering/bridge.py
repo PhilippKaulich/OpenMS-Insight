@@ -897,6 +897,15 @@ def _render_component(
     if _SENT_HASH_KEY not in st.session_state:
         st.session_state[_SENT_HASH_KEY] = {}
 
+    # Streamlit forgets the value of a component that a run did not draw, and the
+    # browser drops its view. Drawn again (e.g. a layout that leaves this cell out,
+    # then shows it again), it is a new view without data: what was sent to the
+    # earlier one does not count, and its data requests are numbered from 1 again.
+    if key not in st.session_state:
+        st.session_state[_SENT_HASH_KEY].pop(key, None)
+        st.session_state[_VUE_ECHOED_HASH_KEY].pop(key, None)
+        st.session_state.get(_HANDLED_REQUESTS_KEY, {}).pop(key, None)
+
     # === PHASE 1: Get CACHED data from previous render ===
     cache = _get_component_cache()
     cached_entry = cache.get(component_id)
