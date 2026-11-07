@@ -14,6 +14,7 @@ from ..core.measure import (
     validate_measure_residues,
     validate_measure_tolerance,
 )
+from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -77,6 +78,7 @@ class MirrorPlot(BaseComponent):
         measure: bool = True,
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
+        peak_labels: bool = True,
         # Visuals
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
@@ -145,6 +147,13 @@ class MirrorPlot(BaseComponent):
             measure_residues: Extra named masses to match, added to the 20
                 standard amino-acid residues (monoisotopic, I and L shown as
                 "I/L"). Example: ``{"M(Oxidation)": 147.0354}``.
+            peak_labels: Show a "Label peaks" button in the mode bar (default
+                True; False hides it). In label mode, clicking a peak opens a
+                text box for your own label (Enter keeps it, Esc closes);
+                clicking a label changes it, and an empty text removes it.
+                Labels are kept per spectrum while the plot is on the page and
+                are included in the image download. Render-time only: not part
+                of the cache.
             styling: Style configuration dict with keys:
                 - highlightColor: Color for highlighted points (default: '#E4572E')
                 - selectedColor: Color for clicked/selected peak (default: '#F3A712')
@@ -184,6 +193,7 @@ class MirrorPlot(BaseComponent):
         self._measure = validate_measure(measure)
         self._measure_tolerance = validate_measure_tolerance(measure_tolerance)
         self._measure_residues = validate_measure_residues(measure_residues)
+        self._peak_labels = validate_peak_labels(peak_labels)
         self._styling = styling or {}
         self._plot_config = config or {}
 
@@ -609,6 +619,7 @@ class MirrorPlot(BaseComponent):
         args.update(
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
+        args.update(peak_label_args(self._peak_labels))
         # Defensive: inject any unrecognised user **kwargs forwarded via super().__init__
         # without overwriting explicitly set args. All current MirrorPlot kwargs are
         # already covered above, so this loop is a no-op for normal usage.

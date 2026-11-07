@@ -306,6 +306,7 @@ mirror(state_manager=state_manager, height=600)
 - `styling`: Color dict with `highlightColor`, `selectedColor`, `unhighlightedColor` (same defaults as LinePlot)
 - `svg_filename`: File name (without extension) of the image download (default: `title`, then `mirror_plot`); the format is set as in [Image downloads](#image-downloads-image_format)
 - `measure`, `measure_tolerance`, `measure_residues`: The measure tool, on by default (see [Measuring](#measuring-measure))
+- `peak_labels`: Your own labels on peaks, on by default (see [Peak labels](#peak-labels-peak_labels))
 
 **Behavior:**
 - The y-axis auto-rescales to the maximum visible peak when zooming, and overlapping annotation labels are re-evaluated at the new pixel/data ratio so previously hidden labels reappear when there is room (matches LinePlot's zoom behavior)
@@ -834,6 +835,22 @@ configuration, so switching the tool on or off never rebuilds a cache.
 `ClusteredHeatmap` (a categorical matrix: there is no distance between two
 samples' columns) and `Plot3D` (a click in 3D does not pick comparable points)
 have no measure tool.
+
+### Peak labels (`peak_labels`)
+
+`LinePlot` and `MirrorPlot` have a **Label peaks** button (a tag) in their Plotly
+mode bar, next to the ruler. It is on by default; `peak_labels=False` removes it.
+In label mode a click on a peak opens a small text box at the peak: type a label,
+Enter keeps it and Esc closes the box. Clicking one of your labels opens it again
+to change the text, and an empty text removes it. The **Remove peak labels**
+button next to the tag removes every label of the spectrum shown. Label mode and
+measure mode take turns: switching one on switches the other off.
+
+Labels are kept per spectrum while the plot is on the page: plotting another
+spectrum shows that spectrum's labels, and going back shows the earlier ones again.
+They are plain Plotly annotations with an arrow to their peak, so the image
+download includes them. Like the measure options, `peak_labels` is a render-time
+setting and never part of the cache configuration.
 
 ### Image downloads (`image_format`)
 

@@ -6,20 +6,26 @@
 
 <script lang="ts">
 /**
- * A small note over the plot's top-left corner while measure mode is on (the
- * Measure button sits in Plotly's mode bar, which is hidden until hovered).
+ * A small note over the plot's top-left corner while measure mode (or another
+ * click tool, such as peak labels) is on: the tool's button sits in Plotly's
+ * mode bar, which is hidden until hovered.
  * Plain HTML over the plot: it takes no height and is not part of the SVG
  * download. The parent must be positioned (position: relative).
  */
 import { defineComponent, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
-import type { MeasureState } from '@/composables/useMeasure'
+
+/** A tool with a mode and a note to show while it is on (measure, peak labels). */
+interface HintSource {
+  mode: boolean
+  hint: string
+}
 
 export default defineComponent({
   name: 'MeasureHint',
   props: {
     measure: {
-      type: Object as PropType<MeasureState>,
+      type: Object as PropType<HintSource>,
       required: true,
     },
   },

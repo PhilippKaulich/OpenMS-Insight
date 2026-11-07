@@ -30,6 +30,14 @@ export interface MeasureArgs {
 }
 
 /**
+ * Your own peak labels on the spectrum views (see composables/usePeakLabels.ts).
+ */
+export interface PeakLabelArgs {
+  /** Show the "Label peaks" button: click a peak to add a text label. */
+  peakLabels?: boolean
+}
+
+/**
  * The image download of a view (see utils/imageExport.ts).
  */
 export interface ImageExportArgs {
@@ -144,7 +152,11 @@ export interface TableComponentArgs extends BaseComponentArgs {
 /**
  * Line plot component arguments.
  */
-export interface LinePlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
+export interface LinePlotComponentArgs
+  extends BaseComponentArgs,
+    MeasureArgs,
+    PeakLabelArgs,
+    ImageExportArgs {
   componentType: 'PlotlyLineplotUnified' | 'PlotlyLineplot'
   title: string
   xLabel?: string
@@ -383,7 +395,11 @@ export type VolcanoData = Record<string, unknown>
 /**
  * MirrorPlot component arguments.
  */
-export interface MirrorPlotComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
+export interface MirrorPlotComponentArgs
+  extends BaseComponentArgs,
+    MeasureArgs,
+    PeakLabelArgs,
+    ImageExportArgs {
   componentType: 'PlotlyMirrorPlot'
   title?: string
   /** File name (without extension) of the image download. */

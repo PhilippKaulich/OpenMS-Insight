@@ -1,6 +1,8 @@
 <template>
-  <div class="lineplot">
+  <div ref="root" class="lineplot">
     <MeasureHint v-if="args.measure" :measure="measure" />
+    <MeasureHint v-if="args.peakLabels" :measure="labels" />
+    <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
     <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
   </div>
 </template>
@@ -15,6 +17,8 @@ import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
+import PeakLabelEditor from './PeakLabelEditor.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
@@ -53,7 +57,7 @@ function finiteExtent(values: ArrayLike<number>): [number, number] {
 
 export default defineComponent({
   name: 'PlotlyLineplot',
-  components: { MeasureHint },
+  components: { MeasureHint, PeakLabelEditor },
   props: {
     args: {
       type: Object as PropType<LinePlotComponentArgs>,
@@ -68,7 +72,8 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
-    return { streamlitDataStore, selectionStore, measure }
+    const labels = usePeakLabels(() => !!props.args.peakLabels)
+    return { streamlitDataStore, selectionStore, measure, labels }
   },
   data() {
     return {
@@ -76,6 +81,7 @@ export default defineComponent({
       manualXRange: undefined as number[] | undefined,
       lastAutoZoomedPeakIndex: undefined as number | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
+      labelEditorPosition: null as { left: number; top: number } | null,
     }
   },
   computed: {
@@ -681,7 +687,14 @@ export default defineComponent({
           b: 50,
         },
         shapes: [...this.annotationShapes, ...this.measureOverlay.shapes],
-        annotations: [...this.peakAnnotations, ...this.measureOverlay.annotations],
+        annotations: [
+          ...this.peakAnnotations,
+          ...this.measureOverlay.annotations,
+          ...this.labels.overlay({
+            color: this.theme?.textColor || '#262730',
+            background: this.theme?.backgroundColor || 'white',
+          }),
+        ],
       }
     },
 
@@ -731,6 +744,7 @@ export default defineComponent({
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
+        this.labels.setDataKey(key)
       },
       immediate: true,
     },
@@ -739,6 +753,20 @@ export default defineComponent({
     // relayout would let Plotly autosize the figure to its container
     'measure.revision'() {
       if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Labels added, changed or removed, or the text box opened or closed
+    async 'labels.revision'() {
+      if (this.isInitialized && this.isDataReady) await this.renderPlot()
+      this.placeLabelEditor()
+    },
+
+    // One click tool at a time
+    'measure.mode'(on: boolean) {
+      if (on) this.labels.stop()
+    },
+    'labels.mode'(on: boolean) {
+      if (on && this.measure.mode) this.measure.toggle()
     },
 
     isDataReady: {
@@ -844,6 +872,7 @@ export default defineComponent({
             icon: SPECTRUM_DOWNLOAD_ICON,
           }),
           ...this.measure.modeBarButtons(this.measureTitle),
+          ...this.labels.modeBarButtons(),
         ]
 
         // Plotly.react updates the existing plot in place. On a zoom only the
@@ -879,6 +908,8 @@ export default defineComponent({
           })
 
           this.measure.bindLabelClicks(plotElement)
+          // In label mode a click on one of your labels opens it for changing
+          this.labels.bindLabelClicks(plotElement)
         }
       } catch (error) {
         console.error('PlotlyLineplot: Error rendering plot:', error)
@@ -1021,7 +1052,30 @@ export default defineComponent({
       return nearestIndex
     },
 
+    /** Put the label text box over the peak being labelled. */
+    placeLabelEditor(): void {
+      const draft = this.labels.draft
+      this.labelEditorPosition = draft
+        ? plotPointPosition(
+            document.getElementById(this.id),
+            this.$refs.root as HTMLElement | null,
+            draft.x,
+            draft.y,
+          )
+        : null
+    },
+
     onPlotClick(eventData: any): void {
+      // In label mode a click opens the text box for the nearest peak's label
+      if (this.labels.active) {
+        const point = eventData?.points?.[0]
+        const index = point ? this.nearestPeakIndex(point.x) : undefined
+        if (index !== undefined && this.plotData) {
+          this.labels.pick({ x: this.plotData.x_values[index], y: this.plotData.y_values[index] })
+        }
+        return
+      }
+
       // In measure mode a click picks a peak to measure, not a selection
       if (this.measure.active) {
         const point = eventData?.points?.[0]

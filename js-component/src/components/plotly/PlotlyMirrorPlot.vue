@@ -1,6 +1,8 @@
 <template>
-  <div class="mirror-plot" :style="cssCustomProperties">
+  <div ref="root" class="mirror-plot" :style="cssCustomProperties">
     <MeasureHint v-if="args.measure" :measure="measure" />
+    <MeasureHint v-if="args.peakLabels" :measure="labels" />
+    <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -15,6 +17,8 @@ import type { MirrorPlotComponentArgs } from '@/types/component'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import MeasureHint from './MeasureHint.vue'
+import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
+import PeakLabelEditor from './PeakLabelEditor.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { plotlyDownloadButton } from '@/utils/plotlyDownload'
 
@@ -54,7 +58,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
-  components: { MeasureHint },
+  components: { MeasureHint, PeakLabelEditor },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -69,13 +73,15 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
-    return { streamlitDataStore, selectionStore, measure }
+    const labels = usePeakLabels(() => !!props.args.peakLabels)
+    return { streamlitDataStore, selectionStore, measure, labels }
   },
   data() {
     return {
       isInitialized: false as boolean,
       manualXRange: undefined as number[] | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
+      labelEditorPosition: null as { left: number; top: number } | null,
     }
   },
   computed: {
@@ -202,6 +208,7 @@ export default defineComponent({
         // Data changed (e.g., new spectrum selected) — reset zoom so the new
         // data is shown at full extent. Matches PlotlyLineplot's plotData watcher.
         this.measure.setDataKey(this.spectrumKey)
+        this.labels.setDataKey(this.spectrumKey)
         this.manualXRange = undefined
         this.render()
       },
@@ -210,6 +217,7 @@ export default defineComponent({
     bottomData: {
       handler() {
         this.measure.setDataKey(this.spectrumKey)
+        this.labels.setDataKey(this.spectrumKey)
         this.manualXRange = undefined
         this.render()
       },
@@ -218,6 +226,18 @@ export default defineComponent({
     // Measurements added or removed
     'measure.revision'() {
       this.recolor()
+    },
+    // Labels added, changed or removed, or the text box opened or closed
+    'labels.revision'() {
+      this.recolor()
+      this.placeLabelEditor()
+    },
+    // One click tool at a time
+    'measure.mode'(on: boolean) {
+      if (on) this.labels.stop()
+    },
+    'labels.mode'(on: boolean) {
+      if (on && this.measure.mode) this.measure.toggle()
     },
     'selectionStore.$state': {
       handler() {
@@ -229,6 +249,7 @@ export default defineComponent({
   },
   mounted() {
     this.measure.setDataKey(this.spectrumKey)
+    this.labels.setDataKey(this.spectrumKey)
     this.render()
   },
   methods: {
@@ -510,6 +531,7 @@ export default defineComponent({
         ...this.buildPeakAnnotations(this.annotationBoxDataTop, 'top'),
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
         ...measureOverlay.annotations,
+        ...this.buildLabelOverlay(),
       ]
 
       const layout: Partial<Plotly.Layout> = {
@@ -567,6 +589,7 @@ export default defineComponent({
             height: this.args.height || 400,
           }),
           ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
+          ...this.labels.modeBarButtons(),
         ],
       })
       this.isInitialized = true
@@ -583,6 +606,17 @@ export default defineComponent({
         const traceIdx = pt.curveNumber
         const sourceData = traceIdx === 0 ? this.topData : this.bottomData
         if (!sourceData) return
+
+        // In label mode a click opens the text box for the peak's label
+        if (this.labels.active) {
+          const pointIndex = pt.pointIndex ?? pt.pointNumber
+          if (typeof pointIndex === 'number' && pointIndex >= 0 && pointIndex < sourceData.x.length) {
+            const side = traceIdx === 0 ? 'top' : 'bottom'
+            const y = sourceData.y[pointIndex]
+            this.labels.pick({ x: sourceData.x[pointIndex], y: side === 'top' ? y : -y, group: side })
+          }
+          return
+        }
 
         // In measure mode a click picks a peak to measure, not a selection
         if (this.measure.active) {
@@ -612,6 +646,9 @@ export default defineComponent({
 
       // A click on a measurement's label removes that measurement
       this.measure.bindLabelClicks(plotEl)
+      // In label mode a click on one of your labels opens it for changing
+      this.labels.bindLabelClicks(plotEl)
+      this.placeLabelEditor()
 
       // Wire relayout handler so x-zoom/pan triggers a re-render with
       // recomputed y-axis range and re-evaluated label visibility.
@@ -772,9 +809,32 @@ export default defineComponent({
         ...this.buildPeakAnnotations(this.annotationBoxDataTop, 'top'),
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
         ...measureOverlay.annotations,
+        ...this.buildLabelOverlay(),
       ]
 
       void Plotly.relayout(this.id, { shapes, annotations })
+    },
+
+    /** Your peak labels, as annotations (see usePeakLabels). */
+    buildLabelOverlay(): Partial<Plotly.Annotations>[] {
+      return this.labels.overlay({
+        color: this.measureColor,
+        background: this.theme?.backgroundColor || 'white',
+        ySign: (group) => (group === 'bottom' ? -1 : 1),
+      })
+    },
+
+    /** Put the label text box over the peak being labelled. */
+    placeLabelEditor(): void {
+      const draft = this.labels.draft
+      this.labelEditorPosition = draft
+        ? plotPointPosition(
+            document.getElementById(this.id),
+            this.$refs.root as HTMLElement | null,
+            draft.x,
+            draft.y,
+          )
+        : null
     },
 
     /** Brackets of the measurements, as shapes and annotations (see useMeasure). */
