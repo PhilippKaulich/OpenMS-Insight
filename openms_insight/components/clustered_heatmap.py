@@ -59,7 +59,7 @@ class ClusteredHeatmap(BaseComponent):
         title: str | None = None,
         x_label: str | None = None,
         y_label: str | None = None,
-        colorscale: str = "RdBu",
+        colorscale: str | list | None = None,
         reversescale: bool = True,
         intensity_label: str | None = None,
         group_colors: dict[str, str] | None = None,
@@ -102,8 +102,12 @@ class ClusteredHeatmap(BaseComponent):
             title: Plot title displayed above the plot.
             x_label: X-axis (column) label.
             y_label: Y-axis (row) label.
-            colorscale: Plotly colorscale name for cell intensity (default: "RdBu").
+            colorscale: Plotly colorscale name or [fraction, color] stop list
+                for cell intensity. None (default) draws a diverging scale
+                centred on 0 (blue, the page colour, orange) that follows the
+                app's light or dark theme.
             reversescale: Reverse the colorscale direction (default: True).
+                Applies to a ``colorscale`` given here only.
             intensity_label: Custom label for the colorbar (default: "Value").
             group_colors: Optional mapping of group values to colors (e.g.
                 {"Control": "#1f77b4", "Treatment": "#d62728"}). Auto-
@@ -252,7 +256,7 @@ class ClusteredHeatmap(BaseComponent):
         self._title = config.get("title")
         self._x_label = config.get("x_label")
         self._y_label = config.get("y_label")
-        self._colorscale = config.get("colorscale", "RdBu")
+        self._colorscale = config.get("colorscale")
         self._reversescale = config.get("reversescale", True)
         self._intensity_label = config.get("intensity_label")
         self._group_colors = config.get("group_colors", {})

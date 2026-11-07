@@ -14,16 +14,69 @@ import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionButton, SELECTION_ACCENT, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
-// Layout fractions for the 4 regions of the composite figure.
-const ROW_DENDRO_WIDTH = 0.14
-const GROUP_BAR_HEIGHT = 0.015
-const COL_DENDRO_HEIGHT = 0.13
-const GAP = 0.01
-// The heatmap's own domain stops short of x=1, reserving a dedicated lane
-// to the right (from HEATMAP_RIGHT to 1) for row labels + axis title, with
-// the colorbar positioned further out still, past that lane, so none of
-// the three fight over the same space.
-const HEATMAP_RIGHT = 0.8
+// The figure is laid out in pixels from the width the component gets, so
+// the heatmap fills it whatever the number of rows and columns, and the row
+// labels, colorbar and dendrograms each keep a lane of their own.
+const FONT_SIZE = 11
+/** Pixels a row needs before every row label can be shown. */
+const ROW_LABEL_PX = FONT_SIZE + 3
+/** Longest row or column label drawn before it is cut (the full one is on hover). */
+const ROW_LABEL_CHARS = 28
+const COL_LABEL_CHARS = 18
+const GROUP_BAR_PX = 12
+const GAP_PX = 4
+/** Room for the colorbar: gap, bar, tick labels. */
+const COLORBAR_LANE_PX = 76
+const COLORBAR_THICKNESS = 12
+/** Low and high end of the default diverging scale (OpenMS corporate blue and orange). */
+const SCALE_LOW = '#3157e9'
+const SCALE_HIGH = '#ff7501'
+
+let measureContext: CanvasRenderingContext2D | null = null
+
+/** Width of text in pixels, in the given font. */
+function textWidth(text: string, font: string): number {
+  if (!measureContext && typeof document !== 'undefined') {
+    measureContext = document.createElement('canvas').getContext('2d')
+  }
+  if (!measureContext) return text.length * FONT_SIZE * 0.6
+  measureContext.font = `${FONT_SIZE}px ${font}`
+  return measureContext.measureText(text).width
+}
+
+/** A label cut to at most `max` characters. */
+function shorten(label: string, max: number): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label
+}
+
+/** English ordinal suffix: 2nd, 3rd, 4th, 21st. */
+function ordinal(n: number): string {
+  const mod100 = n % 100
+  if (mod100 >= 11 && mod100 <= 13) return 'th'
+  return { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), high)
+}
+
+/** Pixel geometry of the figure; recomputed when the width changes. */
+interface Geometry {
+  margin: { l: number; r: number; t: number; b: number }
+  plotWidth: number
+  plotHeight: number
+  /** x-domain of the row dendrogram and of the heatmap, as fractions of the plot width. */
+  rowDendro: [number, number]
+  heatmapX: [number, number]
+  /** y-domains as fractions of the plot height. */
+  heatmapY: [number, number]
+  groupBarY: [number, number]
+  colDendroY: [number, number]
+  /** Every rowStep-th row is labelled. */
+  rowStep: number
+  rowLabelLane: number
+  colTickAngle: number
+}
 
 export default defineComponent({
   name: 'PlotlyClusteredHeatmap',
@@ -117,21 +170,101 @@ export default defineComponent({
       return this.args.colGroups?.some((g) => g !== null && g !== undefined) ?? false
     },
 
-    /** Top of the main heatmap's y-domain; shrinks to make room for whichever
-     * of the column dendrogram / group bar are actually present. */
-    heatmapTop(): number {
-      let top = 1
-      if (this.hasColDendrogram) top -= COL_DENDRO_HEIGHT + GAP
-      if (this.hasGroupBar) top -= GROUP_BAR_HEIGHT + GAP
-      return top
+    fontFamily(): string {
+      return this.theme?.font || 'sans-serif'
     },
 
-    heatmapLeft(): number {
-      return this.hasRowDendrogram ? ROW_DENDRO_WIDTH + GAP : 0
+    isDark(): boolean {
+      return this.theme?.base === 'dark'
     },
 
-    heatmapRight(): number {
-      return HEATMAP_RIGHT
+    textColor(): string {
+      return this.theme?.textColor || (this.isDark ? '#fafafa' : '#262730')
+    },
+
+    /** Row and column labels as drawn: cut to a readable length. */
+    shortRowLabels(): string[] {
+      return this.rowLabels.map((l) => shorten(String(l), ROW_LABEL_CHARS))
+    },
+
+    shortColLabels(): string[] {
+      return this.colLabels.map((l) => shorten(String(l), COL_LABEL_CHARS))
+    },
+
+    uniqueGroups(): string[] {
+      return Array.from(new Set((this.args.colGroups || []).filter((g): g is string => !!g)))
+    },
+
+    geometry(): Geometry {
+      const width = Math.max(this.plotWidth, 280)
+      const height = this.args.height || 500
+      const font = this.fontFamily
+      const nRows = Math.max(this.rowLabels.length, 1)
+      const nCols = Math.max(this.colLabels.length, 1)
+
+      // Rows: label every row when there is room, else every rowStep-th one
+      const top = this.args.title ? 44 : 12
+      const xTitle = this.args.xLabel ? 22 : 0
+
+      // Columns: horizontal labels when they fit their column, else at 45 degrees
+      const colLabelWidth = Math.max(0, ...this.shortColLabels.map((l) => textWidth(l, font)))
+      const rowLabelWidth = Math.max(0, ...this.shortRowLabels.map((l) => textWidth(l, font)))
+      const rowLabelLane = Math.ceil(rowLabelWidth) + 14
+      const left = 8
+      const right = rowLabelLane + COLORBAR_LANE_PX
+      const plotWidth = Math.max(width - left - right, 80)
+      const rowDendroPx = this.hasRowDendrogram ? clamp(plotWidth * 0.12, 36, 110) : 0
+      const heatmapWidthPx = plotWidth - rowDendroPx - (rowDendroPx ? GAP_PX : 0)
+      const colPx = heatmapWidthPx / nCols
+      const colTickAngle = colLabelWidth + 6 <= colPx ? 0 : -45
+      const tickBand = colTickAngle === 0 ? FONT_SIZE + 10 : Math.ceil(colLabelWidth * Math.SQRT1_2) + FONT_SIZE + 8
+      const bottom = tickBand + xTitle + 8
+
+      const plotHeight = Math.max(height - top - bottom, 80)
+      const colDendroPx = this.hasColDendrogram ? clamp(plotHeight * 0.14, 32, 90) : 0
+      const groupPx = this.hasGroupBar ? GROUP_BAR_PX : 0
+      const above = colDendroPx + groupPx + (colDendroPx ? GAP_PX : 0) + (groupPx ? GAP_PX : 0)
+      const heatmapHeightPx = plotHeight - above
+      const rowStep = Math.max(1, Math.ceil(ROW_LABEL_PX / (heatmapHeightPx / nRows)))
+
+      const fx = (px: number) => px / plotWidth
+      const fy = (px: number) => px / plotHeight
+      const heatmapTop = 1 - fy(above)
+      const groupBottom = heatmapTop + fy(groupPx ? GAP_PX : 0)
+      return {
+        margin: { l: left, r: right, t: top, b: bottom },
+        plotWidth,
+        plotHeight,
+        rowDendro: [0, fx(rowDendroPx)],
+        heatmapX: [rowDendroPx ? fx(rowDendroPx + GAP_PX) : 0, 1],
+        heatmapY: [0, heatmapTop],
+        groupBarY: [groupBottom, groupBottom + fy(groupPx)],
+        colDendroY: [1 - fy(colDendroPx), 1],
+        rowStep,
+        rowLabelLane,
+        colTickAngle,
+      }
+    },
+
+    /** Diverging scale from the theme: blue, the page colour, orange. */
+    defaultColorscale(): [number, string][] {
+      const middle = this.isDark ? this.theme?.secondaryBackgroundColor || '#262730' : '#ffffff'
+      return [
+        [0, SCALE_LOW],
+        [0.5, middle],
+        [1, SCALE_HIGH],
+      ]
+    },
+
+    /** Largest absolute value, so the scale is centred on 0. */
+    zLimit(): number {
+      let limit = 0
+      for (const row of this.zValues) {
+        for (const v of row) {
+          if (typeof v === 'number' && Number.isFinite(v)) limit = Math.max(limit, Math.abs(v))
+        }
+      }
+      return limit || 1
     },
 
     /**
@@ -151,6 +284,7 @@ export default defineComponent({
       swapXY: boolean
     ) => Plotly.Data[] {
       const rescale = this.rescaleLeafCoord
+      const color = this.textColor
       return (dendro, xAxis, yAxis, swapXY) => {
         const traces: Plotly.Data[] = []
         for (let i = 0; i < dendro.icoord.length; i++) {
@@ -165,7 +299,8 @@ export default defineComponent({
             y,
             xaxis: xAxis,
             yaxis: yAxis,
-            line: { color: '#888', width: 1 },
+            line: { color, width: 1 },
+            opacity: 0.45,
             hoverinfo: 'skip',
             showlegend: false,
           } as Plotly.Data)
@@ -178,7 +313,7 @@ export default defineComponent({
       if (!this.hasGroupBar) return null
       const groupColors = this.args.groupColors || {}
       const colGroups = this.args.colGroups || []
-      const uniqueGroups = Array.from(new Set(colGroups.filter((g): g is string => !!g)))
+      const uniqueGroups = this.uniqueGroups
       const groupToIndex = new Map(uniqueGroups.map((g, i) => [g, i]))
 
       const z = [colGroups.map((g) => (g && groupToIndex.has(g) ? groupToIndex.get(g)! : -1))]
@@ -206,7 +341,9 @@ export default defineComponent({
         zmin: 0,
         zmax: Math.max(uniqueGroups.length - 1, 1),
         showscale: false,
-        hoverinfo: 'skip',
+        xgap: 1,
+        customdata: [colGroups.map((g, i) => [this.colLabels[i], g ?? ''])],
+        hovertemplate: '%{customdata[0]}: %{customdata[1]}<extra></extra>',
       } as unknown as Plotly.Data
     },
 
@@ -215,6 +352,15 @@ export default defineComponent({
         return this.getFallbackData()
       }
 
+      const geometry = this.geometry
+      const groups = this.args.colGroups || []
+      const yLabel = this.args.yLabel || 'Row'
+      const xLabel = this.args.xLabel || 'Column'
+      const valueLabel = this.args.intensityLabel || 'Value'
+      const customdata = this.rowLabels.map((row) =>
+        this.colLabels.map((col, c) => [row, groups[c] ? `${col} (${groups[c]})` : col])
+      )
+      const ownScale = this.args.colorscale
       const traces: Plotly.Data[] = [
         {
           type: 'heatmap',
@@ -223,22 +369,29 @@ export default defineComponent({
           y: this.rowLabels.map((_, i) => i),
           xaxis: 'x',
           yaxis: 'y',
-          colorscale: this.args.colorscale || 'RdBu',
-          reversescale: this.args.reversescale ?? true,
-          // Vertical colorbar, offset from the row-label lane by a FIXED
-          // PIXEL gap (xpad), not a domain/paper fraction. Fractions are
-          // relative to the total figure width, which shrinks on a
-          // narrower monitor/window (via `responsive: true`), while the
-          // row labels' automargin-reserved width stays a constant pixel
-          // amount - a fraction-based offset would drift into the labels
-          // on narrower screens, which is exactly what xpad avoids.
+          customdata,
+          ...(ownScale
+            ? { colorscale: ownScale, reversescale: this.args.reversescale ?? true }
+            : { colorscale: this.defaultColorscale, zmin: -this.zLimit, zmax: this.zLimit }),
+          // The colorbar has a lane of its own right of the row labels,
+          // spanning the heatmap's height.
           colorbar: {
-            title: { text: this.args.intensityLabel || 'Value' },
-            xpad: 130,
-            len: 0.7,
-            thickness: 15,
+            title: { text: valueLabel, side: 'top', font: { size: FONT_SIZE + 1 } },
+            x: 1 + (geometry.rowLabelLane + 14) / geometry.plotWidth,
+            xanchor: 'left',
+            xpad: 0,
+            y: geometry.heatmapY[1],
+            yanchor: 'top',
+            len: Math.min(geometry.heatmapY[1], 0.6),
+            lenmode: 'fraction',
+            thickness: COLORBAR_THICKNESS,
+            outlinewidth: 0,
+            ticks: '',
+            tickfont: { size: FONT_SIZE },
           },
-          hovertemplate: '%{x}, %{y}: %{z}<extra></extra>',
+          hovertemplate:
+            `${yLabel}: <b>%{customdata[0]}</b><br>${xLabel}: %{customdata[1]}` +
+            `<br>${valueLabel}: %{z:.2f}<extra></extra>`,
         } as unknown as Plotly.Data,
       ]
 
@@ -321,93 +474,109 @@ export default defineComponent({
     layout(): Partial<Plotly.Layout> {
       const nCols = this.colLabels.length
       const nRows = this.rowLabels.length
-      const heatmapTop = this.heatmapTop
-      const heatmapLeft = this.heatmapLeft
+      const g = this.geometry
+      const muted = { color: this.textColor, size: FONT_SIZE }
+      const hidden = { showticklabels: false, showgrid: false, zeroline: false, showline: false, ticks: '' }
+      const labelled = this.rowLabels.map((_, i) => i).filter((i) => i % g.rowStep === 0)
+
+      const annotations: Partial<Plotly.Annotations>[] = []
+      if (this.args.yLabel || g.rowStep > 1) {
+        // Heading of the row label lane; says when not every row is labelled
+        const name = this.args.yLabel || 'Rows'
+        const chars = Math.max(10, Math.floor(g.rowLabelLane / 6))
+        let text = shorten(`${name} (${nRows})`, chars)
+        if (g.rowStep > 1) text += `<br>${shorten(`every ${g.rowStep}${ordinal(g.rowStep)} labelled`, chars)}`
+        annotations.push({
+          xref: 'paper', yref: 'paper', x: 1 + 6 / g.plotWidth, y: g.heatmapY[1],
+          xanchor: 'left', yanchor: 'bottom', yshift: 3, showarrow: false, align: 'left',
+          text, font: { ...muted, size: FONT_SIZE - 0.5 }, opacity: 0.7,
+        })
+      }
+      if (this.hasGroupBar && this.uniqueGroups.length > 0) {
+        // Group key in the lane right of the column dendrogram, wrapped to its width
+        const colors = this.args.groupColors || {}
+        const lines: string[] = []
+        let line = ''
+        let lineWidth = 0
+        for (const name of this.uniqueGroups) {
+          const label = shorten(name, 16)
+          const width = textWidth(`■ ${label}`, this.fontFamily) + 12
+          if (line && lineWidth + width > g.rowLabelLane + COLORBAR_LANE_PX - 12) {
+            lines.push(line)
+            line = ''
+            lineWidth = 0
+          }
+          line += `${line ? '&nbsp;&nbsp;' : ''}<span style="color:${colors[name] || '#cccccc'}">■</span> ${label}`
+          lineWidth += width
+        }
+        if (line) lines.push(line)
+        annotations.push({
+          xref: 'paper', yref: 'paper', x: 1 + 6 / g.plotWidth, y: 1, xanchor: 'left', yanchor: 'top',
+          showarrow: false, align: 'left', font: muted, text: lines.join('<br>'),
+        })
+      }
 
       const layout: Record<string, unknown> = {
         ...this.themeLayout,
-        title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { ...(this.themeLayout.font || {}), size: FONT_SIZE },
+        title: this.args.title
+          ? {
+              text: `<b>${this.args.title}</b>`,
+              x: 0, xref: 'paper', xanchor: 'left',
+              y: 1, yref: 'paper', yanchor: 'bottom', pad: { b: 12 },
+              font: { size: FONT_SIZE + 4 },
+            }
+          : undefined,
         showlegend: false,
         height: this.args.height || 500,
-        // The heatmap's own domain stops at heatmapRight, leaving a
-        // dedicated lane (heatmapRight..1) for row labels + axis title,
-        // with the colorbar positioned further out still (see its `x`
-        // above) - each gets its own space instead of fighting over the
-        // same fixed margin.
-        margin: { l: 40, r: 200, t: this.args.title ? 60 : 20, b: 80 },
+        margin: g.margin,
+        annotations,
+        hoverlabel: { font: { family: this.fontFamily, size: FONT_SIZE + 1 } },
         ...(this.multiSelectEnabled
           ? { dragmode: this.dragmode, shapes: this.selectionShapes, hovermode: 'closest', ...SELECTION_LAYOUT }
           : {}),
         xaxis: {
-          domain: [heatmapLeft, this.heatmapRight],
+          ...hidden,
+          domain: g.heatmapX,
           anchor: 'y',
           range: [-0.5, nCols - 0.5],
+          showticklabels: true,
           tickvals: this.colLabels.map((_, i) => i),
-          ticktext: this.colLabels,
-          title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
+          ticktext: this.shortColLabels,
+          tickangle: g.colTickAngle,
+          automargin: false,
+          title: this.args.xLabel ? { text: this.args.xLabel, standoff: 6, font: { size: FONT_SIZE + 1 } } : undefined,
         },
         yaxis: {
-          domain: [0, heatmapTop],
+          ...hidden,
+          domain: g.heatmapY,
           anchor: 'x',
           range: [-0.5, nRows - 0.5],
-          tickvals: this.rowLabels.map((_, i) => i),
-          ticktext: this.rowLabels,
-          // Row labels on the right, in the dedicated lane after
-          // heatmapRight, so they don't overlap the row dendrogram (which
-          // stays on the left) or the colorbar (further right still).
-          // automargin lets Plotly grow the margin as needed to fit both
-          // the tick labels and the axis title without them overlapping.
+          showticklabels: true,
+          tickvals: labelled,
+          ticktext: labelled.map((i) => this.shortRowLabels[i]),
+          // Labels in the lane right of the heatmap; the dendrogram is left of it
           side: 'right',
-          automargin: true,
-          title: this.args.yLabel ? { text: this.args.yLabel, standoff: 30 } : undefined,
+          ticks: 'outside',
+          ticklen: 4,
+          tickcolor: 'rgba(0,0,0,0)',
+          automargin: false,
         },
       }
 
       if (this.hasColDendrogram) {
-        layout.xaxis2 = {
-          domain: [heatmapLeft, this.heatmapRight],
-          anchor: 'y2',
-          range: [-0.5, nCols - 0.5],
-          showticklabels: false,
-          showgrid: false,
-          zeroline: false,
-        }
-        layout.yaxis2 = {
-          domain: [1 - COL_DENDRO_HEIGHT, 1],
-          anchor: 'x2',
-          showticklabels: false,
-          showgrid: false,
-          zeroline: false,
-        }
+        layout.xaxis2 = { ...hidden, domain: g.heatmapX, anchor: 'y2', range: [-0.5, nCols - 0.5] }
+        layout.yaxis2 = { ...hidden, domain: g.colDendroY, anchor: 'x2', rangemode: 'tozero' }
       }
 
       if (this.hasRowDendrogram) {
-        layout.xaxis3 = {
-          domain: [0, ROW_DENDRO_WIDTH],
-          anchor: 'y3',
-          autorange: 'reversed',
-          showticklabels: false,
-          showgrid: false,
-          zeroline: false,
-        }
-        layout.yaxis3 = {
-          domain: [0, heatmapTop],
-          anchor: 'x3',
-          range: [-0.5, nRows - 0.5],
-          showticklabels: false,
-          showgrid: false,
-          zeroline: false,
-        }
+        layout.xaxis3 = { ...hidden, domain: g.rowDendro, anchor: 'y3', autorange: 'reversed', rangemode: 'tozero' }
+        layout.yaxis3 = { ...hidden, domain: g.heatmapY, anchor: 'x3', range: [-0.5, nRows - 0.5] }
       }
 
       if (this.hasGroupBar) {
-        layout.yaxis4 = {
-          domain: [heatmapTop + GAP, heatmapTop + GAP + GROUP_BAR_HEIGHT],
-          anchor: 'x',
-          showticklabels: false,
-          showgrid: false,
-          zeroline: false,
-        }
+        layout.yaxis4 = { ...hidden, domain: g.groupBarY, anchor: 'x' }
       }
 
       return layout as Partial<Plotly.Layout>
@@ -436,11 +605,19 @@ export default defineComponent({
         this.renderPlot()
       }
     },
+    // The layout is in pixels: lay it out again when the width changes
+    plotWidth() {
+      if (this.plotInitialized && this.isDataReady) {
+        this.renderPlot()
+      }
+    },
   },
 
   mounted() {
     this.isInitialized = true
     this.$nextTick(() => {
+      const element = document.getElementById(this.id)
+      if (element && element.clientWidth > 0) this.plotWidth = element.clientWidth
       if (this.isDataReady) {
         this.renderPlot()
       }
