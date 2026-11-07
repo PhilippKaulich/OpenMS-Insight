@@ -476,12 +476,17 @@ export default defineComponent({
       const indexField = this.args.tableIndexField || 'id'
       const interactivity = this.args.interactivity || {}
       const interactivityColumns = Object.values(interactivity) as string[]
+      // The column a tick adds to a multi-selection: kept even when it is
+      // not shown, or ticking a row would add nothing
+      const multiSelectColumns = Object.values(this.args.multiSelect || {}) as string[]
 
-      // Include all columns needed: visible columns, index field, and interactivity columns
+      // Include all columns needed: visible columns, index field, and the
+      // columns of interactivity and multi_select
       const allColumns = [
         ...(this.args.columnDefinitions || []).map((col) => col.field),
         indexField,
         ...interactivityColumns,
+        ...multiSelectColumns,
       ]
       // Deduplicate columns
       const columns = [...new Set(allColumns)]
