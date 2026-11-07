@@ -169,6 +169,7 @@ export interface LinePlotComponentArgs
   highlightColumn?: string // Column name for highlight mask (boolean)
   annotationColumn?: string // Column name for annotation text
   height?: number // Component height in pixels
+  keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
 }
 
 export interface LinePlotStyling {
@@ -418,6 +419,8 @@ export interface MirrorPlotComponentArgs
   styling?: MirrorPlotStyling
   config?: Record<string, unknown>
   height?: number
+  /** Start with the zoom pinned (the pin button in the mode bar toggles it). */
+  keepZoom?: boolean
 }
 
 export interface MirrorPlotStyling {
@@ -489,6 +492,7 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
  * Deconvolved spectrum component arguments.
  */
 export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, MeasureArgs, ImageExportArgs {
+  keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   componentType: 'PlotlyDeconvolvedSpectrum'
   view: 'deconvolved' | 'annotated' | 'ladder'
   title: string

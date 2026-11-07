@@ -6,6 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.image_format import image_format_args, validate_image_format
+from ..core.keep_zoom import keep_zoom_args, validate_keep_zoom
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
     measure_args,
@@ -110,6 +111,7 @@ class DeconvolvedSpectrum(BaseComponent):
         measure_tolerance: float = DEFAULT_MEASURE_TOLERANCE,
         measure_residues: dict[str, float] | None = None,
         image_format: str | None = None,
+        keep_zoom: bool = False,
         fragment_matches_identifier: str | None = None,
         **kwargs,
     ):
@@ -169,6 +171,11 @@ class DeconvolvedSpectrum(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            keep_zoom: Start with the zoom pinned (default False). The pin
+                button in the mode bar keeps the zoomed x range when the plot
+                gets new data, e.g. when another spectrum is selected; unpinned,
+                each new spectrum is shown in full. Double-click still resets
+                the zoom. Render-time only: not part of the cache.
             fragment_matches_identifier: Identifier a ``ProteinSequenceView``
                 writes its matched fragment ions to (its
                 ``fragment_matches_identifier``). The ions are marked when the
@@ -206,6 +213,9 @@ class DeconvolvedSpectrum(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time option, kept out of the cache config (see core/keep_zoom.py)
+        self._keep_zoom = validate_keep_zoom(keep_zoom)
         # Render-time option, kept out of the cache config
         self._fragment_matches_identifier = fragment_matches_identifier
 
@@ -491,4 +501,5 @@ class DeconvolvedSpectrum(BaseComponent):
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
         args.update(image_format_args(self._image_format))
+        args.update(keep_zoom_args(self._keep_zoom))
         return args

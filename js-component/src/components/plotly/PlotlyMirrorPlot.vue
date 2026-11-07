@@ -16,6 +16,7 @@ import { useSelectionStore } from '@/stores/selection'
 import type { MirrorPlotComponentArgs } from '@/types/component'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { usePinZoom } from '@/composables/usePinZoom'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
@@ -74,7 +75,8 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
     const labels = usePeakLabels(() => !!props.args.peakLabels)
-    return { streamlitDataStore, selectionStore, measure, labels }
+    const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom }
   },
   data() {
     return {
@@ -206,10 +208,11 @@ export default defineComponent({
     topData: {
       handler() {
         // Data changed (e.g., new spectrum selected) — reset zoom so the new
-        // data is shown at full extent. Matches PlotlyLineplot's plotData watcher.
+        // data is shown at full extent, unless the zoom is pinned. Matches
+        // PlotlyLineplot's plotData watcher.
         this.measure.setDataKey(this.spectrumKey)
         this.labels.setDataKey(this.spectrumKey)
-        this.manualXRange = undefined
+        if (!this.pinZoom.pinned) this.manualXRange = undefined
         this.render()
       },
       deep: true,
@@ -218,7 +221,7 @@ export default defineComponent({
       handler() {
         this.measure.setDataKey(this.spectrumKey)
         this.labels.setDataKey(this.spectrumKey)
-        this.manualXRange = undefined
+        if (!this.pinZoom.pinned) this.manualXRange = undefined
         this.render()
       },
       deep: true,
@@ -590,8 +593,10 @@ export default defineComponent({
           }),
           ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
           ...this.labels.modeBarButtons(),
+          ...this.pinZoom.modeBarButtons(),
         ],
       })
+      this.pinZoom.bind(element)
       this.isInitialized = true
       // The frame follows the plot's height. Without this a mirror plot first
       // drawn in a zero-height frame (e.g. below the fold) stayed invisible.

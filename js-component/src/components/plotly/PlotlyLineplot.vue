@@ -15,6 +15,7 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { usePinZoom } from '@/composables/usePinZoom'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
@@ -73,7 +74,8 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
     const labels = usePeakLabels(() => !!props.args.peakLabels)
-    return { streamlitDataStore, selectionStore, measure, labels }
+    const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom }
   },
   data() {
     return {
@@ -787,8 +789,11 @@ export default defineComponent({
           oldFirstX: oldData?.x_values?.[0],
         })
         if (this.isInitialized) {
-          // Reset zoom when data changes (e.g., switching spectra)
-          this.manualXRange = undefined
+          // Reset zoom when data changes (e.g., switching spectra), unless the
+          // zoom is pinned (mode bar button; keep_zoom=True pins it initially)
+          if (!this.pinZoom.pinned) {
+            this.manualXRange = undefined
+          }
           this.lastAutoZoomedPeakIndex = undefined
           this.renderPlot()
         }
@@ -873,6 +878,7 @@ export default defineComponent({
           }),
           ...this.measure.modeBarButtons(this.measureTitle),
           ...this.labels.modeBarButtons(),
+          ...this.pinZoom.modeBarButtons(),
         ]
 
         // Plotly.react updates the existing plot in place. On a zoom only the
@@ -897,6 +903,7 @@ export default defineComponent({
 
         // Add event listeners
         const plotElement = document.getElementById(this.id) as any
+        this.pinZoom.bind(plotElement)
         if (plotElement && needsListeners) {
           plotElement._insightListeners = true
           plotElement.on('plotly_click', (eventData: any) => {

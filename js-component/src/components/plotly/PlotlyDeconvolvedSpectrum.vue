@@ -36,6 +36,7 @@ import {
   type FragmentMarks,
 } from '@/utils/fragmentIons'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
+import { usePinZoom } from '@/composables/usePinZoom'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { readableTextOn } from '@/utils/appTheme'
@@ -191,7 +192,8 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
-    return { streamlitDataStore, selectionStore, measure, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    return { streamlitDataStore, selectionStore, measure, pinZoom, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -998,16 +1000,24 @@ export default defineComponent({
     },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
-        // A new spectrum: forget the zoom of the previous one
-        this.manual = false
-        this.manualXRange = undefined
+        // A new spectrum: forget the zoom of the previous one, unless pinned
+        if (!this.pinZoom.pinned) {
+          this.manual = false
+          this.manualXRange = undefined
+        }
         this.requestGraph()
       },
       deep: true,
     },
     ladderKey(newKey: unknown, oldKey: unknown) {
       if (newKey !== oldKey) {
+        // A pinned zoom outlives the reset of the drill-down state
+        const { manual, manualXRange } = this
         this.resetManualState()
+        if (this.pinZoom.pinned) {
+          this.manual = manual
+          this.manualXRange = manualXRange
+        }
         this.requestGraph()
       }
     },
@@ -1353,6 +1363,7 @@ export default defineComponent({
         }) as unknown as Record<string, unknown>,
       )
       modeBarButtons.push(...(this.measure.modeBarButtons(this.measureTitle) as unknown as Array<Record<string, unknown>>))
+      modeBarButtons.push(...(this.pinZoom.modeBarButtons() as unknown as Array<Record<string, unknown>>))
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: modeBarButtons as unknown as Plotly.ModeBarButton[],
@@ -1361,6 +1372,7 @@ export default defineComponent({
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
       plot.on('plotly_click', (eventData: { points?: Array<{ x: number }> }) => this.onPlotClick(eventData))
       this.measure.bindLabelClicks(element)
+      this.pinZoom.bind(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },
     async renderEmpty(): Promise<void> {

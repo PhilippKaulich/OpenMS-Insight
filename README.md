@@ -270,6 +270,7 @@ LinePlot(
 - `highlight_column`: Boolean/int column indicating which points to highlight
 - `annotation_column`: Text column for labels on highlighted points
 - `styling`: Color configuration dict
+- `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the mode bar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
 
 ### MirrorPlot
 

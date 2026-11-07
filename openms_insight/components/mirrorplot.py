@@ -7,6 +7,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.image_format import image_format_args, validate_image_format
+from ..core.keep_zoom import keep_zoom_args, validate_keep_zoom
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
     measure_args,
@@ -83,6 +84,7 @@ class MirrorPlot(BaseComponent):
         styling: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
         image_format: str | None = None,
+        keep_zoom: bool = False,
         **kwargs,
     ):
         """
@@ -164,6 +166,11 @@ class MirrorPlot(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            keep_zoom: Start with the zoom pinned (default False). The pin
+                button in the mode bar keeps the zoomed x range when the plot
+                gets new data, e.g. when another spectrum is selected; unpinned,
+                each new spectrum is shown in full. Double-click still resets
+                the zoom. Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         # Subprocess preprocessing re-instantiates the component via
@@ -212,6 +219,9 @@ class MirrorPlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time option, kept out of the cache config (see core/keep_zoom.py)
+        self._keep_zoom = validate_keep_zoom(keep_zoom)
 
         super().__init__(
             cache_id=cache_id,
@@ -627,6 +637,7 @@ class MirrorPlot(BaseComponent):
             if key not in args:
                 args[key] = val
         args.update(image_format_args(self._image_format))
+        args.update(keep_zoom_args(self._keep_zoom))
         return args
 
     def set_top_dynamic_annotations(
