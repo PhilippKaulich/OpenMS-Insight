@@ -15,8 +15,15 @@ class Rerun(Exception):
 
 
 @pytest.fixture
-def vue():
-    return MagicMock(return_value=None)
+def vue(mock_streamlit):
+    def draw(**kwargs):
+        # Streamlit keeps the value of a drawn component under its key (None
+        # until the view sends one) and drops it after a run that does not draw it
+        mock_streamlit[kwargs["key"]] = vue.return_value
+        return vue.return_value
+
+    vue = MagicMock(return_value=None, side_effect=draw)
+    return vue
 
 
 @pytest.fixture
@@ -111,6 +118,37 @@ def test_data_request_resends_in_a_rerun(rerun, vue, temp_cache_dir):
     assert vue.call_args.kwargs["dataChanged"] is False
 
     vue.return_value = {"_requestData": 2}
+    with pytest.raises(Rerun):
+        render_component(first, state, key="scans")
+
+
+def test_view_drawn_again_gets_its_data(rerun, vue, mock_streamlit, temp_cache_dir):
+    """A view that a run leaves out (a layout without its cell) is gone from the
+    page. Drawn again under the same key it is a new view: it gets its data, and
+    its first data request counts although the earlier view sent one numbered
+    the same. Before, the bridge took the data as delivered and ignored the
+    request, and the view showed "Loading..." for good."""
+    state = StateManager(session_key="remount")
+    first, _ = _tables(temp_cache_dir)
+    with pytest.raises(Rerun):
+        render_component(first, state, key="scans")
+    vue.return_value = {"_requestData": 1}
+    with pytest.raises(Rerun):
+        render_component(first, state, key="scans")
+    render_component(first, state, key="scans")  # sends the data
+    render_component(first, state, key="scans")
+    assert vue.call_args.kwargs["dataChanged"] is False
+
+    # A run without this view: Streamlit forgets its value, the browser its view
+    del mock_streamlit["scans"]
+    vue.return_value = None
+    render_component(first, state, key="scans")
+    assert vue.call_args.kwargs["dataChanged"] is True
+    assert list(vue.call_args.kwargs["tableData"]["id"]) == [0, 1, 2]
+
+    # Its own requests count from 1 again, and are acted on
+    del mock_streamlit["scans"]
+    vue.return_value = {"_requestData": 1}
     with pytest.raises(Rerun):
         render_component(first, state, key="scans")
 
