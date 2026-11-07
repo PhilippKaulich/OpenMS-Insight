@@ -90,6 +90,58 @@ const DEFAULT_STYLING = {
 
 // Stick plots draw each peak as x,x,x / floor,y,floor
 const STICK_FLOOR = -10000000
+
+/** A text label drawn by a scatter trace: unlike an annotation, it is clipped to the plot area. */
+interface PlotLabel {
+  x: number
+  y: number
+  text: string
+  color: string
+  family?: string
+  hover?: string
+}
+
+/** One trace with the labels, cut off at the axes like the boxes behind them. */
+function labelTrace(labels: PlotLabel[]): Plotly.Data | null {
+  if (labels.length === 0) return null
+  const hover = labels.some((label) => label.hover !== undefined)
+  return {
+    x: labels.map((label) => label.x),
+    y: labels.map((label) => label.y),
+    text: labels.map((label) => label.text),
+    mode: 'text',
+    type: 'scatter',
+    cliponaxis: true,
+    textposition: 'middle center',
+    textfont: {
+      size: 15,
+      color: labels.map((label) => label.color),
+      family: labels.map((label) => label.family ?? 'sans-serif'),
+    },
+    hoverinfo: hover ? 'text' : 'skip',
+    hovertext: hover ? labels.map((label) => label.hover ?? '') : undefined,
+    showlegend: false,
+  } as unknown as Plotly.Data
+}
+
+/**
+ * The part of a ladder arrow segment (tail to head) inside the x range, or null
+ * when none of it is. A head cut off at the axis loses its arrowhead.
+ */
+export function clipArrow(
+  tail: number,
+  head: number,
+  range: number[],
+): { tail: number; head: number; headVisible: boolean } | null {
+  if (range.length !== 2 || !(range[0] < range[1])) return { tail, head, headVisible: true }
+  const [x0, x1] = range
+  if (Math.max(tail, head) <= x0 || Math.min(tail, head) >= x1) return null
+  const clamp = (x: number) => Math.min(Math.max(x, x0), x1)
+  const clippedTail = clamp(tail)
+  const clippedHead = clamp(head)
+  if (clippedTail === clippedHead) return null
+  return { tail: clippedTail, head: clippedHead, headVisible: clippedHead === head }
+}
 /** m/z distance between neighbouring isotopes at charge 1 (C13 - C12). */
 const ISOTOPE_SPACING = 1.00235
 /** Envelope circles show once neighbouring isotopes are this many pixels apart. */
@@ -567,6 +619,7 @@ export default defineComponent({
         const groups = this.chargeGroups(highlighted[0])
         if (groups.length === 0) return empty
         const visibleChargeBoxes = this.annotationBoxData.filter((box) => box.type === 'charge' && box.visible)
+        const chargeLabels: PlotLabel[] = []
         groups.forEach(({ charge, center }, chargeIndex) => {
           if (!visibleChargeBoxes.some((box) => box.index === chargeIndex)) return
           buttonShapes.push({
@@ -577,17 +630,18 @@ export default defineComponent({
             y1: ypos_high,
             fillcolor: this.styling.annotationColors.massButton,
             line: { width: 0 },
+            // Below the label traces, which draw the text
+            layer: 'between' as 'below',
           })
-          buttonAnnotations.push({
+          chargeLabels.push({
             x: center,
             y: ypos,
-            xref: 'x',
-            yref: 'y',
             text: 'z=' + charge,
-            showarrow: false,
-            font: { size: 15, color: readableTextOn(this.styling.annotationColors.massButton) },
+            color: readableTextOn(this.styling.annotationColors.massButton),
           })
         })
+        const chargeTrace = labelTrace(chargeLabels)
+        if (chargeTrace) buttonTraces.push(chargeTrace)
         return { shapes: buttonShapes, annotations: buttonAnnotations, traces: buttonTraces }
       }
 
@@ -596,6 +650,8 @@ export default defineComponent({
       const reversedSelectedAA = this.reversedSelectedAA
       const visibleMassBoxes = this.annotationBoxData.filter((box) => box.type === 'mass' && box.visible)
       const scaling = highlighted.length === 1 ? 2 : 1
+      const massLabels: PlotLabel[] = []
+      const residueLabels: PlotLabel[] = []
 
       for (let i = 0; i < highlighted.length; i++) {
         const mass = highlighted[i].mass
@@ -625,16 +681,9 @@ export default defineComponent({
           y1: ypos_high,
           fillcolor,
           line: { width: 0 },
+          layer: 'between' as 'below',
         })
-        buttonAnnotations.push({
-          x: mass,
-          y: ypos,
-          xref: 'x',
-          yref: 'y',
-          text: mass.toFixed(2),
-          showarrow: false,
-          font: { size: 15, family, color: readableTextOn(fillcolor) },
-        })
+        massLabels.push({ x: mass, y: ypos, text: mass.toFixed(2), color: readableTextOn(fillcolor), family })
       }
 
       const yPosArrow = ypos * 0.5
@@ -679,46 +728,41 @@ export default defineComponent({
           xEnd -= diff
           xMidEnd += diff * 0.1
         }
-        arrowAnnotations.push({
-          ax: xMidStart,
-          ay: yPosArrow,
-          xref: 'x',
-          yref: 'y',
-          x: xStart,
-          y: yPosArrow,
-          axref: 'x',
-          ayref: 'y',
-          showarrow: true,
-          arrowhead: 0,
-          arrowsize: 1,
-          arrowwidth: 2,
-          arrowcolor: fillcolor,
+        // Annotations are not clipped to the plot: draw only the part of
+        // each segment inside the x range
+        const segments = [
+          clipArrow(xMidStart, xStart, this.xRange),
+          clipArrow(xMidEnd, xEnd, this.xRange),
+        ]
+        segments.forEach((segment, s) => {
+          if (!segment) return
+          arrowAnnotations.push({
+            ax: segment.tail,
+            ay: yPosArrow,
+            xref: 'x',
+            yref: 'y',
+            x: segment.head,
+            y: yPosArrow,
+            axref: 'x',
+            ayref: 'y',
+            showarrow: true,
+            arrowhead: s === 1 && segment.headVisible ? 2 : 0,
+            arrowsize: 1,
+            arrowwidth: 2,
+            arrowcolor: fillcolor,
+          })
         })
-        arrowAnnotations.push({
-          ax: xMidEnd,
-          ay: yPosArrow,
-          xref: 'x',
-          yref: 'y',
-          x: xEnd,
-          y: yPosArrow,
-          axref: 'x',
-          ayref: 'y',
-          showarrow: true,
-          arrowhead: 2,
-          arrowsize: 1,
-          arrowwidth: 2,
-          arrowcolor: fillcolor,
-        })
-        arrowAnnotations.push({
+        residueLabels.push({
           x: xMid,
           y: yPosAA,
-          xref: 'x',
-          yref: 'y',
           text: AA,
-          hovertext: 'Δ=' + delta.toFixed(2) + ' Da',
-          showarrow: false,
-          font: { size: 15, color: fillcolor, family },
+          color: fillcolor,
+          family,
+          hover: 'Δ=' + delta.toFixed(2) + ' Da',
         })
+      }
+      for (const trace of [labelTrace(massLabels), labelTrace(residueLabels)]) {
+        if (trace) buttonTraces.push(trace)
       }
       return {
         shapes: buttonShapes,
