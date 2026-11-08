@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import polars as pl
 
 from .cache import CacheMissError, atomic_write, cache_lock, get_cache_dir
+from .storage import scan_parquet
 
 if TYPE_CHECKING:
     from .state import StateManager
@@ -390,7 +391,7 @@ class BaseComponent(ABC):
         for key, filename in data_files.items():
             filepath = preprocessed_dir / filename
             if filepath.exists():
-                self._preprocessed_data[key] = pl.scan_parquet(filepath)
+                self._preprocessed_data[key] = scan_parquet(filepath)
 
         # Load simple values
         data_values = manifest.get("data_values", {})

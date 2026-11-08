@@ -19,6 +19,7 @@ from ..core.multi_select import (
     values_in_region,
 )
 from ..core.registry import register_component
+from ..core.storage import scan_parquet
 from ..core.zoom import normalize_zoom
 from ..preprocessing.compression import (
     compute_compression_levels,
@@ -477,7 +478,7 @@ class Heatmap(BaseComponent):
         )
 
         # Start cascading from full resolution
-        current_source = pl.scan_parquet(full_res_path)
+        current_source = scan_parquet(full_res_path)
         current_size = total
 
         # Build compressed levels from largest to smallest
@@ -520,13 +521,13 @@ class Heatmap(BaseComponent):
             )
 
             # Next iteration uses this level as source (cascading)
-            current_source = pl.scan_parquet(level_path)
+            current_source = scan_parquet(level_path)
             current_size = target_size
 
         # Load all levels back as LazyFrames
         for i in range(num_compressed + 1):
             level_path = cache_dir / f"{prefix}_{i}.parquet"
-            result[f"{prefix}_{i}"] = pl.scan_parquet(level_path)
+            result[f"{prefix}_{i}"] = scan_parquet(level_path)
 
         result["num_levels"] = num_compressed + 1
 
@@ -813,7 +814,7 @@ class Heatmap(BaseComponent):
                 level.sort([self._x_column, self._y_column]).sink_parquet(
                     tmp, compression="zstd"
                 )
-            self._preprocessed_data[f"level_{i}"] = pl.scan_parquet(level_path)
+            self._preprocessed_data[f"level_{i}"] = scan_parquet(level_path)
         self._preprocessed_data["num_levels"] = len(levels) + 1
         print(
             f"[HEATMAP] Stored {len(levels)} precomputed levels "

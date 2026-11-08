@@ -968,6 +968,10 @@ table = Table(
 
 Render-only settings such as `title` and `colorscale` currently take part in the cache key, so changing one rebuilds the cache rather than being ignored. That is wasteful but safe.
 
+## Caches on S3
+
+When the app's workspaces live on an S3 bucket mounted as a file system (the OpenMS streamlit-template's optional S3 storage), components still write their caches to the mounted path, but read the cached parquet files through the S3 API, so polars fetches only the row groups and columns a render needs. This is switched on by the environment, not by component arguments: it applies when `WORKSPACES_S3_ENDPOINT`, `WORKSPACES_S3_BUCKET`, `WORKSPACES_S3_ACCESS_KEY` and `WORKSPACES_S3_SECRET_KEY` are all set and the cache lies under `WORKSPACES_DIR` (the bucket's root). Otherwise files are read from the local path as before. `OPENMS_INSIGHT_S3=0` turns it off. The helper is `openms_insight.core.storage.scan_parquet`.
+
 ## Cache Reconstruction
 
 Components can be reconstructed from cache using only `cache_id` and `cache_path`. All configuration is restored from the cached manifest:
