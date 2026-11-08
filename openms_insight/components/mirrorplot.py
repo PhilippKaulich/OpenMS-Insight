@@ -17,6 +17,7 @@ from ..core.measure import (
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
+from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
 
@@ -85,6 +86,7 @@ class MirrorPlot(BaseComponent):
         config: dict[str, Any] | None = None,
         image_format: str | None = None,
         keep_zoom: bool = False,
+        zoom_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -171,6 +173,11 @@ class MirrorPlot(BaseComponent):
                 gets new data, e.g. when another spectrum is selected; unpinned,
                 each new spectrum is shown in full. Double-click still resets
                 the zoom. Render-time only: not part of the cache.
+            zoom_identifier: State identifier the plot keeps its zoom under,
+                ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
+                in the browser). The plot reports its ranges there after a zoom
+                or pan and zooms to a value set there, e.g. by a saved view.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         # Subprocess preprocessing re-instantiates the component via
@@ -222,6 +229,9 @@ class MirrorPlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/keep_zoom.py)
         self._keep_zoom = validate_keep_zoom(keep_zoom)
+
+        # Render-time option, kept out of the cache config (see core/zoom.py)
+        self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
         super().__init__(
             cache_id=cache_id,
@@ -637,6 +647,7 @@ class MirrorPlot(BaseComponent):
             if key not in args:
                 args[key] = val
         args.update(image_format_args(self._image_format))
+        args.update(zoom_args(self._zoom_identifier))
         args.update(keep_zoom_args(self._keep_zoom))
         return args
 

@@ -37,6 +37,7 @@ import {
 } from '@/utils/fragmentIons'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
+import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { readableTextOn } from '@/utils/appTheme'
@@ -193,7 +194,8 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
-    return { streamlitDataStore, selectionStore, measure, pinZoom, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, pinZoom, zoom, zoomStamp: zoom.stamp, uniqueId: `deconv-spectrum-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -980,6 +982,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      if (this.applyIncomingZoom()) this.requestGraph()
+    },
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
@@ -1001,7 +1007,9 @@ export default defineComponent({
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
         // A new spectrum: forget the zoom of the previous one, unless pinned
-        if (!this.pinZoom.pinned) {
+        // or a zoom came with it (a saved view opened)
+        if (!this.applyIncomingZoom() && !this.pinZoom.pinned) {
+          if (this.manual) this.zoom.report(null)
           this.manual = false
           this.manualXRange = undefined
         }
@@ -1018,6 +1026,7 @@ export default defineComponent({
           this.manual = manual
           this.manualXRange = manualXRange
         }
+        this.applyIncomingZoom()
         this.requestGraph()
       }
     },
@@ -1053,9 +1062,18 @@ export default defineComponent({
     },
   },
   mounted() {
+    this.applyIncomingZoom()
     this.requestGraph()
   },
   methods: {
+    /** Show a zoom set from outside; false if none came. */
+    applyIncomingZoom(): boolean {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return false
+      this.manual = !!incoming?.x
+      this.manualXRange = incoming?.x
+      return true
+    },
     /** Draw once per tick: one update often changes several watched values
      * (the data and the selection), and each drawing costs a full Plotly render. */
     requestGraph(): void {
@@ -1301,12 +1319,14 @@ export default defineComponent({
         if (newXRange[0] < 0) newXRange[0] = 0
         this.manual = true
         this.manualXRange = newXRange
+        this.zoom.report({ x: newXRange as [number, number] })
         this.requestGraph()
       } else if (eventData['xaxis.autorange'] === true) {
         const xValues = this.xValues
         if (xValues.length === 0) return
         this.manual = true
         this.manualXRange = [Math.min(...xValues), Math.max(...xValues)]
+        this.zoom.report(null)
         this.requestGraph()
       }
     },

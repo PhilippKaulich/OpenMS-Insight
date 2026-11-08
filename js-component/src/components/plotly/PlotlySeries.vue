@@ -17,6 +17,7 @@ import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 let plotIdCounter = 0
 
@@ -37,11 +38,14 @@ export default defineComponent({
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
-    return { streamlitDataStore, selectionStore, measure, uniqueId: `series-plot-${++plotIdCounter}` }
+    const zoom = useZoomState(() => props.args.zoomIdentifier)
+    return { streamlitDataStore, selectionStore, measure, zoom, zoomStamp: zoom.stamp, uniqueId: `series-plot-${++plotIdCounter}` }
   },
   data() {
     return {
       drawPending: false,
+      // The zoom the plot shows, kept across redraws (Plotly.newPlot resets it)
+      nativeZoom: null as ZoomValue | null,
     }
   },
   computed: {
@@ -184,6 +188,16 @@ export default defineComponent({
     },
   },
   watch: {
+    // A zoom set from Python (a saved view opened)
+    zoomStamp() {
+      const incoming = this.zoom.incoming()
+      if (incoming === undefined) return
+      this.nativeZoom = incoming
+      const element = document.getElementById(this.id)
+      if (element && (element as unknown as { _fullLayout?: unknown })._fullLayout) {
+        void Plotly.relayout(element, this.zoom.layoutFor(incoming))
+      }
+    },
     measureKey: {
       handler(key: string) {
         this.measure.setDataKey(key)
@@ -216,6 +230,7 @@ export default defineComponent({
     },
   },
   mounted() {
+    this.nativeZoom = this.zoom.incoming() ?? null
     this.requestRender()
   },
   methods: {
@@ -232,7 +247,7 @@ export default defineComponent({
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      await Plotly.newPlot(element, this.traces, this.layout, {
+      await Plotly.newPlot(element, this.traces, withZoom(this.layout, this.nativeZoom), {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
         modeBarButtonsToAdd: [
           plotlyDownloadButton({
@@ -248,6 +263,7 @@ export default defineComponent({
         on: (event: string, handler: (data: { points: Array<{ curveNumber: number; pointIndex: number }> }) => void) => void
       }
       plotElement.on('plotly_click', (eventData) => this.onClick(eventData))
+      this.zoom.bindNative(element as unknown as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })
       this.measure.bindLabelClicks(element)
       this.$nextTick(() => Streamlit.setFrameHeight())
     },

@@ -15,6 +15,7 @@ from ..core.measure import (
     validate_measure_tolerance,
 )
 from ..core.registry import register_component
+from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
 # What each view draws and what it is called
@@ -113,6 +114,7 @@ class DeconvolvedSpectrum(BaseComponent):
         image_format: str | None = None,
         keep_zoom: bool = False,
         fragment_matches_identifier: str | None = None,
+        zoom_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -183,6 +185,11 @@ class DeconvolvedSpectrum(BaseComponent):
                 of its first filter column (or when either is unknown), so give
                 the sequence view that column as ``spectrum_key_column``.
                 Render-time only: not part of the cache.
+            zoom_identifier: State identifier the plot keeps its zoom under,
+                ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
+                in the browser). The plot reports its ranges there after a zoom
+                or pan and zooms to a value set there, e.g. by a saved view.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if view not in VIEWS:
@@ -218,6 +225,9 @@ class DeconvolvedSpectrum(BaseComponent):
         self._keep_zoom = validate_keep_zoom(keep_zoom)
         # Render-time option, kept out of the cache config
         self._fragment_matches_identifier = fragment_matches_identifier
+
+        # Render-time option, kept out of the cache config (see core/zoom.py)
+        self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
         super().__init__(
             cache_id=cache_id,
@@ -501,5 +511,6 @@ class DeconvolvedSpectrum(BaseComponent):
             measure_args(self._measure, self._measure_tolerance, self._measure_residues)
         )
         args.update(image_format_args(self._image_format))
+        args.update(zoom_args(self._zoom_identifier))
         args.update(keep_zoom_args(self._keep_zoom))
         return args

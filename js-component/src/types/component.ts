@@ -15,6 +15,11 @@ export interface BaseComponentArgs {
    * holds the sorted distinct values of the column over the selected entries.
    */
   multiSelect?: Record<string, string>
+  /**
+   * State identifier the plot keeps its zoom under, {"x": [lo, hi], "y": [lo, hi]}
+   * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
+   */
+  zoomIdentifier?: string
 }
 
 /**
