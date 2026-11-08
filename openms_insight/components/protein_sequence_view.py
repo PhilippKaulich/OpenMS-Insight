@@ -264,6 +264,7 @@ class ProteinSequenceView(BaseComponent):
         modifications: list[str] | None = None,
         proforma_copy: bool = False,
         proforma_input: bool = False,
+        method_ion_options: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
@@ -331,6 +332,13 @@ class ProteinSequenceView(BaseComponent):
                 sequence. Needs ``modification_library``.
             modifications: Ids preselected in the picker, e.g. the fixed
                 modifications the current sequence carries.
+            method_ion_options: Offer the proton loss/addition option (±H on
+                every fragment) only while the selected ion series come from
+                electron-based or photo fragmentation: c or z ions, or a
+                radical / hydrogen-shifted series (ETD/ECD, EThcD, UVPD). With
+                collisional b/y (and a/x) ions alone, a hydrogen does not move
+                between the fragments, so the option is hidden and off.
+                Default False: always offered.
             variable_modification_library: Variable modifications the menu of
                 a residue (right click) offers instead of the built-in six, in
                 the form of ``modification_library`` (``'pyopenms'`` included);
@@ -426,6 +434,7 @@ class ProteinSequenceView(BaseComponent):
         # Per render, not cached
         self._proforma_copy = bool(proforma_copy)
         self._proforma_input = bool(proforma_input)
+        self._method_ion_options = bool(method_ion_options)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
         )
@@ -737,6 +746,17 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_input = bool(enabled)
         return self
 
+    def set_method_ion_options(self, enabled: bool = True) -> "ProteinSequenceView":
+        """Offer proton loss/addition only for electron or photo fragmentation.
+
+        Not cached. See ``method_ion_options`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._method_ion_options = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -750,6 +770,7 @@ class ProteinSequenceView(BaseComponent):
             "modifications": self._modifications,
             "proformaCopy": self._proforma_copy,
             "proformaInput": self._proforma_input,
+            "methodIonOptions": self._method_ion_options,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,

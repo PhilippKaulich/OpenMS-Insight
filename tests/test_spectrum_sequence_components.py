@@ -863,6 +863,29 @@ class TestProteinSequenceView:
         assert view._get_component_args()["proformaInput"] is True
         assert "proforma_input" not in view._get_cache_config()
 
+    def test_method_ion_options_args(self, mock_streamlit, temp_cache_dir: Path):
+        view = ProteinSequenceView(
+            cache_id="seq_method_ion_options",
+            data=pl.LazyFrame(
+                {
+                    "hit_index": [0],
+                    "sequence": [["A"]],
+                    "masses": [[1000.0]],
+                    "precursor_mass": [1000.0],
+                }
+            ),
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["methodIonOptions"] is False
+        assert view.set_method_ion_options() is view
+        assert view._get_component_args()["methodIonOptions"] is True
+        assert (
+            view.set_method_ion_options(False)._get_component_args()["methodIonOptions"]
+            is False
+        )
+        assert "method_ion_options" not in view._get_cache_config()
+
     def test_modification_picker_from_pyopenms(
         self, mock_streamlit, temp_cache_dir: Path
     ):

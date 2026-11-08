@@ -109,3 +109,11 @@ export function settingsIons(
   })
   return series
 }
+
+// Whether the selected series come from electron-based or photo fragmentation
+// (ETD/ECD, EThcD, UVPD): c or z ions, or a radical / hydrogen-shifted series.
+// A hydrogen moving between the fragments (proton loss/addition) happens
+// there; with collisional b/y (and a/x) ions alone it does not.
+export function hydrogenShiftExpected(series: IonSeries[]): boolean {
+  return series.some((s) => s.base === 'c' || s.base === 'z' || s.offset !== 0)
+}

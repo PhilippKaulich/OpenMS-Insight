@@ -203,7 +203,7 @@
                   </div>
                   <div class="d-flex justify-space-evenly">
                     <v-checkbox
-                      v-for="category in Object.keys(ionTypesExtra)"
+                      v-for="category in shownExtraFragmentTypes"
                       :key="category"
                       v-model="ionTypesExtra[category as ExtraFragmentType]"
                       hide-details
@@ -511,6 +511,7 @@ import {
   ionSeries,
   isPrefixIon,
   isSuffixIon,
+  hydrogenShiftExpected,
   methodForIons,
   methodIons,
   toleranceDa,
@@ -743,6 +744,16 @@ export default defineComponent({
       },
     },
     // Selected ion series: the base types and, without an annotation, the variants
+    // method_ion_options: proton loss/addition only where a hydrogen moves
+    // between the fragments (electron-based or photo fragmentation)
+    protonShiftAllowed(): boolean {
+      return !this.args.methodIonOptions || hydrogenShiftExpected(this.selectedIonSeries)
+    },
+    shownExtraFragmentTypes(): ExtraFragmentType[] {
+      return (Object.keys(this.ionTypesExtra) as ExtraFragmentType[]).filter(
+        (type) => type !== 'proton loss/addition' || this.protonShiftAllowed,
+      )
+    },
     selectedIonSeries(): IonSeries[] {
       const names = this.ionTypes.filter((t) => t.selected).map((t) => t.text)
       if (!this.usesAnnotator) {
@@ -1046,6 +1057,9 @@ export default defineComponent({
     },
   },
   watch: {
+    protonShiftAllowed(allowed: boolean) {
+      if (!allowed) this.ionTypesExtra['proton loss/addition'] = false
+    },
     // An error about the input goes once the input changes
     customSequenceInput() {
       this.sequenceInputError = ''
@@ -1231,6 +1245,12 @@ export default defineComponent({
       const ions = methodIons(this.spectrumFragmentation)
       if (ions !== undefined) this.selectIons(ions)
     },
+    // An extra fragment type is matched when ticked and, for proton
+    // loss/addition, allowed by the selected series (method_ion_options)
+    extraTypeActive(type: ExtraFragmentType): boolean {
+      if (type === 'proton loss/addition' && !this.protonShiftAllowed) return false
+      return this.ionTypesExtra[type] ?? false
+    },
     toggleIonTypeSelected(index: number) {
       this.ionTypes[index].selected = !this.ionTypes[index].selected
     },
@@ -1341,7 +1361,7 @@ export default defineComponent({
       const extraFragments = Object.entries(extraFragmentTypeObject)
         .filter(
           ([extraFragmentType]) =>
-            this.ionTypesExtra[extraFragmentType as ExtraFragmentType] ||
+            this.extraTypeActive(extraFragmentType as ExtraFragmentType) ||
             extraFragmentType === 'default'
         )
         .map(([_, extraFragment]) => extraFragment)
@@ -1837,7 +1857,7 @@ export default defineComponent({
       if (this.variableModData.isEmpty) return
       if (this.sequenceObjects.length !== this.sequence.length) return
       const extraMasses = Object.entries(extraFragmentTypeObject)
-        .filter(([type]) => this.ionTypesExtra[type as ExtraFragmentType] || type === 'default')
+        .filter(([type]) => this.extraTypeActive(type as ExtraFragmentType) || type === 'default')
         .flatMap(([, list]) => list.map((e) => e.typeMass))
       const series = this.selectedIonSeries.filter((s) => {
         if (isPrefixIon(s.base) && this.sequence_start_reported < 0) return false
