@@ -271,6 +271,7 @@ LinePlot(
 - `annotation_column`: Text column for labels on highlighted points
 - `styling`: Color configuration dict
 - `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the mode bar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
+- `top_peak_labels`, `show_top_peak_labels`: The **Label top peaks** button (a number sign) in the mode bar shows the m/z of the most intense peaks in view, 10 by default (`top_peak_labels=0` removes the button). The labels are placed again on every zoom or pan, most intense first, leaving out any that would overlap, so zooming in labels more peaks. `show_top_peak_labels=True` starts with them shown. Peaks carrying one of your own labels keep only that label. Render-time only, like `keep_zoom`
 
 ### MirrorPlot
 

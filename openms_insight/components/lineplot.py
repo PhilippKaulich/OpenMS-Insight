@@ -16,6 +16,11 @@ from ..core.measure import (
 )
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
+from ..core.top_peak_labels import (
+    top_peak_label_args,
+    validate_show_top_peak_labels,
+    validate_top_peak_labels,
+)
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -80,6 +85,8 @@ class LinePlot(BaseComponent):
         peak_labels: bool = True,
         image_format: str | None = None,
         keep_zoom: bool = False,
+        top_peak_labels: int = 10,
+        show_top_peak_labels: bool = False,
         zoom_identifier: str | None = None,
         **kwargs,
     ):
@@ -150,6 +157,13 @@ class LinePlot(BaseComponent):
                 gets new data, e.g. when another spectrum is selected; unpinned,
                 each new spectrum is shown in full. Double-click still resets
                 the zoom. Render-time only: not part of the cache.
+            top_peak_labels: How many of the most intense peaks in view the
+                "Label top peaks" button in the mode bar labels with their x
+                value (default 10, at most 200; 0 removes the button). The
+                labels are placed again on every zoom, leaving out any that
+                would overlap. Render-time only: not part of the cache.
+            show_top_peak_labels: Start with those labels shown (default
+                False). Render-time only: not part of the cache.
             zoom_identifier: State identifier the plot keeps its zoom under,
                 ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
                 in the browser). The plot reports its ranges there after a zoom
@@ -183,6 +197,9 @@ class LinePlot(BaseComponent):
         # Render-time option, kept out of the cache config (see core/keep_zoom.py)
         self._keep_zoom = validate_keep_zoom(keep_zoom)
 
+        # Render-time options, kept out of the cache config (see core/top_peak_labels.py)
+        self._top_peak_labels = validate_top_peak_labels(top_peak_labels)
+        self._show_top_peak_labels = validate_show_top_peak_labels(show_top_peak_labels)
         # Render-time option, kept out of the cache config (see core/zoom.py)
         self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
@@ -494,6 +511,9 @@ class LinePlot(BaseComponent):
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
         args.update(keep_zoom_args(self._keep_zoom))
+        args.update(
+            top_peak_label_args(self._top_peak_labels, self._show_top_peak_labels)
+        )
         return args
 
     def with_styling(

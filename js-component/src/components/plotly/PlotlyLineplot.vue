@@ -16,6 +16,7 @@ import { useSelectionStore } from '@/stores/selection'
 import type { LinePlotComponentArgs, PlotData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { usePinZoom } from '@/composables/usePinZoom'
+import { useTopPeakLabels } from '@/composables/useTopPeakLabels'
 import { useZoomState } from '@/composables/useZoomState'
 import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
@@ -76,8 +77,12 @@ export default defineComponent({
     const measure = useMeasure(() => !!props.args.measure)
     const labels = usePeakLabels(() => !!props.args.peakLabels)
     const pinZoom = usePinZoom(() => !!props.args.keepZoom)
+    const topPeaks = useTopPeakLabels(
+      () => props.args.topPeakLabels ?? 0,
+      () => !!props.args.showTopPeakLabels,
+    )
     const zoom = useZoomState(() => props.args.zoomIdentifier)
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, zoom }
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom }
   },
   data() {
     return {
@@ -693,6 +698,7 @@ export default defineComponent({
         shapes: [...this.annotationShapes, ...this.measureOverlay.shapes],
         annotations: [
           ...this.peakAnnotations,
+          ...this.topPeakAnnotations,
           ...this.measureOverlay.annotations,
           ...this.labels.overlay({
             color: this.theme?.textColor || '#262730',
@@ -700,6 +706,28 @@ export default defineComponent({
           }),
         ],
       }
+    },
+
+    /**
+     * x values of the most intense peaks in view (mode bar button). Peaks
+     * that carry one of your labels keep only that label.
+     */
+    topPeakAnnotations(): Partial<Plotly.Annotations>[] {
+      if (!this.isDataReady || !this.plotData) return []
+      const { x_values, y_values } = this.plotData
+      const titled = !!this.args.title
+      const own = new Set(this.args.peakLabels ? this.labels.labels.map((label) => label.x) : [])
+      return this.topPeaks.annotations({
+        x: x_values,
+        y: y_values,
+        xRange: this.xRange,
+        yRange: this.yRange,
+        widthPx: this.actualPlotWidth - 80,
+        heightPx: (this.args.height || 400) - (titled ? 50 : 20) - 50,
+        textWidth: (text, size) => this.measureTextWidth(text, size),
+        skip: own.size > 0 ? (i) => own.has(x_values[i]) : undefined,
+        color: this.theme?.textColor || '#262730',
+      })
     },
 
     /**
@@ -763,6 +791,11 @@ export default defineComponent({
     async 'labels.revision'() {
       if (this.isInitialized && this.isDataReady) await this.renderPlot()
       this.placeLabelEditor()
+    },
+
+    // Top peak labels switched on or off
+    'topPeaks.on'() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
     },
 
     // One click tool at a time
@@ -855,13 +888,13 @@ export default defineComponent({
      * Measure text width in pixels using Canvas API.
      * Caches the canvas context for performance.
      */
-    measureTextWidth(text: string): number {
+    measureTextWidth(text: string, fontSize = 14): number {
       if (!this.textMeasureCanvas) {
         this.textMeasureCanvas = document.createElement('canvas')
       }
       const ctx = this.textMeasureCanvas.getContext('2d')
-      if (!ctx) return text.length * 8 // Fallback estimate
-      ctx.font = '14px Arial'
+      if (!ctx) return text.length * fontSize * 0.6 // Fallback estimate
+      ctx.font = `${fontSize}px Arial`
       return ctx.measureText(text).width
     },
 
@@ -893,6 +926,7 @@ export default defineComponent({
           }),
           ...this.measure.modeBarButtons(this.measureTitle),
           ...this.labels.modeBarButtons(),
+          ...this.topPeaks.modeBarButtons(),
           ...this.pinZoom.modeBarButtons(),
         ]
 
@@ -919,6 +953,7 @@ export default defineComponent({
         // Add event listeners
         const plotElement = document.getElementById(this.id) as any
         this.pinZoom.bind(plotElement)
+        this.topPeaks.bind(plotElement)
         if (plotElement && needsListeners) {
           plotElement._insightListeners = true
           plotElement.on('plotly_click', (eventData: any) => {
