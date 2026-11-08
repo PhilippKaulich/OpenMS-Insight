@@ -475,6 +475,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
   seriesColors?: Record<string, string>
   color: string
   traceColumn?: string | null
+  /** identifier -> column; points of the selected value are drawn apart */
+  highlight?: Record<string, string>
+  highlightName?: string
+  highlightColor?: string
   title: string
   /** [identifier, title] pairs: first identifier with a selection sets the title */
   selectionTitles?: Array<[string, string]>

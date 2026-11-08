@@ -331,6 +331,94 @@ class TestPlot3D:
             )
 
 
+class TestPlot3DHighlight:
+    @pytest.fixture
+    def run_peaks(self) -> pl.LazyFrame:
+        """Peaks of three MS1 spectra of a run."""
+        return pl.LazyFrame(
+            {
+                "scan_idx": [0, 0, 1, 1, 2],
+                "mz": [500.0, 600.0, 500.5, 700.0, 800.0],
+                "rt": [10.0, 10.0, 20.0, 20.0, 30.0],
+                "intensity": [5.0, 3.0, 4.0, 2.0, 1.0],
+            }
+        )
+
+    def _plot(self, data, cache_dir, cache_id="run_map"):
+        return Plot3D(
+            cache_id=cache_id,
+            data=data,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            highlight={"survey": "scan_idx"},
+            highlight_name="Precursor spectrum",
+            highlight_color="#ff7501",
+            cache_path=str(cache_dir),
+        )
+
+    def test_selected_points_are_drawn_apart(
+        self, mock_streamlit, temp_cache_dir, run_peaks
+    ):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        result = plot._prepare_vue_data({"survey": 1})
+        assert sorted(result["plotData"]["mz"]) == [500.0, 600.0, 800.0]
+        assert result["highlightData"] == {
+            "x": [500.5, 700.0],
+            "y": [20.0, 20.0],
+            "z": [4.0, 2.0],
+        }
+
+    def test_nothing_highlighted_without_selection(
+        self, mock_streamlit, temp_cache_dir, run_peaks
+    ):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        result = plot._prepare_vue_data({})
+        assert len(result["plotData"]) == 5
+        assert result["highlightData"] == {"x": [], "y": [], "z": []}
+
+    def test_selection_changes_hash(self, mock_streamlit, temp_cache_dir, run_peaks):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        hashes = {plot._prepare_vue_data({"survey": s})["_hash"] for s in (0, 1, None)}
+        assert len(hashes) == 3
+
+    def test_identifier_is_a_state_dependency(
+        self, mock_streamlit, temp_cache_dir, run_peaks
+    ):
+        plot = self._plot(run_peaks, temp_cache_dir)
+        assert plot.get_state_dependencies() == ["survey"]
+
+    def test_args_and_cache_restore(self, mock_streamlit, temp_cache_dir, run_peaks):
+        self._plot(run_peaks, temp_cache_dir)
+        restored = Plot3D(cache_id="run_map", cache_path=str(temp_cache_dir))
+        args = restored._get_component_args()
+        assert args["highlight"] == {"survey": "scan_idx"}
+        assert args["highlightName"] == "Precursor spectrum"
+        assert args["highlightColor"] == "#ff7501"
+        assert restored._prepare_vue_data({"survey": 2})["highlightData"]["x"] == [
+            800.0
+        ]
+
+    def test_without_highlight_args_unchanged(
+        self, mock_streamlit, temp_cache_dir, sample_plot3d_data
+    ):
+        plot = TestPlot3D()._plot(sample_plot3d_data, temp_cache_dir)
+        assert "highlight" not in plot._get_component_args()
+        assert "highlightData" not in plot._prepare_vue_data({"scan": 0})
+
+    def test_unknown_highlight_column(self, mock_streamlit, temp_cache_dir, run_peaks):
+        with pytest.raises(ValueError, match="highlight"):
+            Plot3D(
+                cache_id="bad",
+                data=run_peaks,
+                x_column="mz",
+                y_column="rt",
+                z_column="intensity",
+                highlight={"survey": "missing"},
+                cache_path=str(temp_cache_dir),
+            )
+
+
 class TestDeconvolvedSpectrum:
     def test_one_spectrum_per_scan(
         self, mock_streamlit, temp_cache_dir, sample_deconvolved_spectra

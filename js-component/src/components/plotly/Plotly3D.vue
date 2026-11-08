@@ -135,9 +135,45 @@ export default defineComponent({
       }
       return [...groups.values()]
     },
+    /** Points of the selected value of a `highlight` identifier, sent apart by Python */
+    highlightSeries(): SeriesPoints | null {
+      if (!this.args.highlight) return null
+      const points = this.streamlitDataStore.allDataForDrawing?.highlightData as
+        | { x: number[]; y: number[]; z: number[] }
+        | undefined
+      const group: SeriesPoints = {
+        key: '__highlight__',
+        name: this.args.highlightName || 'Selected',
+        color: this.args.highlightColor || '#ff7501',
+        x: [],
+        y: [],
+        z: [],
+      }
+      const xs = points?.x || []
+      const ys = points?.y || []
+      const zs = points?.z || []
+      const stems = this.args.mode !== 'lines'
+      for (let i = 0; i < xs.length; i++) {
+        if (stems) {
+          if (!(zs[i] > 0)) continue
+          group.x.push(xs[i], xs[i], xs[i])
+          group.y.push(ys[i], ys[i], ys[i])
+          group.z.push(STEM_FLOOR, zs[i], STEM_FLOOR)
+        } else {
+          group.x.push(xs[i])
+          group.y.push(ys[i])
+          group.z.push(zs[i])
+        }
+      }
+      return group.x.length > 0 ? group : null
+    },
+    allSeries(): SeriesPoints[] {
+      // The highlighted points last, so they are drawn on top
+      return this.highlightSeries ? [...this.series, this.highlightSeries] : this.series
+    },
     maxZ(): number {
       let max = 0
-      for (const s of this.series) {
+      for (const s of this.allSeries) {
         for (const z of s.z) {
           if (z !== null && z > max) max = z
         }
@@ -145,7 +181,7 @@ export default defineComponent({
       return max
     },
     traces(): Plotly.Data[] {
-      return this.series.map(
+      return this.allSeries.map(
         (s) =>
           ({
             name: s.name,
@@ -154,7 +190,7 @@ export default defineComponent({
             x: s.x,
             y: s.y,
             z: s.z,
-            line: { color: s.color },
+            line: { color: s.color, width: s.key === '__highlight__' ? 4 : 2 },
             connectgaps: false,
           }) as Plotly.Data
       )
@@ -189,6 +225,12 @@ export default defineComponent({
   },
   watch: {
     'streamlitDataStore.allDataForDrawing.plotData': {
+      handler() {
+        this.requestRender()
+      },
+      deep: true,
+    },
+    'streamlitDataStore.allDataForDrawing.highlightData': {
       handler() {
         this.requestRender()
       },
