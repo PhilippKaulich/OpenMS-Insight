@@ -3,6 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -22,7 +23,9 @@ import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import { imageFormatOf } from '@/utils/imageExport'
-import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
 const DEFAULT_STYLING = {
@@ -60,7 +63,7 @@ interface AnnotationBox {
 
 export default defineComponent({
   name: 'PlotlyMirrorPlot',
-  components: { MeasureHint, PeakLabelEditor },
+  components: { MeasureHint, PeakLabelEditor, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<MirrorPlotComponentArgs>,
@@ -89,6 +92,25 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 400) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      return [
+        ...this.measure.tools('click two peaks of the same spectrum (Esc cancels)'),
+        ...this.labels.tools(),
+        ...this.pinZoom.tools(),
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || this.args.title || 'mirror_plot',
+          height: this.args.height || 400,
+        }),
+      ]
+    },
+
     id(): string {
       return `mirror-plot-${this.index}`
     },
@@ -551,7 +573,7 @@ export default defineComponent({
       const layout: Partial<Plotly.Layout> = {
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: false,
-        height: this.args.height || 400,
+        height: this.plotHeight,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           showgrid: false,
@@ -596,16 +618,7 @@ export default defineComponent({
       await Plotly.newPlot(element, traces, layout, {
         responsive: true,
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: [
-          plotlyDownloadButton({
-            format: () => imageFormatOf(this.args.imageFormat),
-            filename: () => this.args.svgFilename || this.args.title || 'mirror_plot',
-            height: this.args.height || 400,
-          }),
-          ...this.measure.modeBarButtons('Measure: click two peaks of the same spectrum (Esc cancels)'),
-          ...this.labels.modeBarButtons(),
-          ...this.pinZoom.modeBarButtons(),
-        ],
+        displaylogo: false,
       })
       this.pinZoom.bind(element)
       this.isInitialized = true

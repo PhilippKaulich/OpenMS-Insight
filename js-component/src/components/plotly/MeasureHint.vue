@@ -7,8 +7,7 @@
 <script lang="ts">
 /**
  * A small note over the plot's top-left corner while measure mode (or another
- * click tool, such as peak labels) is on: the tool's button sits in Plotly's
- * mode bar, which is hidden until hovered.
+ * click tool, such as peak labels) is on, saying what the next click does.
  * Plain HTML over the plot: it takes no height and is not part of the SVG
  * download. The parent must be positioned (position: relative).
  */
@@ -48,7 +47,7 @@ export default defineComponent({
 <style scoped>
 .measure-hint {
   position: absolute;
-  top: 4px;
+  top: 9px;
   left: 8px;
   z-index: 10;
   pointer-events: none;

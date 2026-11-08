@@ -1,6 +1,7 @@
 <template>
   <div class="pca-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="pca-container"></div>
   </div>
 </template>
@@ -14,6 +15,8 @@ import type { PCAPlotComponentArgs, PCAData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /** Default qualitative palette, shared with PlotlyHeatmap's categorical mode. */
@@ -93,7 +96,7 @@ function computeEllipse(xs: number[], ys: number[], nPoints = 60): { x: number[]
 
 export default defineComponent({
   name: 'PlotlyPca',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<PCAPlotComponentArgs>,
@@ -137,6 +140,10 @@ export default defineComponent({
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      return [...this.measure.tools(), this.downloadTool()]
+    },
+
     id(): string {
       return `pca-${this.index}`
     },
@@ -359,7 +366,7 @@ export default defineComponent({
           xanchor: 'right',
           x: 1,
         },
-        height: this.args.height || 400,
+        height: (this.args.height || 400) - TOOLBAR_HEIGHT,
         xaxis: {
           title: { text: this.args.xLabel || this.args.xColumn },
           zeroline: true,
@@ -462,7 +469,7 @@ export default defineComponent({
 
         await Plotly.newPlot(
           this.id, this.plotData, withZoom(this.layout, this.nativeZoom),
-          this.getPlotConfig(this.measure.modeBarButtons()),
+          this.getPlotConfig(),
         )
         this.setupPcaClickHandler()
         this.zoom.bindNative(element as Plotly.PlotlyHTMLElement, (z) => { this.nativeZoom = z })

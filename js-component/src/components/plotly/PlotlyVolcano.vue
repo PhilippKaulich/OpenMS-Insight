@@ -21,7 +21,8 @@
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
     <div class="volcano-plot-area">
-      <div :id="id" class="volcano-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+      <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+      <div :id="id" class="volcano-container" :style="{ minHeight: `${plotHeight}px` }"></div>
       <MeasureHint v-if="args.measure" :measure="measure" />
     </div>
   </div>
@@ -32,11 +33,13 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionTool, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { VolcanoPlotComponentArgs, VolcanoData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
 /**
@@ -59,7 +62,7 @@ function computeSignificance(
 
 export default defineComponent({
   name: 'PlotlyVolcano',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<VolcanoPlotComponentArgs>,
@@ -125,6 +128,19 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 400) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      return [
+        ...(this.multiSelectEnabled ? [clearSelectionTool(() => this.clearSelection(), this.selectedCount)] : []),
+        ...this.measure.tools(),
+        this.downloadTool(),
+      ]
+    },
+
     id(): string {
       return `volcano-${this.index}`
     },
@@ -469,7 +485,7 @@ export default defineComponent({
           xanchor: 'right',
           x: 1,
         },
-        height: this.args.height || 400,
+        height: this.plotHeight,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
         ...SELECTION_LAYOUT,
         xaxis: {
@@ -590,10 +606,7 @@ export default defineComponent({
 
         await Plotly.newPlot(
           this.id, this.plotData, withZoom(this.layout, this.nativeZoom),
-          this.getPlotConfig([
-            ...(this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []),
-            ...this.measure.modeBarButtons(),
-          ]),
+          this.getPlotConfig(),
         )
         this.setupClickHandler()
         this.setupSelectHandlers()

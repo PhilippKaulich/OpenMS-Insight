@@ -3,6 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
     <PeakHoverTip
       :tip="hover.tip"
@@ -30,7 +31,9 @@ import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
-import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration
 const DEFAULT_STYLING = {
@@ -67,7 +70,7 @@ function finiteExtent(values: ArrayLike<number>): [number, number] {
 
 export default defineComponent({
   name: 'PlotlyLineplot',
-  components: { MeasureHint, PeakLabelEditor, PeakHoverTip },
+  components: { MeasureHint, PeakLabelEditor, PeakHoverTip, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<LinePlotComponentArgs>,
@@ -679,7 +682,7 @@ export default defineComponent({
       return {
         title: this.args.title ? { text: `<b>${this.args.title}</b>` } : undefined,
         showlegend: false,
-        height: this.args.height || 400,
+        height: this.plotHeight,
         xaxis: {
           title: this.args.xLabel ? { text: this.args.xLabel } : undefined,
           showgrid: false,
@@ -725,7 +728,7 @@ export default defineComponent({
     },
 
     /**
-     * x values of the most intense peaks in view (mode bar button). Peaks
+     * x values of the most intense peaks in view (toolbar button). Peaks
      * that carry one of your labels keep only that label.
      */
     topPeakAnnotations(): Partial<Plotly.Annotations>[] {
@@ -739,7 +742,7 @@ export default defineComponent({
         xRange: this.xRange,
         yRange: this.yRange,
         widthPx: this.actualPlotWidth - 80,
-        heightPx: (this.args.height || 400) - (titled ? 50 : 20) - 50,
+        heightPx: this.plotHeight - (titled ? 50 : 20) - 50,
         textWidth: (text, size) => this.measureTextWidth(text, size),
         skip: own.size > 0 ? (i) => own.has(x_values[i]) : undefined,
         color: this.theme?.textColor || '#262730',
@@ -762,7 +765,26 @@ export default defineComponent({
     },
 
     measureTitle(): string {
-      return `Measure: click two peaks for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
+      return `click two peaks for their ${this.measureSpec.xQuantity} difference (Esc cancels)`
+    },
+
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 400) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      return [
+        ...this.measure.tools(this.measureTitle),
+        ...this.labels.tools(),
+        ...this.topPeaks.tools(),
+        ...this.pinZoom.tools(),
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.title || 'plot',
+        }),
+      ]
     },
 
     /** Identity of the plotted peaks: other peaks drop the measurements. */
@@ -842,7 +864,7 @@ export default defineComponent({
         this.hover.hide()
         if (this.isInitialized) {
           // Reset zoom when data changes (e.g., switching spectra), unless the
-          // zoom is pinned (mode bar button; keep_zoom=True pins it initially)
+          // zoom is pinned (toolbar button; keep_zoom=True pins it initially)
           const incoming = this.zoom.incoming()
           if (incoming !== undefined) {
             // A zoom set with this data (a saved view opened)
@@ -935,25 +957,13 @@ export default defineComponent({
           return
         }
 
-        const modeBarButtons = [
-          plotlyDownloadButton({
-            format: () => imageFormatOf(this.args.imageFormat),
-            filename: () => this.args.title || 'plot',
-            icon: SPECTRUM_DOWNLOAD_ICON,
-          }),
-          ...this.measure.modeBarButtons(this.measureTitle),
-          ...this.labels.modeBarButtons(),
-          ...this.topPeaks.modeBarButtons(),
-          ...this.pinZoom.modeBarButtons(),
-        ]
-
         // Plotly.react updates the existing plot in place. On a zoom only the
         // layout changes (the traces are cached computed values), so the trace
         // SVG is not rebuilt, and the event listeners stay attached.
         const needsListeners = !(element as any)._insightListeners
         await Plotly.react(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-          modeBarButtonsToAdd: modeBarButtons,
+          displaylogo: false,
           scrollZoom: true,
           responsive: true,
         })

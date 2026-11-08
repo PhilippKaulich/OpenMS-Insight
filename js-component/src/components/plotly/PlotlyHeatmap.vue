@@ -3,7 +3,8 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <div :id="id" class="heatmap-container" :style="{ minHeight: `${args.height || 400}px` }"></div>
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
   </div>
 </template>
 
@@ -12,16 +13,18 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/gl2d'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionTool, selectionOverlay, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/component'
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 import { normalizeZoom } from '@/composables/useZoomState'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -91,6 +94,30 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 400) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      const tools: PlotTool[] = []
+      if (this.multiSelectEnabled) tools.push(clearSelectionTool(() => this.clearMultiSelect(), this.selectedCount))
+      tools.push(...this.measure.tools())
+      if (!this.isCategoricalMode) {
+        tools.push({
+          id: 'colorbar',
+          group: 'show',
+          icon: ICONS.colorbar,
+          label: 'Colorbar',
+          short: 'Colorbar',
+          active: this.effectiveColorbarVisible,
+          run: () => this.toggleColorbar(),
+        })
+      }
+      tools.push(this.downloadTool())
+      return tools
+    },
+
     id(): string {
       return `heatmap-${this.index}`
     },
@@ -523,7 +550,7 @@ export default defineComponent({
               borderwidth: 1,
             }
           : undefined,
-        height: this.args.height || 400,
+        height: this.plotHeight,
         dragmode: this.dragmode as Plotly.Layout['dragmode'],
         ...SELECTION_LAYOUT,
         shapes: [...this.selectedBoxShapes, ...this.measureOverlay.shapes],
@@ -747,24 +774,7 @@ export default defineComponent({
     },
 
     getHeatmapPlotConfig(): Partial<Plotly.Config> {
-      // Use base config from composable with additional colorbar toggle button
-      const colorbarToggleButton: Plotly.ModeBarButton = {
-        title: 'Toggle Colorbar',
-        name: 'toggleColorbar',
-        icon: {
-          width: 1792,
-          height: 1792,
-          path: 'M1408 768v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V768q0-40 28-68t68-28h832q40 0 68 28t28 68zm0-384v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V384q0-40 28-68t68-28h832q40 0 68 28t28 68zm0-384v192q0 40-28 68t-68 28H480q-40 0-68-28t-28-68V0q0-40 28-68t68-28h832q40 0 68 28t28 68z',
-          transform: 'matrix(1 0 0 -1 0 1792)',
-        },
-        click: () => {
-          this.toggleColorbar()
-        },
-      }
-      const buttons = [colorbarToggleButton]
-      if (this.multiSelectEnabled) buttons.push(clearSelectionButton(() => this.clearMultiSelect()))
-      buttons.push(...this.measure.modeBarButtons())
-      return this.getPlotConfig(buttons)
+      return this.getPlotConfig()
     },
 
     setupPlotEventHandlers() {

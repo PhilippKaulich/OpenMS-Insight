@@ -426,7 +426,7 @@ export interface MirrorPlotComponentArgs
   styling?: MirrorPlotStyling
   config?: Record<string, unknown>
   height?: number
-  /** Start with the zoom pinned (the pin button in the mode bar toggles it). */
+  /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
 }
 

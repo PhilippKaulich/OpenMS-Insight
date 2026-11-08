@@ -1,5 +1,8 @@
 <template>
-  <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
+  <div class="plot3d">
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
+  </div>
 </template>
 
 <script lang="ts">
@@ -10,7 +13,9 @@ import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import type { Plot3DComponentArgs } from '@/types/component'
 import { imageFormatOf } from '@/utils/imageExport'
-import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 // Floor the stems and trace starts drop to. Far below zero so the vertical
 // segment always reaches the bottom of the z range, which starts at 0.
@@ -30,6 +35,7 @@ interface SeriesPoints {
 
 export default defineComponent({
   name: 'Plotly3D',
+  components: { PlotToolbar },
   props: {
     args: {
       type: Object as PropType<Plot3DComponentArgs>,
@@ -51,6 +57,18 @@ export default defineComponent({
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      const height = this.args.height || 800
+      return [
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || this.title || 'plot3d',
+          width: height,
+          height,
+        }),
+      ]
+    },
     argsKey(): string {
       return JSON.stringify(this.args)
     },
@@ -223,7 +241,7 @@ export default defineComponent({
         title: { text: this.args.titleBold === false ? this.title : `<b>${this.title}</b>` },
         paper_bgcolor: this.theme?.backgroundColor,
         plot_bgcolor: this.theme?.secondaryBackgroundColor,
-        height: this.args.height || 800,
+        height: (this.args.height || 800) - TOOLBAR_HEIGHT,
         font: {
           color: this.theme?.textColor,
           family: this.theme?.font,
@@ -274,21 +292,10 @@ export default defineComponent({
     async renderPlot(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      const height = this.args.height || 800
       // react keeps the WebGL scene of the previous render; newPlot builds a new one
-      const exportButtons = {
-        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: [
-          plotlyDownloadButton({
-            format: () => imageFormatOf(this.args.imageFormat),
-            filename: () => this.args.svgFilename || this.title || 'plot3d',
-            width: height,
-            height,
-          }),
-        ],
-      }
       await Plotly.react(element, this.traces, this.layout, {
-        ...exportButtons,
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
+        displaylogo: false,
         responsive: true,
         // No "double-click to isolate" notice on a legend click
         showTips: false,

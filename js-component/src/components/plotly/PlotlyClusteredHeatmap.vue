@@ -2,7 +2,8 @@
   <div>
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <div :id="id" class="clustered-heatmap-container" :style="{ minHeight: `${args.height || 500}px` }"></div>
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <div :id="id" class="clustered-heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
   </div>
 </template>
 
@@ -11,7 +12,9 @@ import { defineComponent, computed, type PropType } from 'vue'
 import Plotly from '@/plotly/cartesian'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
-import { clearSelectionButton, SELECTION_ACCENT, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
+import { clearSelectionTool, SELECTION_ACCENT, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
+import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
 // The figure is laid out in pixels from the width the component gets, so
@@ -80,6 +83,7 @@ interface Geometry {
 
 export default defineComponent({
   name: 'PlotlyClusteredHeatmap',
+  components: { PlotToolbar },
   props: {
     args: {
       type: Object as PropType<ClusteredHeatmapComponentArgs>,
@@ -126,6 +130,18 @@ export default defineComponent({
     }
   },
   computed: {
+    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    plotHeight(): number {
+      return (this.args.height || 500) - TOOLBAR_HEIGHT
+    },
+
+    toolbarTools(): PlotTool[] {
+      return [
+        ...(this.multiSelectEnabled ? [clearSelectionTool(() => this.clearSelection(), this.selectedCount)] : []),
+        this.downloadTool(),
+      ]
+    },
+
     id(): string {
       return `clustered-heatmap-${this.index}`
     },
@@ -197,7 +213,7 @@ export default defineComponent({
 
     geometry(): Geometry {
       const width = Math.max(this.plotWidth, 280)
-      const height = this.args.height || 500
+      const height = this.plotHeight
       const font = this.fontFamily
       const nRows = Math.max(this.rowLabels.length, 1)
       const nCols = Math.max(this.colLabels.length, 1)
@@ -529,7 +545,7 @@ export default defineComponent({
             }
           : undefined,
         showlegend: false,
-        height: this.args.height || 500,
+        height: this.plotHeight,
         margin: g.margin,
         annotations,
         hoverlabel: { font: { family: this.fontFamily, size: FONT_SIZE + 1 } },
@@ -643,8 +659,7 @@ export default defineComponent({
      * layout level.
      */
     getHeatmapPlotConfig(): Partial<Plotly.Config> {
-      const buttons = this.multiSelectEnabled ? [clearSelectionButton(() => this.clearSelection())] : []
-      return { ...this.getPlotConfig(buttons), scrollZoom: false }
+      return { ...this.getPlotConfig(), scrollZoom: false }
     },
 
     async renderPlot(): Promise<void> {

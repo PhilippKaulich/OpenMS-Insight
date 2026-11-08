@@ -1,5 +1,5 @@
 /**
- * The "Label top peaks" button in Plotly's mode bar of LinePlot.
+ * The "Top peaks" switch in the plot toolbar of LinePlot.
  *
  * Switched on, the most intense peaks in the visible x range carry their x
  * value (the m/z of a spectrum) above the stick. The labels are placed again
@@ -14,15 +14,10 @@
 
 import { onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type Plotly from 'plotly.js-dist-min'
+import { ICONS, type PlotTool } from '@/utils/plotTools'
 
-/** Mode bar title of the button; also selects it for the active style. */
-const TOP_TITLE = 'Label top peaks: show the m/z of the most intense peaks in view'
 /** Class on the plot element while the labels are shown. */
 const ACTIVE_CLASS = 'top-peaks-labelled'
-
-// A number sign (Material Design "tag")
-const NUMBER_PATH =
-  'M20.5 10L21 8h-4l1-4h-2l-1 4h-4l1-4h-2L9 8H5l-.5 2h4l-1 4h-4L3 16h4l-1 4h2l1-4h4l-1 4h2l1-4h4l.5-2h-4l1-4h4zm-7 4h-4l1-4h4l-1 4z'
 
 const FONT_SIZE = 11
 /** Space kept free around each label, in pixels. */
@@ -31,21 +26,6 @@ const GAP_PX = 3
 const LIFT_PX = 2
 /** Peaks looked at per label before giving up (a crowded view stays cheap). */
 const CANDIDATES_PER_LABEL = 50
-
-let styleInstalled = false
-
-/** The highlighted button while the labels are shown (once per page). */
-function installStyle(): void {
-  if (styleInstalled || typeof document === 'undefined') return
-  styleInstalled = true
-  const style = document.createElement('style')
-  style.textContent =
-    `.${ACTIVE_CLASS} .modebar-btn[data-title="${TOP_TITLE}"] path` +
-    ' { fill: #ff4b4b !important; }' +
-    `.${ACTIVE_CLASS} .modebar-btn[data-title="${TOP_TITLE}"]` +
-    ' { opacity: 1 !important; }'
-  document.head.appendChild(style)
-}
 
 export interface TopPeakLabelInput {
   x: ArrayLike<number>
@@ -142,7 +122,6 @@ export function useTopPeakLabels(count: () => number, initial: () => boolean) {
   const on = ref(initial())
   let plotElement: HTMLElement | null = null
   let orderFor: { x: ArrayLike<number>; y: ArrayLike<number>; order: Uint32Array } | null = null
-  installStyle()
 
   function markActive(): void {
     plotElement?.classList.toggle(ACTIVE_CLASS, on.value && count() > 0)
@@ -175,17 +154,22 @@ export function useTopPeakLabels(count: () => number, initial: () => boolean) {
     return placeTopPeakLabels(input, orderFor.order, n)
   }
 
-  function modeBarButtons(): Plotly.ModeBarButton[] {
+  /** The "Top peaks" switch of the plot toolbar (none when `count` is 0). */
+  function tools(): PlotTool[] {
     if (count() <= 0) return []
     return [
       {
-        name: 'labelTopPeaks',
-        title: TOP_TITLE,
-        icon: { width: 24, height: 24, path: NUMBER_PATH },
-        click: () => toggle(),
+        id: 'top-peaks',
+        group: 'annotate',
+        icon: ICONS.number,
+        label: 'Label top peaks',
+        short: 'Top peaks',
+        help: 'show the m/z of the most intense peaks in view',
+        active: on.value,
+        run: toggle,
       },
-    ] as unknown as Plotly.ModeBarButton[]
+    ]
   }
 
-  return reactive({ on, toggle, bind, annotations, modeBarButtons })
+  return reactive({ on, toggle, bind, annotations, tools })
 }

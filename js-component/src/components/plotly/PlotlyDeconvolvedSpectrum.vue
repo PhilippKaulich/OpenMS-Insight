@@ -1,5 +1,6 @@
 <template>
   <div class="plot-wrapper" :style="cssCustomProperties">
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="plot-container"></div>
     <MeasureHint v-if="args.measure" :measure="measure" />
     <button v-if="showBackButton" class="back-button" title="Back to the deconvolved spectrum" @click="backButton">
@@ -42,7 +43,9 @@ import { MEASURE_CHARGES, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { readableTextOn } from '@/utils/appTheme'
 import { imageFormatOf } from '@/utils/imageExport'
-import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool } from '@/utils/plotlyDownload'
+import { TOOLBAR_HEIGHT, type PlotTool, type ToolIcon } from '@/utils/plotTools'
+import PlotToolbar from './PlotToolbar.vue'
 
 type Mode = 'deconvolved' | 'annotated' | 'ladder' | 'ladder-annotated'
 
@@ -149,10 +152,9 @@ const ISOTOPE_SPACING = 1.00235
 /** Envelope circles show once neighbouring isotopes are this many pixels apart. */
 const ENVELOPE_MIN_SPACING_PX = 8
 
-const TOGGLE_ANNOTATIONS_ICON = {
-  width: 1792,
-  height: 1792,
-  path: 'M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z',
+const TOGGLE_ANNOTATIONS_ICON: ToolIcon = {
+  viewBox: '0 0 1792 1792',
+  markup: '<path d="M1664 960q-152-236-381-353 61 104 61 225 0 185-131.5 316.5t-316.5 131.5-316.5-131.5-131.5-316.5q0-121 61-225-229 117-381 353 133 205 333.5 326.5t434.5 121.5 434.5-121.5 333.5-326.5zm-720-384q0-20-14-34t-34-14q-125 0-214.5 89.5t-89.5 214.5q0 20 14 34t34 14 34-14 14-34q0-86 61-147t147-61q20 0 34-14t14-34zm848 384q0 34-20 69-140 230-376.5 368.5t-499.5 138.5-499.5-139-376.5-368q-20-35-20-69t20-69q140-229 376.5-368t499.5-139 499.5 139 376.5 368q20 35 20 69z"/>',
 }
 /** Fragment-ion labels closer than this (pixels) to a more intense one are left out. */
 const FRAGMENT_LABEL_SPACING_PX = 14
@@ -163,22 +165,20 @@ const FRAGMENT_KIND_NAMES: Record<FragmentKind, string> = {
   I: 'Internal fragment ions',
 }
 // Square brackets: the ends of a sequence
-const TOGGLE_FRAGMENTS_ICON = {
-  width: 1000,
-  height: 1000,
-  path: 'M150 100h300v100H250v600h200v100H150z M550 100h300v800H550V800h200V200H550z',
+const TOGGLE_FRAGMENTS_ICON: ToolIcon = {
+  viewBox: '0 0 1000 1000',
+  markup: '<path d="M150 100h300v100H250v600h200v100H150z M550 100h300v800H550V800h200V200H550z"/>',
 }
-const TOGGLE_PEAKS_ICON = {
-  width: 1792,
-  height: 1792,
-  path: 'M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z',
+const TOGGLE_PEAKS_ICON: ToolIcon = {
+  viewBox: '0 0 1792 1792',
+  markup: '<path d="M448 1024h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm0-256h896v128h-896v-128zm-448 768h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128zm0-256h384v128h-384v-128z"/>',
 }
 
 let plotIdCounter = 0
 
 export default defineComponent({
   name: 'PlotlyDeconvolvedSpectrum',
-  components: { MeasureHint },
+  components: { MeasureHint, PlotToolbar },
   props: {
     args: {
       type: Object as PropType<DeconvolvedSpectrumComponentArgs>,
@@ -211,6 +211,57 @@ export default defineComponent({
     }
   },
   computed: {
+    toolbarTools(): PlotTool[] {
+      const tools: PlotTool[] = [
+        ...this.pinZoom.tools(),
+        ...this.measure.tools(this.measureTitle),
+        {
+          id: 'annotations',
+          group: 'show',
+          icon: TOGGLE_ANNOTATIONS_ICON,
+          label: 'Annotations',
+          short: 'Annotations',
+          active: this.annotationsVisible,
+          run: () => {
+            this.annotationsVisible = !this.annotationsVisible
+          },
+        },
+      ]
+      if (this.hasFragmentMatches) {
+        tools.push({
+          id: 'fragment-ions',
+          group: 'show',
+          icon: TOGGLE_FRAGMENTS_ICON,
+          label: 'Fragment ions',
+          short: 'Fragments',
+          active: this.fragmentIonsVisible,
+          run: () => {
+            this.fragmentIonsVisible = !this.fragmentIonsVisible
+          },
+        })
+      }
+      if (this.isMzMode) {
+        tools.push({
+          id: 'deconvolved-peaks',
+          group: 'show',
+          icon: TOGGLE_PEAKS_ICON,
+          label: 'Deconvolved peaks',
+          short: 'Deconvolved',
+          active: this.deconvolvedPeaksHighlightMode,
+          run: () => {
+            this.deconvolvedPeaksHighlightMode = !this.deconvolvedPeaksHighlightMode
+          },
+        })
+      }
+      tools.push(
+        downloadTool({
+          plotId: this.id,
+          format: () => imageFormatOf(this.args.imageFormat),
+          filename: () => this.args.svgFilename || 'spectrum',
+        }),
+      )
+      return tools
+    },
     id(): string {
       return this.uniqueId
     },
@@ -905,7 +956,7 @@ export default defineComponent({
       return {
         title: { text: `<b>${this.currentTitle}</b>` },
         showlegend: false,
-        height: this.args.height || 400,
+        height: (this.args.height || 400) - TOOLBAR_HEIGHT,
         xaxis: {
           title: { text: this.xAxisLabel },
           showgrid: false,
@@ -959,8 +1010,8 @@ export default defineComponent({
     },
     measureTitle(): string {
       return this.isMzMode
-        ? 'Measure: click two peaks for their m/z difference (Esc cancels)'
-        : 'Measure: click two masses for their difference (Esc cancels)'
+        ? 'click two peaks for their m/z difference (Esc cancels)'
+        : 'click two masses for their difference (Esc cancels)'
     },
     /** Identity of the plotted masses or peaks: others drop the measurements. */
     measureKey(): string {
@@ -1345,48 +1396,9 @@ export default defineComponent({
     async graph(): Promise<void> {
       const element = document.getElementById(this.id)
       if (!element) return
-      const modeBarButtons: Array<Record<string, unknown>> = [
-        {
-          title: this.annotationsVisible ? 'Hide Annotations' : 'Show Annotations',
-          name: 'toggleAnnotations',
-          icon: TOGGLE_ANNOTATIONS_ICON,
-          click: () => {
-            this.annotationsVisible = !this.annotationsVisible
-          },
-        },
-      ]
-      if (this.hasFragmentMatches) {
-        modeBarButtons.push({
-          title: this.fragmentIonsVisible ? 'Hide Fragment Ions' : 'Show Fragment Ions',
-          name: 'toggleFragmentIons',
-          icon: TOGGLE_FRAGMENTS_ICON,
-          click: () => {
-            this.fragmentIonsVisible = !this.fragmentIonsVisible
-          },
-        })
-      }
-      if (this.isMzMode) {
-        modeBarButtons.push({
-          title: this.deconvolvedPeaksHighlightMode ? 'Hide Deconvolved Peaks' : 'Show Deconvolved Peaks',
-          name: 'toggleDeconvolvedPeaks',
-          icon: TOGGLE_PEAKS_ICON,
-          click: () => {
-            this.deconvolvedPeaksHighlightMode = !this.deconvolvedPeaksHighlightMode
-          },
-        })
-      }
-      modeBarButtons.push(
-        plotlyDownloadButton({
-          format: () => imageFormatOf(this.args.imageFormat),
-          filename: () => this.args.svgFilename || 'spectrum',
-          icon: SPECTRUM_DOWNLOAD_ICON,
-        }) as unknown as Record<string, unknown>,
-      )
-      modeBarButtons.push(...(this.measure.modeBarButtons(this.measureTitle) as unknown as Array<Record<string, unknown>>))
-      modeBarButtons.push(...(this.pinZoom.modeBarButtons() as unknown as Array<Record<string, unknown>>))
       const plot = (await Plotly.newPlot(element, this.traces, this.layout, {
         modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
-        modeBarButtonsToAdd: modeBarButtons as unknown as Plotly.ModeBarButton[],
+        displaylogo: false,
         scrollZoom: true,
       })) as unknown as { on: (event: string, handler: (data: never) => void) => void }
       plot.on('plotly_relayout', (eventData: Record<string, unknown>) => this.onRelayout(eventData))
@@ -1404,7 +1416,7 @@ export default defineComponent({
         {
           title: { text: `<b>${this.currentTitle}</b>` },
           showlegend: false,
-          height: this.args.height || 400,
+          height: (this.args.height || 400) - TOOLBAR_HEIGHT,
           xaxis: { title: { text: this.xAxisLabel }, showgrid: false },
           yaxis: { title: { text: 'Intensity' }, showgrid: true, rangemode: 'nonnegative' },
           paper_bgcolor: this.theme?.backgroundColor,
@@ -1431,7 +1443,7 @@ export default defineComponent({
 
 .back-button {
   position: absolute;
-  top: 17%;
+  top: calc(var(--toolbar-height, 36px) + 14%);
   left: 6.5%;
   z-index: 1000;
   background-color: var(--annotation-background);

@@ -2,7 +2,7 @@
  * Your own text labels on peaks (`peak_labels` on the Python side). Used by
  * the spectrum views, LinePlot and MirrorPlot.
  *
- * The "Label peaks" button in Plotly's mode bar (`modeBarButtons()`) switches
+ * The "Label" button of the plot toolbar (`tools()`) switches
  * clicks from selecting to labelling; a second button removes every label of
  * the spectrum shown. In label mode a click on a peak opens a small text box
  * at the peak (PeakLabelEditor): Enter keeps the text, Esc closes the box.
@@ -21,6 +21,7 @@
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type Plotly from 'plotly.js-dist-min'
+import { ICONS, type PlotTool } from '@/utils/plotTools'
 
 /** Annotation names of peak labels start with this. */
 export const PEAK_LABEL_NAME_PREFIX = 'peak-label-'
@@ -57,32 +58,8 @@ const DEFAULT_GROUP = ''
 /** Longest label text kept. */
 export const MAX_LABEL_LENGTH = 80
 
-/** Mode bar titles; the first also styles the active state. */
-const LABEL_TITLE_PREFIX = 'Label peaks'
-const CLEAR_TITLE = 'Remove peak labels'
 /** Class on the plot element while label mode is on. */
 const ACTIVE_CLASS = 'peak-label-active'
-
-// A tag, and a tag crossed out (Material icons, 24 x 24)
-const TAG_PATH =
-  'M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z'
-const CLEAR_PATH =
-  'M21.41 11.58 12.41 2.58C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l1.3 1.3L2.1 15.5l1.4 1.4L20.5 3.9l-1.4-1.4-3.2 3.2zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7zm6.09 14.42c.36.36.86.58 1.41.58s1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42l-1.84-1.84-9.83 9.83z'
-
-let styleInstalled = false
-
-/** The highlighted "Label peaks" button while label mode is on (once per page). */
-function installStyle(): void {
-  if (styleInstalled || typeof document === 'undefined') return
-  styleInstalled = true
-  const style = document.createElement('style')
-  style.textContent =
-    `.${ACTIVE_CLASS} .modebar-btn[data-title^="${LABEL_TITLE_PREFIX}"] path` +
-    ' { fill: #ff4b4b !important; }' +
-    `.${ACTIVE_CLASS} .modebar-btn[data-title^="${LABEL_TITLE_PREFIX}"]` +
-    ' { opacity: 1 !important; }'
-  document.head.appendChild(style)
-}
 
 /** Text as kept: trimmed, one line, at most MAX_LABEL_LENGTH characters. */
 export function cleanLabelText(text: string): string {
@@ -105,7 +82,6 @@ export function usePeakLabels(enabled: () => boolean) {
   let nextId = 1
   /** The plot element last drawn, which carries the active class. */
   let plotElement: HTMLElement | null = null
-  installStyle()
 
   function markActive(): void {
     plotElement?.classList.toggle(ACTIVE_CLASS, mode.value && enabled())
@@ -283,26 +259,23 @@ export function usePeakLabels(enabled: () => boolean) {
     })
   }
 
-  /**
-   * The label toggle and the remove button for Plotly's mode bar (none when
-   * the tool is off). Mode bar buttons are left out of the image download.
-   */
-  function modeBarButtons(): Plotly.ModeBarButton[] {
+  /** The Label tool of the plot toolbar (none when the tool is off); its × removes the labels. */
+  function tools(): PlotTool[] {
     if (!enabled()) return []
     return [
       {
-        name: 'labelPeaks',
-        title: `${LABEL_TITLE_PREFIX}: click a peak to add your own label`,
-        icon: { width: 24, height: 24, path: TAG_PATH },
-        click: () => toggle(),
+        id: 'label-peaks',
+        group: 'annotate',
+        icon: ICONS.tag,
+        label: 'Label peaks',
+        short: 'Label',
+        help: 'click a peak to add your own label',
+        active: mode.value,
+        count: labels.value.length,
+        clear: { label: 'Remove peak labels', run: clear },
+        run: toggle,
       },
-      {
-        name: 'clearPeakLabels',
-        title: CLEAR_TITLE,
-        icon: { width: 24, height: 24, path: CLEAR_PATH },
-        click: () => clear(),
-      },
-    ] as unknown as Plotly.ModeBarButton[]
+    ]
   }
 
   return reactive({
@@ -321,7 +294,7 @@ export function usePeakLabels(enabled: () => boolean) {
     cancel,
     setDataKey,
     bindLabelClicks,
-    modeBarButtons,
+    tools,
     overlay,
   })
 }

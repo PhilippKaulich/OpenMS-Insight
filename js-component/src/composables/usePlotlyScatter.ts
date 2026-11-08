@@ -16,7 +16,8 @@ import { Streamlit, type Theme } from 'streamlit-component-lib'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 import { useSelectionStore } from '@/stores/selection'
 import { imageFormatOf } from '@/utils/imageExport'
-import { plotlyDownloadButton } from '@/utils/plotlyDownload'
+import { downloadTool as makeDownloadTool } from '@/utils/plotlyDownload'
+import type { PlotTool } from '@/utils/plotTools'
 
 export interface PlotlyScatterOptions {
   /** Unique ID for the plot container */
@@ -57,8 +58,10 @@ export interface PlotlyScatterReturn {
   setupResizeObserver: () => void
   /** Clean up resize observer - call in beforeUnmount() */
   cleanupResizeObserver: () => void
-  /** Get Plotly config with the image download and scroll zoom */
-  getPlotConfig: (additionalButtons?: Plotly.ModeBarButton[]) => Partial<Plotly.Config>
+  /** Plotly config with scroll zoom; the tools are in the plot's toolbar */
+  getPlotConfig: () => Partial<Plotly.Config>
+  /** The image download tool of the plot's toolbar */
+  downloadTool: () => PlotTool
   /** Set up click handler for interactivity - call after Plotly.newPlot() */
   setupClickHandler: () => void
   /** Update Streamlit frame height - call after render */
@@ -116,21 +119,21 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
     }
   }
 
-  function getPlotConfig(additionalButtons?: Plotly.ModeBarButton[]): Partial<Plotly.Config> {
-    const buttons: Plotly.ModeBarButton[] = [
-      plotlyDownloadButton({
-        format: () => imageFormatOf(imageFormat?.value),
-        filename: () => svgFilename?.value || title?.value || 'plot',
-      }),
-      ...(additionalButtons || []),
-    ]
-
+  function getPlotConfig(): Partial<Plotly.Config> {
     return {
       modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'] as Plotly.ModeBarDefaultButtons[],
-      modeBarButtonsToAdd: buttons,
       scrollZoom: scrollZoom?.value ?? true,
       responsive: true,
+      displaylogo: false,
     }
+  }
+
+  function downloadTool(): PlotTool {
+    return makeDownloadTool({
+      plotId: id.value,
+      format: () => imageFormatOf(imageFormat?.value),
+      filename: () => svgFilename?.value || title?.value || 'plot',
+    })
   }
 
   function setupClickHandler(): void {
@@ -211,6 +214,7 @@ export function usePlotlyScatter(options: PlotlyScatterOptions): PlotlyScatterRe
     setupResizeObserver,
     cleanupResizeObserver,
     getPlotConfig,
+    downloadTool,
     setupClickHandler,
     updateFrameHeight,
     selectionStore,
