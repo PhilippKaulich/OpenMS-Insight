@@ -207,6 +207,7 @@ import type {
 } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
 import { combineSelection } from '@/composables/useMultiSelect'
+import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
 
 // Global counter for unique table IDs
 let tableIdCounter = 0
@@ -307,6 +308,9 @@ export default defineComponent({
       // The row stays unhighlighted until the selection changes.
       unhighlightedSelection: null as Record<string, unknown> | null,
       rootResizeObserver: null as ResizeObserver | null,
+      /** Pixels the table grows by to end with the tallest column of its row. */
+      rowFillPixels: 0,
+      stopWatchingRow: null as (() => void) | null,
       // Pending data request for server-side pagination (deferred promise)
       pendingDataRequest: null as { resolve: (data: any) => void; reject: (err: any) => void } | null,
       // Track if we're waiting for server response
@@ -819,6 +823,11 @@ export default defineComponent({
       })
       this.rootResizeObserver.observe(this.$el as HTMLElement)
     }
+    // Beside taller columns, grow to the height of the row
+    if (this.args.fillRow !== false) {
+      publishRowFill(0)
+      this.stopWatchingRow = watchRow(() => this.updateRowFill())
+    }
   },
   beforeUnmount() {
     if (this.searchTimer) clearTimeout(this.searchTimer)
@@ -826,8 +835,74 @@ export default defineComponent({
     if (this.keyNavCheckTimer) clearTimeout(this.keyNavCheckTimer)
     this.cleanupTeleport()
     this.rootResizeObserver?.disconnect()
+    this.stopWatchingRow?.()
   },
   methods: {
+    /** Whether the table is as tall as its rows (up to its height) rather than of a fixed height. */
+    fitsRows(): boolean {
+      return this.args.pagination === false && !this.args.fillHeight
+    },
+
+    /** Height of the table (header, rows, footer) without the pixels it adds to fill its row. */
+    naturalTableHeight(): number {
+      const fixed = Math.max(this.tableMaxHeight(), this.args.pagination === false ? 50 : 150)
+      if (!this.fitsRows() || !this.tabulator) return fixed
+      const element = (this.tabulator as any).element as HTMLElement
+      const parts = ['.tabulator-header', '.tabulator-tableholder > .tabulator-table', '.tabulator-footer']
+      let content = 2 // borders
+      for (const selector of parts) {
+        content += (element.querySelector(selector) as HTMLElement | null)?.offsetHeight || 0
+      }
+      return Math.min(fixed, Math.max(50, content))
+    },
+
+    /** Grow (or shrink back) so the table's column ends with the tallest column of its row. */
+    updateRowFill(): void {
+      if (!this.tabulator || !this.isTableBuilt) return
+      // What the table adds now, measured: its rows may have changed since
+      const element = (this.tabulator as any).element as HTMLElement
+      const current = Math.max(0, element.offsetHeight - this.naturalTableHeight())
+      publishRowFill(current)
+      const extra = rowFillExtra()
+      if (Math.abs(extra - this.rowFillPixels) < 2) return
+      this.rowFillPixels = extra
+      publishRowFill(extra)
+      this.applyTableHeight()
+    },
+
+    /** Size the table to its own height plus the pixels it adds to fill its row. */
+    applyTableHeight(): void {
+      if (!this.tabulator) return
+      const tabulator = this.tabulator as any
+      const element = tabulator.element as HTMLElement
+      const fixed = Math.max(this.tableMaxHeight(), this.args.pagination === false ? 50 : 150)
+      const px = (value: number) => `${value}px`
+      if (this.fitsRows()) {
+        // As tall as its rows, but at least as tall as the row asks for
+        const least = this.rowFillPixels > 0 ? this.naturalTableHeight() + this.rowFillPixels : 50
+        tabulator.options.minHeight = px(least)
+        tabulator.options.maxHeight = px(Math.max(fixed, least))
+        element.style.minHeight = tabulator.options.minHeight
+        element.style.maxHeight = tabulator.options.maxHeight
+        tabulator.rowManager.adjustTableSize()
+      } else {
+        const height = fixed + this.rowFillPixels
+        if (this.args.fillHeight) {
+          tabulator.options.minHeight = px(height)
+          tabulator.options.maxHeight = px(height)
+          element.style.minHeight = px(height)
+          element.style.maxHeight = px(height)
+        } else if (tabulator.options.maxHeight) {
+          tabulator.options.maxHeight = px(Math.max(height, 150))
+          element.style.maxHeight = tabulator.options.maxHeight
+        }
+        this.tabulator.setHeight(height)
+        if (this.isServerSidePagination && this.args.height) {
+          Streamlit.setFrameHeight(this.args.height + this.rowFillPixels)
+        }
+      }
+    },
+
     /** Height left for the rows: the component's height less toolbar, go-to bar and filter chips. */
     tableMaxHeight(): number {
       const passedHeight = this.args.height
@@ -1132,8 +1207,11 @@ export default defineComponent({
         // Update Streamlit iframe height after table is rendered
         // Use specified height if provided, otherwise auto-calculate
         this.$nextTick(() => {
+          // A rebuilt table starts from its options: grow it to its row again
+          if (this.rowFillPixels > 0) this.applyTableHeight()
+          if (this.args.fillRow !== false) this.updateRowFill()
           if (this.args.height && this.isServerSidePagination) {
-            Streamlit.setFrameHeight(this.args.height)
+            Streamlit.setFrameHeight(this.args.height + this.rowFillPixels)
           } else if (!this.isServerSidePagination) {
             // The table's own height: while Tabulator lays out new rows, the
             // document is briefly taller than the table
@@ -2264,8 +2342,9 @@ export default defineComponent({
 
         // Update Streamlit frame height - use specified height if provided
         this.$nextTick(() => {
+          if (this.args.fillRow !== false) this.updateRowFill()
           if (this.args.height && this.isServerSidePagination) {
-            Streamlit.setFrameHeight(this.args.height)
+            Streamlit.setFrameHeight(this.args.height + this.rowFillPixels)
           } else if (!this.isServerSidePagination) {
             // The table's own height: while Tabulator lays out new rows, the
             // document is briefly taller than the table

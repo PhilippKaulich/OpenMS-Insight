@@ -79,6 +79,7 @@ _VUE_OPTION_KEYS = (
     "search_placeholder",
     "numeric_filters",
     "fill_height",
+    "fill_row",
     "row_overview",
     "multi_select",
 )
@@ -156,6 +157,7 @@ class Table(BaseComponent):
         reset_sort: bool = False,
         reset_sort_on: list[str] | None = None,
         fill_height: bool = False,
+        fill_row: bool = True,
         row_overview: bool | str = False,
         multi_select: dict[str, str] | None = None,
         search: bool | list[str] = False,
@@ -264,6 +266,11 @@ class Table(BaseComponent):
             fill_height: Without pagination, keep the table at the height it is
                 rendered with instead of shrinking it to its rows, so tables
                 rendered side by side with one height line up.
+            fill_row: In a row of ``st.columns``, grow the table so its column
+                ends where the tallest column of the row ends, instead of
+                leaving empty space below it (default). The table never gets
+                shorter than its own height; columns stacked on a narrow
+                screen are not filled. False keeps the table at its own height.
             multi_select: Mapping of identifier names to column names for
                 selecting several rows at once with a check box column (Shift
                 selects a range; the header box selects or unselects every row
@@ -317,6 +324,7 @@ class Table(BaseComponent):
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
+        self._fill_row = bool(fill_row)
         self._row_overview = (
             row_overview
             if isinstance(row_overview, str) and row_overview
@@ -377,6 +385,7 @@ class Table(BaseComponent):
             reset_sort=reset_sort,
             reset_sort_on=reset_sort_on,
             fill_height=fill_height,
+            fill_row=fill_row,
             row_overview=row_overview,
             multi_select=multi_select,
             search=search,
@@ -477,6 +486,7 @@ class Table(BaseComponent):
             **({"reset_sort": True} if self._reset_sort else {}),
             **({"reset_sort_on": self._reset_sort_on} if self._reset_sort_on else {}),
             **({"fill_height": True} if self._fill_height else {}),
+            **({"fill_row": False} if not self._fill_row else {}),
             **({"row_overview": self._row_overview} if self._row_overview else {}),
             **({"multi_select": self._multi_select} if self._multi_select else {}),
             **({"search": self._search} if self._search else {}),
@@ -519,6 +529,7 @@ class Table(BaseComponent):
         self._search_placeholder = config.get("search_placeholder")
         self._numeric_filters = config.get("numeric_filters") or {}
         self._fill_height = config.get("fill_height", False)
+        self._fill_row = config.get("fill_row", True)
         self._row_overview = config.get("row_overview", False)
         self._multi_select = dict(config.get("multi_select") or {})
         # These are passed on to Vue explicitly; keep them out of the extra options
@@ -1682,6 +1693,8 @@ class Table(BaseComponent):
             args["resetSortOn"] = self._reset_sort_on
         if self._fill_height:
             args["fillHeight"] = True
+        if not self._fill_row:
+            args["fillRow"] = False
         if self._row_overview:
             args["rowOverview"] = True
             if isinstance(self._row_overview, str):

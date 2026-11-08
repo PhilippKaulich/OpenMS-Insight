@@ -1,4 +1,4 @@
-"""Table `fill_height`: a table keeps the height it is rendered with."""
+"""Table height: `fill_height` keeps the height it is rendered with; `fill_row` grows to its row."""
 
 from __future__ import annotations
 
@@ -33,3 +33,21 @@ def test_reaches_args_and_survives_reload(mock_streamlit, temp_cache_dir):
 
     assert args["fillHeight"] is True
     assert "fill_height" not in args
+
+
+def test_fills_its_row_by_default(mock_streamlit, temp_cache_dir):
+    args = _table(temp_cache_dir, "row")._get_component_args()
+
+    # The table grows to the height of its row unless told otherwise
+    assert "fillRow" not in args
+    assert "fill_row" not in args
+
+
+def test_row_fill_can_be_turned_off_and_survives_reload(mock_streamlit, temp_cache_dir):
+    _table(temp_cache_dir, "own-height", fill_row=False)
+
+    reloaded = Table(cache_id="own-height", cache_path=str(temp_cache_dir))
+    args = reloaded._get_component_args()
+
+    assert args["fillRow"] is False
+    assert "fill_row" not in args
