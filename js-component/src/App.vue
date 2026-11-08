@@ -95,8 +95,12 @@ export default defineComponent({
 
     const sendStateToStreamlit = () => {
       // Before its first render the view holds nothing Python does not know,
-      // and each value sent would cost the page a rerun
-      if (streamlitDataStore.renderData === null) return
+      // and each value sent would cost the page a rerun. A request for data is
+      // the exception: a view whose first data never arrived (its message was
+      // dropped when a rerun started) has not rendered, and without the request
+      // Python would keep sending only the hash and the view would stay on
+      // "Loading..."
+      if (streamlitDataStore.renderData === null && !streamlitDataStore.requestData) return
       const currentCounter = selectionStore.$state.counter
       const currentHash = streamlitDataStore.hash || null
       const currentAnnotations = streamlitDataStore.annotations
