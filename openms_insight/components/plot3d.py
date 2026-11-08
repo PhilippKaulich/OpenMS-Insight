@@ -30,6 +30,10 @@ class Plot3D(BaseComponent):
 
     Points are coloured and listed in the legend by ``series_column``.
 
+    ``highlight`` draws the points whose column holds the selected value of an
+    identifier in a colour and legend entry of their own, e.g. the peaks of the
+    spectrum selected in another component among the peaks of a whole run.
+
     Example:
         signals = Plot3D(
             cache_id="mass_signals",
@@ -70,6 +74,9 @@ class Plot3D(BaseComponent):
         series_colors: dict[str, str] | None = None,
         color: str = "#3366CC",
         trace_column: str | None = None,
+        highlight: dict[str, str] | None = None,
+        highlight_name: str = "Selected",
+        highlight_color: str = "#ff7501",
         title: str | None = None,
         selection_titles: dict[str, str] | None = None,
         x_label: str | None = None,
@@ -77,6 +84,8 @@ class Plot3D(BaseComponent):
         z_label: str | None = None,
         y_dtick: float | None = None,
         camera_eye: dict[str, float] | None = None,
+        aspect_ratio: dict[str, float] | None = None,
+        camera_center: dict[str, float] | None = None,
         show_legend: bool = True,
         svg_filename: str | None = None,
         title_bold: bool = True,
@@ -111,12 +120,24 @@ class Plot3D(BaseComponent):
             color: Colour for series without an entry in series_colors.
             trace_column: In 'lines' mode, column separating the polylines within
                 a series. Without it each series is one polyline.
+            highlight: Mapping of identifier names to column names. Points whose
+                column holds the selected value of the identifier are drawn on
+                top in ``highlight_color`` as a legend entry of their own; the
+                selection is not a filter, the other points stay.
+            highlight_name: Legend name of the highlighted points.
+            highlight_color: Colour of the highlighted points.
             title: Plot title.
             selection_titles: Title to use while an identifier has a selection,
                 checked in order, e.g. {'mass': 'Mass signals'}.
             x_label, y_label, z_label: Axis titles (default: column names).
             y_dtick: Tick spacing on the y axis (e.g. 1 for charge states).
             camera_eye: Initial camera position, e.g. {'x': 2.5, 'y': 0, 'z': 0.2}.
+            aspect_ratio: Relative lengths of the axes of the 3D box, e.g.
+                {'x': 2, 'y': 1, 'z': 0.6} for a box wider than deep, which
+                fills a wide cell. None (default) lets Plotly choose.
+            camera_center: Point the camera looks at, in the box's own
+                coordinates (default the middle, {'x': 0, 'y': 0, 'z': 0}); a
+                negative z moves the box up in the view.
             show_legend: Show the legend.
             svg_filename: File name (without extension) of the image download
                 (default: title); the extension follows the image format.
@@ -143,6 +164,9 @@ class Plot3D(BaseComponent):
         self._series_colors = series_colors or {}
         self._color = color
         self._trace_column = trace_column
+        self._highlight = dict(highlight or {})
+        self._highlight_name = highlight_name
+        self._highlight_color = highlight_color
         self._title = title
         self._selection_titles = selection_titles or {}
         self._x_label = x_label or x_column
@@ -150,6 +174,8 @@ class Plot3D(BaseComponent):
         self._z_label = z_label or z_column
         self._y_dtick = y_dtick
         self._camera_eye = camera_eye
+        self._aspect_ratio = aspect_ratio
+        self._camera_center = camera_center
         self._show_legend = show_legend
         self._svg_filename = svg_filename
         if export_format not in ("svg", "png"):
@@ -182,6 +208,9 @@ class Plot3D(BaseComponent):
             series_colors=series_colors,
             color=color,
             trace_column=trace_column,
+            highlight=highlight,
+            highlight_name=highlight_name,
+            highlight_color=highlight_color,
             title=title,
             selection_titles=selection_titles,
             x_label=x_label,
@@ -189,6 +218,8 @@ class Plot3D(BaseComponent):
             z_label=z_label,
             y_dtick=y_dtick,
             camera_eye=camera_eye,
+            aspect_ratio=aspect_ratio,
+            camera_center=camera_center,
             show_legend=show_legend,
             svg_filename=svg_filename,
             title_bold=title_bold,
@@ -216,10 +247,21 @@ class Plot3D(BaseComponent):
             "z_label": self._z_label,
             "y_dtick": self._y_dtick,
             "camera_eye": self._camera_eye,
+            **({"aspect_ratio": self._aspect_ratio} if self._aspect_ratio else {}),
+            **({"camera_center": self._camera_center} if self._camera_center else {}),
             "show_legend": self._show_legend,
             "svg_filename": self._svg_filename,
             # Only when set, so caches built without them keep their hash
             **({"title_bold": False} if not self._title_bold else {}),
+            **(
+                {
+                    "highlight": self._highlight,
+                    "highlight_name": self._highlight_name,
+                    "highlight_color": self._highlight_color,
+                }
+                if self._highlight
+                else {}
+            ),
             **({"border": False} if not self._border else {}),
             **(
                 {"export_format": self._export_format}
@@ -239,6 +281,9 @@ class Plot3D(BaseComponent):
         self._series_colors = config.get("series_colors") or {}
         self._color = config.get("color", "#3366CC")
         self._trace_column = config.get("trace_column")
+        self._highlight = dict(config.get("highlight") or {})
+        self._highlight_name = config.get("highlight_name", "Selected")
+        self._highlight_color = config.get("highlight_color", "#ff7501")
         self._title = config.get("title")
         self._selection_titles = config.get("selection_titles") or {}
         self._x_label = config.get("x_label", self._x_column)
@@ -246,6 +291,8 @@ class Plot3D(BaseComponent):
         self._z_label = config.get("z_label", self._z_column)
         self._y_dtick = config.get("y_dtick")
         self._camera_eye = config.get("camera_eye")
+        self._aspect_ratio = config.get("aspect_ratio")
+        self._camera_center = config.get("camera_center")
         self._show_legend = config.get("show_legend", True)
         self._svg_filename = config.get("svg_filename")
         self._title_bold = config.get("title_bold", True)
@@ -261,11 +308,19 @@ class Plot3D(BaseComponent):
             ("z_column", self._z_column),
             ("series_column", self._series_column),
             ("trace_column", self._trace_column),
+            *(("highlight", column) for column in self._highlight.values()),
         ):
             if column is not None and column not in columns:
                 raise ValueError(
                     f"{name} '{column}' not found in data. Available columns: {columns}"
                 )
+
+    def get_state_dependencies(self) -> list[str]:
+        deps = list(self._filters.keys()) if self._filters else []
+        for identifier in self._highlight:
+            if identifier not in deps:
+                deps.append(identifier)
+        return deps
 
     def _preprocess(self) -> None:
         data = self._raw_data
@@ -287,6 +342,7 @@ class Plot3D(BaseComponent):
             self._series_column,
             self._trace_column,
             *(self._filters or {}).values(),
+            *self._highlight.values(),
         ]:
             if column is not None and column not in columns:
                 columns.append(column)
@@ -316,7 +372,32 @@ class Plot3D(BaseComponent):
                     if c in list_columns
                 }
             )
-        return {"plotData": df_pandas, "_hash": data_hash}
+        if not self._highlight:
+            return {"plotData": df_pandas, "_hash": data_hash}
+        # Split off the highlighted points; they are drawn as a trace of their own
+        mask = None
+        selected = []
+        for identifier, column in self._highlight.items():
+            value = state.get(identifier)
+            if value is None:
+                continue
+            selected.append((identifier, value))
+            match = df_pandas[column] == value
+            mask = match if mask is None else (mask | match)
+        if mask is None or len(df_pandas) == 0:
+            highlighted = df_pandas.iloc[0:0]
+        else:
+            highlighted = df_pandas[mask]
+            df_pandas = df_pandas[~mask]
+        return {
+            "plotData": df_pandas.reset_index(drop=True),
+            "highlightData": {
+                "x": highlighted[self._x_column].astype("float64").tolist(),
+                "y": highlighted[self._y_column].astype("float64").tolist(),
+                "z": highlighted[self._z_column].astype("float64").tolist(),
+            },
+            "_hash": f"{data_hash}:{selected!r}",
+        }
 
     def _list_columns(self) -> list[str]:
         """Columns of the cached data that hold lists of points."""
@@ -353,8 +434,14 @@ class Plot3D(BaseComponent):
             "zLabel": self._z_label,
             "yDtick": self._y_dtick,
             "cameraEye": self._camera_eye,
+            **({"aspectRatio": self._aspect_ratio} if self._aspect_ratio else {}),
+            **({"cameraCenter": self._camera_center} if self._camera_center else {}),
             "showLegend": self._show_legend,
         }
+        if self._highlight:
+            args["highlight"] = self._highlight
+            args["highlightName"] = self._highlight_name
+            args["highlightColor"] = self._highlight_color
         if self._svg_filename:
             args["svgFilename"] = self._svg_filename
         if not self._title_bold:

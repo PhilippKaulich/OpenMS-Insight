@@ -475,6 +475,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
   seriesColors?: Record<string, string>
   color: string
   traceColumn?: string | null
+  /** identifier -> column; points of the selected value are drawn apart */
+  highlight?: Record<string, string>
+  highlightName?: string
+  highlightColor?: string
   title: string
   /** [identifier, title] pairs: first identifier with a selection sets the title */
   selectionTitles?: Array<[string, string]>
@@ -483,6 +487,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
   zLabel: string
   yDtick?: number | null
   cameraEye?: { x: number; y: number; z: number } | null
+  /** Relative axis lengths of the 3D box */
+  aspectRatio?: { x: number; y: number; z: number } | null
+  /** Point the camera looks at */
+  cameraCenter?: { x: number; y: number; z: number } | null
   showLegend?: boolean
   svgFilename?: string
   height?: number
