@@ -243,6 +243,32 @@
                   </div>
                   <!-- TODO: add "required" -->
                 </v-list-item>
+                <v-list-item v-if="isotopeErrorsEnabled && !usesAnnotator">
+                  <v-list-item-title>Isotope errors</v-list-item-title>
+                  <v-switch
+                    v-model="isotopeMatching"
+                    color="primary"
+                    density="compact"
+                    hide-details
+                    label="Match isotope errors"
+                    :disabled="!showFragments"
+                  ></v-switch>
+                  <v-text-field
+                    v-if="isotopeMatching"
+                    style="min-width: 0"
+                    :model-value="isotopeErrors"
+                    type="number"
+                    step="1"
+                    min="1"
+                    max="5"
+                    hide-details="auto"
+                    label="up to ± isotopes"
+                    :hint="`Also match masses off by whole isotopes (± n × ${isotopeSpacing} Da)`"
+                    persistent-hint
+                    :disabled="!showFragments"
+                    @change="updateIsotopeErrors"
+                  ></v-text-field>
+                </v-list-item>
               </v-list>
             </v-card>
           </v-menu>
@@ -366,7 +392,7 @@
         <FragmentTable
           :key="usesAnnotator ? 'annotator' : 'matched'"
           :table-data="fragmentTableData"
-          :column-definitions="usesAnnotator ? annotatorTableColumnDefinitions : fragmentTableColumnDefinitions"
+          :column-definitions="usesAnnotator ? annotatorTableColumnDefinitions : fragmentColumns"
           :index="index"
           :selected-row-index-from-listening="selectedFragTableRowIndex"
           :go-to-fields="['Name']"
@@ -514,6 +540,10 @@ import {
   hydrogenShiftExpected,
   methodForIons,
   methodIons,
+  formatIsotopeOffset,
+  isotopeOffsets,
+  matchIsotopeOffset,
+  ISOTOPE_SPACING,
   toleranceDa,
   toleranceUnit,
   type IonSeries,
@@ -625,6 +655,11 @@ export default defineComponent({
       }[],
       fragmentMassTolerance: 10 as number,
       toleranceUnit: 'ppm' as ToleranceUnit,
+      // Isotope errors tried in matching while isotopeMatching is on
+      isotopeErrors: 1 as number,
+      // The settings switch: match isotope errors at all
+      isotopeMatching: false,
+      isotopeSpacing: ISOTOPE_SPACING,
       visibilityOptions: [
         { text: 'Fragments', selected: true },
         { text: 'Modifications', selected: true },
@@ -778,6 +813,32 @@ export default defineComponent({
     },
     settings(): FragmentSettings | undefined {
       return this.args.settings ?? undefined
+    },
+    // isotope_errors given: show the setting, the Isotope column and the
+    // precursor's ppm and isotope reading
+    isotopeErrorsEnabled(): boolean {
+      return typeof this.args.isotopeErrors === 'number'
+    },
+    // Isotope errors matching uses: 0 while the switch is off
+    activeIsotopeErrors(): number {
+      return this.isotopeErrorsEnabled && this.isotopeMatching ? this.isotopeErrors : 0
+    },
+    fragmentColumns(): ColumnDefinition[] {
+      const columns = this.fragmentTableColumnDefinitions
+      if (this.activeIsotopeErrors === 0) return columns
+      const at = columns.findIndex((column) => column.field === 'ObservedMass') + 1
+      return [
+        ...columns.slice(0, at),
+        {
+          title: 'Isotope', field: 'Isotope', sorter: 'number',
+          formatter: (cell: { getValue: () => unknown }) => {
+            const value = cell.getValue()
+            return typeof value === 'number' ? formatIsotopeOffset(value) : ''
+          },
+          headerTooltip: `Whole isotopes the observed mass is off from the theoretical one (× ${ISOTOPE_SPACING} Da); the mass differences are to the theoretical mass shifted by them.`,
+        } as unknown as ColumnDefinition,
+        ...columns.slice(at),
+      ]
     },
     selectedTagKey(): string {
       return JSON.stringify(this.selectedTag ?? null)
@@ -1116,6 +1177,12 @@ export default defineComponent({
     toleranceUnit() {
       this.recomputeFragments()
     },
+    activeIsotopeErrors() {
+      this.recomputeFragments()
+    },
+    'args.isotopeErrors'(value) {
+      this.applyIsotopeErrorsArg(value)
+    },
     // Radical / hydrogen-shifted series toggles. deep required (nested .selected).
     ionTypeVariants: {
       handler() {
@@ -1168,6 +1235,9 @@ export default defineComponent({
     this.setSelectedAA(undefined)
     this.syncStoreFromEntry()
     this.updateSettings()
+    if (typeof this.args.isotopeErrors === 'number') {
+      this.applyIsotopeErrorsArg(this.args.isotopeErrors)
+    }
     this.recomputeFragments()
     // The view grows and shrinks with the sequence and the fragment table:
     // keep the frame fitted to it
@@ -1204,6 +1274,39 @@ export default defineComponent({
       if (Number.isFinite(value) && value >= 0) {
         this.fragmentMassTolerance = value
       }
+    },
+    updateIsotopeErrors(event: Event) {
+      const value = Number.parseInt((event.target as any).value as string, 10)
+      if (Number.isFinite(value) && value >= 1) {
+        this.isotopeErrors = Math.min(value, 5)
+      }
+    },
+    // isotope_errors n: the switch starts on for n > 0 (off for 0), the
+    // field at n (1 while off)
+    applyIsotopeErrorsArg(value: unknown) {
+      const n = typeof value === 'number' ? Math.max(0, Math.floor(value)) : 0
+      this.isotopeMatching = n > 0
+      this.isotopeErrors = Math.min(Math.max(n, 1), 5)
+    },
+    // Δ in ppm and the isotope reading of a precursor (or entry) mass
+    precursorIsotopeRows(theoretical: number, observed: number): SummaryItem[] {
+      if (!this.isotopeErrorsEnabled || !(theoretical > 0) || !(observed > 0)) return []
+      const delta = observed - theoretical
+      const rows: SummaryItem[] = [
+        { label: 'Δ Mass (ppm)', value: ((delta / theoretical) * 1e6).toFixed(1) },
+      ]
+      const k = matchIsotopeOffset(
+        observed, theoretical, isotopeOffsets(this.activeIsotopeErrors),
+        this.fragmentMassTolerance, this.toleranceUnit
+      )
+      let reading = this.activeIsotopeErrors > 0 ? `none within ±${this.activeIsotopeErrors}` : 'not checked'
+      if (k === 0) reading = '0'
+      else if (k !== undefined) {
+        const shifted = theoretical + k * ISOTOPE_SPACING
+        reading = `${formatIsotopeOffset(k)} (then ${(((observed - shifted) / shifted) * 1e6).toFixed(1)} ppm)`
+      }
+      rows.push({ label: 'Isotope error', value: reading })
+      return rows
     },
     // Select exactly these ion series (base types and variants)
     selectIons(names: string[]) {
@@ -1283,6 +1386,7 @@ export default defineComponent({
           { label: this.isEdited ? 'Theoretical mass' : 'Theoretical protein mass', value: theoretical.toFixed(2) },
           { label: this.args.observedMassLabel ?? 'Observed mass', value: observed_mass },
           { label: 'Δ Mass (Da)', value: delta_mass },
+          ...this.precursorIsotopeRows(theoretical, this.entryObservedMass),
         ]
         if (this.spectrumFragmentation) {
           this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
@@ -1325,6 +1429,7 @@ export default defineComponent({
         { label: 'Theoretical mass', value: theoreticalMass.toFixed(2) },
         { label: 'Observed mass', value: observedMass.toFixed(2) },
         { label: 'Δ Mass (Da)', value: deltaMassDa.toFixed(2) },
+        ...this.precursorIsotopeRows(theoreticalMass, observedMass),
       ]
       if (this.spectrumFragmentation) {
         this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
@@ -1358,6 +1463,7 @@ export default defineComponent({
       const observed_masses: number[] = toRaw(this.spectrum.masses ?? [])
       const tolerance = this.fragmentMassTolerance
       const unit = this.toleranceUnit
+      const offsets = isotopeOffsets(this.activeIsotopeErrors)
       const extraFragments = Object.entries(extraFragmentTypeObject)
         .filter(
           ([extraFragmentType]) =>
@@ -1419,12 +1525,15 @@ export default defineComponent({
               extraFragments.forEach(({ typeName, typeMass }) => {
                 // Mass difference = (observed-theoretical)/theoretical*1e6
                 const thisTypeMass = theoretical_mass + series.offset + typeMass
-                const massDiffDa = observed_masses[obsIndex] - thisTypeMass
-                const massDiffPpm = (massDiffDa / thisTypeMass) * 1e6
-                if (Math.abs(massDiffDa) > toleranceDa(thisTypeMass, tolerance, unit)) {
-                  // if mass difference is larger than tolerance, ignore
-                  return
-                }
+                // The smallest isotope offset (0 without isotope errors) that
+                // brings the masses within the tolerance
+                const isotope = matchIsotopeOffset(
+                  observed_masses[obsIndex], thisTypeMass, offsets, tolerance, unit
+                )
+                if (isotope === undefined) return
+                const shiftedMass = thisTypeMass + isotope * ISOTOPE_SPACING
+                const massDiffDa = observed_masses[obsIndex] - shiftedMass
+                const massDiffPpm = (massDiffDa / shiftedMass) * 1e6
 
                 const matched = {
                   Name: `${series.name}${theoIndex + 1}`,
@@ -1435,7 +1544,9 @@ export default defineComponent({
                   MassDiffDa: massDiffDa.toFixed(3),
                   MassDiffPpm: massDiffPpm.toFixed(3),
                 }
-                matching_fragments.push(matched)
+                matching_fragments.push(
+                  this.isotopeErrorsEnabled ? { ...matched, Isotope: isotope } : matched
+                )
                 matchedIons.push({
                   name: matched.Name,
                   ion: matched.IonType,

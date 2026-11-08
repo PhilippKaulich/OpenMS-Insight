@@ -110,6 +110,44 @@ export function settingsIons(
   return series
 }
 
+// Spacing of adjacent isotope peaks of a protein-sized mass (averagine).
+// Deconvolution can place a monoisotopic mass whole isotopes off; such a mass
+// is read as the theoretical one plus k times this spacing.
+export const ISOTOPE_SPACING = 1.00235
+
+// Isotope offsets to try for at most `maxErrors` isotope errors, smallest
+// first: 0, +1, -1, +2, -2, ...
+export function isotopeOffsets(maxErrors: number): number[] {
+  const n = Math.max(0, Math.floor(maxErrors || 0))
+  const offsets = [0]
+  for (let k = 1; k <= n; ++k) offsets.push(k, -k)
+  return offsets
+}
+
+// The isotope offset k at which `observed` matches `theoretical` + k ×
+// ISOTOPE_SPACING within the tolerance, trying `offsets` in order; undefined
+// when none does
+export function matchIsotopeOffset(
+  observed: number,
+  theoretical: number,
+  offsets: number[],
+  tolerance: number,
+  unit: ToleranceUnit
+): number | undefined {
+  for (const k of offsets) {
+    const shifted = theoretical + k * ISOTOPE_SPACING
+    if (Math.abs(observed - shifted) <= toleranceDa(shifted, tolerance, unit)) return k
+  }
+  return undefined
+}
+
+// "+1", "−2" or "0" for an isotope offset
+export function formatIsotopeOffset(k: number): string {
+  if (k > 0) return `+${k}`
+  if (k < 0) return `−${-k}`
+  return '0'
+}
+
 // Whether the selected series come from electron-based or photo fragmentation
 // (ETD/ECD, EThcD, UVPD): c or z ions, or a radical / hydrogen-shifted series.
 // A hydrogen moving between the fragments (proton loss/addition) happens

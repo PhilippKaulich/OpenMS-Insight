@@ -264,6 +264,7 @@ class ProteinSequenceView(BaseComponent):
         modifications: list[str] | None = None,
         proforma_copy: bool = False,
         proforma_input: bool = False,
+        isotope_errors: int | None = None,
         method_ion_options: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
@@ -332,13 +333,6 @@ class ProteinSequenceView(BaseComponent):
                 sequence. Needs ``modification_library``.
             modifications: Ids preselected in the picker, e.g. the fixed
                 modifications the current sequence carries.
-            method_ion_options: Offer the proton loss/addition option (±H on
-                every fragment) only while the selected ion series come from
-                electron-based or photo fragmentation: c or z ions, or a
-                radical / hydrogen-shifted series (ETD/ECD, EThcD, UVPD). With
-                collisional b/y (and a/x) ions alone, a hydrogen does not move
-                between the fragments, so the option is hidden and off.
-                Default False: always offered.
             variable_modification_library: Variable modifications the menu of
                 a residue (right click) offers instead of the built-in six, in
                 the form of ``modification_library`` (``'pyopenms'`` included);
@@ -375,6 +369,14 @@ class ProteinSequenceView(BaseComponent):
                 looked up in ``modification_library``), terminal and residue
                 modifications by name (looked up in the libraries) or mass,
                 which become the residues' variable modifications.
+            isotope_errors: Also match fragment masses that are off by up to
+                this many whole isotopes (± n × 1.00235 Da), as deconvolution
+                can place a monoisotopic mass. Shows a "Match isotope errors"
+                switch in the view's menu, on for n > 0 (off for 0), with the
+                number of isotopes starting at n; while it is on, the fragment
+                table has an Isotope column. The precursor's Δ in ppm and its
+                isotope reading are shown either way. None (default): no
+                setting, exact matches only.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -434,6 +436,7 @@ class ProteinSequenceView(BaseComponent):
         # Per render, not cached
         self._proforma_copy = bool(proforma_copy)
         self._proforma_input = bool(proforma_input)
+        self.set_isotope_errors(isotope_errors)
         self._method_ion_options = bool(method_ion_options)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
@@ -746,14 +749,24 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_input = bool(enabled)
         return self
 
-    def set_method_ion_options(self, enabled: bool = True) -> "ProteinSequenceView":
-        """Offer proton loss/addition only for electron or photo fragmentation.
+    def set_isotope_errors(self, max_errors: int | None = 1) -> "ProteinSequenceView":
+        """Match fragments up to ``max_errors`` isotopes off (None: off).
 
-        Not cached. See ``method_ion_options`` in the constructor.
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``isotope_errors`` in the constructor.
 
         Returns:
             Self for method chaining.
         """
+        if max_errors is not None:
+            if isinstance(max_errors, bool) or not isinstance(max_errors, int):
+                raise TypeError("isotope_errors must be an int or None")
+            if not 0 <= max_errors <= 5:
+                raise ValueError("isotope_errors must be between 0 and 5")
+        self._isotope_errors = max_errors
+        return self
+
+    def set_method_ion_options(self, enabled: bool = True) -> "ProteinSequenceView":
         self._method_ion_options = bool(enabled)
         return self
 
@@ -770,6 +783,7 @@ class ProteinSequenceView(BaseComponent):
             "modifications": self._modifications,
             "proformaCopy": self._proforma_copy,
             "proformaInput": self._proforma_input,
+            "isotopeErrors": self._isotope_errors,
             "methodIonOptions": self._method_ion_options,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
