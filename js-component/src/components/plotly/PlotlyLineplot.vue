@@ -4,6 +4,11 @@
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
     <div :id="id" class="plot-container" :style="cssCustomProperties"></div>
+    <PeakHoverTip
+      :tip="hover.tip"
+      :color="theme?.textColor || '#262730'"
+      :background="theme?.backgroundColor || 'white'"
+    />
   </div>
 </template>
 
@@ -22,6 +27,8 @@ import { MEASURE_CHARGES, axisQuantity, isMzLabel, pointsKey } from '@/utils/mea
 import MeasureHint from './MeasureHint.vue'
 import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
+import PeakHoverTip from './PeakHoverTip.vue'
+import { usePeakHover } from '@/composables/usePeakHover'
 import { imageFormatOf } from '@/utils/imageExport'
 import { SPECTRUM_DOWNLOAD_ICON, plotlyDownloadButton } from '@/utils/plotlyDownload'
 
@@ -60,7 +67,7 @@ function finiteExtent(values: ArrayLike<number>): [number, number] {
 
 export default defineComponent({
   name: 'PlotlyLineplot',
-  components: { MeasureHint, PeakLabelEditor },
+  components: { MeasureHint, PeakLabelEditor, PeakHoverTip },
   props: {
     args: {
       type: Object as PropType<LinePlotComponentArgs>,
@@ -82,7 +89,8 @@ export default defineComponent({
       () => !!props.args.showTopPeakLabels,
     )
     const zoom = useZoomState(() => props.args.zoomIdentifier)
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom }
+    const hover = usePeakHover()
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom, hover }
   },
   data() {
     return {
@@ -609,7 +617,9 @@ export default defineComponent({
           type: 'scatter',
           connectgaps: false,
           marker: { color: this.styling.unhighlightedColor },
-          hoverinfo: 'x+y',
+          // The read-out comes from usePeakHover (nearest peak along x); 'none'
+          // still sends the click events
+          hoverinfo: 'none',
         })
       }
 
@@ -622,7 +632,9 @@ export default defineComponent({
           type: 'scatter',
           connectgaps: false,
           marker: { color: this.styling.highlightColor },
-          hoverinfo: 'x+y',
+          // The read-out comes from usePeakHover (nearest peak along x); 'none'
+          // still sends the click events
+          hoverinfo: 'none',
         })
       }
 
@@ -636,7 +648,9 @@ export default defineComponent({
           connectgaps: false,
           marker: { color: this.styling.selectedColor },
           line: { width: 3 }, // Make selected peak slightly thicker
-          hoverinfo: 'x+y',
+          // The read-out comes from usePeakHover (nearest peak along x); 'none'
+          // still sends the click events
+          hoverinfo: 'none',
         })
       }
 
@@ -649,7 +663,9 @@ export default defineComponent({
           type: 'scatter',
           connectgaps: false,
           marker: { color: this.styling.highlightHiddenColor },
-          hoverinfo: 'x+y',
+          // The read-out comes from usePeakHover (nearest peak along x); 'none'
+          // still sends the click events
+          hoverinfo: 'none',
         })
       }
 
@@ -823,6 +839,7 @@ export default defineComponent({
           newFirstX: newData?.x_values?.[0],
           oldFirstX: oldData?.x_values?.[0],
         })
+        this.hover.hide()
         if (this.isInitialized) {
           // Reset zoom when data changes (e.g., switching spectra), unless the
           // zoom is pinned (mode bar button; keep_zoom=True pins it initially)
@@ -953,6 +970,13 @@ export default defineComponent({
         // Add event listeners
         const plotElement = document.getElementById(this.id) as any
         this.pinZoom.bind(plotElement)
+        this.hover.bind(plotElement, this.$refs.root as HTMLElement | null, () => ({
+          x: this.plotData?.x_values,
+          y: this.plotData?.y_values,
+          extra: (i) => this.plotData?.annotations?.[i] || undefined,
+          xName: this.args.xLabel || this.args.xColumn || 'x',
+          yName: this.args.yLabel || this.args.yColumn || 'y',
+        }))
         this.topPeaks.bind(plotElement)
         if (plotElement && needsListeners) {
           plotElement._insightListeners = true
@@ -975,6 +999,7 @@ export default defineComponent({
     },
 
     onRelayout(eventData: any): void {
+      this.hover.hide()
       // Handle zoom/pan events
       if (eventData['xaxis.range[0]'] !== undefined && eventData['xaxis.range[1]'] !== undefined) {
         const newXRange = [eventData['xaxis.range[0]'], eventData['xaxis.range[1]']]
