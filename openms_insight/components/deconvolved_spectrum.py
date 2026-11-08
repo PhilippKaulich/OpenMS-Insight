@@ -6,7 +6,6 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.image_format import image_format_args, validate_image_format
-from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..core.keep_zoom import keep_zoom_args, validate_keep_zoom
 from ..core.measure import (
     DEFAULT_MEASURE_TOLERANCE,
@@ -16,6 +15,7 @@ from ..core.measure import (
     validate_measure_tolerance,
 )
 from ..core.registry import register_component
+from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
 # What each view draws and what it is called

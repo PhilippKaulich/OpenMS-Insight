@@ -4,11 +4,10 @@ import json
 
 import polars as pl
 import pytest
+from component_cases import COMPONENT_CASES, build_kwargs
 
 from openms_insight import Heatmap, MirrorPlot
 from openms_insight.core.zoom import normalize_zoom, validate_zoom_identifier, zoom_args
-
-from component_cases import COMPONENT_CASES, build_kwargs
 
 ZOOMABLE = {"LinePlot", "VolcanoPlot", "PCAPlot", "SeriesPlot", "DeconvolvedSpectrum"}
 CASES = [c for c in COMPONENT_CASES if c[0].__name__ in ZOOMABLE]
@@ -31,31 +30,81 @@ def test_all_zoomable_components_are_covered():
 
 
 @pytest.mark.parametrize(ARGNAMES, CASES, ids=IDS)
-def test_off_by_default(mock_streamlit, temp_cache_dir, request, ComponentClass,
-                        data_fixture, extra_kwargs, fixture_kwargs):
-    plot = _build(request, temp_cache_dir, ComponentClass, data_fixture,
-                  extra_kwargs, fixture_kwargs, "zoff")
+def test_off_by_default(
+    mock_streamlit,
+    temp_cache_dir,
+    request,
+    ComponentClass,
+    data_fixture,
+    extra_kwargs,
+    fixture_kwargs,
+):
+    plot = _build(
+        request,
+        temp_cache_dir,
+        ComponentClass,
+        data_fixture,
+        extra_kwargs,
+        fixture_kwargs,
+        "zoff",
+    )
     assert "zoomIdentifier" not in plot._get_component_args()
 
 
 @pytest.mark.parametrize(ARGNAMES, CASES, ids=IDS)
-def test_identifier_is_passed_to_vue(mock_streamlit, temp_cache_dir, request,
-                                     ComponentClass, data_fixture, extra_kwargs,
-                                     fixture_kwargs):
-    plot = _build(request, temp_cache_dir, ComponentClass, data_fixture,
-                  extra_kwargs, fixture_kwargs, "zon", zoom_identifier="zoom@plot")
+def test_identifier_is_passed_to_vue(
+    mock_streamlit,
+    temp_cache_dir,
+    request,
+    ComponentClass,
+    data_fixture,
+    extra_kwargs,
+    fixture_kwargs,
+):
+    plot = _build(
+        request,
+        temp_cache_dir,
+        ComponentClass,
+        data_fixture,
+        extra_kwargs,
+        fixture_kwargs,
+        "zon",
+        zoom_identifier="zoom@plot",
+    )
     assert plot._get_component_args()["zoomIdentifier"] == "zoom@plot"
 
 
 @pytest.mark.parametrize(ARGNAMES, CASES, ids=IDS)
-def test_not_part_of_the_cache(mock_streamlit, temp_cache_dir, request, ComponentClass,
-                               data_fixture, extra_kwargs, fixture_kwargs):
-    off = _build(request, temp_cache_dir, ComponentClass, data_fixture,
-                 extra_kwargs, fixture_kwargs, "same")
+def test_not_part_of_the_cache(
+    mock_streamlit,
+    temp_cache_dir,
+    request,
+    ComponentClass,
+    data_fixture,
+    extra_kwargs,
+    fixture_kwargs,
+):
+    off = _build(
+        request,
+        temp_cache_dir,
+        ComponentClass,
+        data_fixture,
+        extra_kwargs,
+        fixture_kwargs,
+        "same",
+    )
     with open(off._get_manifest_path()) as f:
         before = json.load(f)
-    on = _build(request, temp_cache_dir, ComponentClass, data_fixture,
-                extra_kwargs, fixture_kwargs, "same", zoom_identifier="zoom@plot")
+    on = _build(
+        request,
+        temp_cache_dir,
+        ComponentClass,
+        data_fixture,
+        extra_kwargs,
+        fixture_kwargs,
+        "same",
+        zoom_identifier="zoom@plot",
+    )
     with open(on._get_manifest_path()) as f:
         after = json.load(f)
     assert before == after
@@ -133,7 +182,9 @@ def _heatmap(points, cache_dir):
 
 def test_heatmap_reads_the_shared_form(mock_streamlit, temp_cache_dir, points):
     plot = _heatmap(points, temp_cache_dir)
-    shared = plot._prepare_vue_data({"zoom@peak_map": {"x": [10.0, 20.0], "y": [150.0, 200.0]}})
+    shared = plot._prepare_vue_data(
+        {"zoom@peak_map": {"x": [10.0, 20.0], "y": [150.0, 200.0]}}
+    )
     legacy = plot._prepare_vue_data(
         {"zoom@peak_map": {"xRange": [10.0, 20.0], "yRange": [150.0, 200.0]}}
     )

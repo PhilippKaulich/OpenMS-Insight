@@ -18,10 +18,10 @@ does, so give a plot an identifier only where its zoom should be kept.
 """
 
 import math
-from typing import Any, Optional
+from typing import Any
 
 
-def validate_zoom_identifier(identifier: Any) -> Optional[str]:
+def validate_zoom_identifier(identifier: Any) -> str | None:
     """Check ``zoom_identifier`` is a non-empty string or None and return it."""
     if identifier is None:
         return None
@@ -32,12 +32,12 @@ def validate_zoom_identifier(identifier: Any) -> Optional[str]:
     return identifier
 
 
-def zoom_args(identifier: Optional[str]) -> dict[str, Any]:
+def zoom_args(identifier: str | None) -> dict[str, Any]:
     """The Vue argument: the identifier the plot keeps its zoom under."""
     return {"zoomIdentifier": identifier} if identifier else {}
 
 
-def _range(value: Any) -> Optional[list[float]]:
+def _range(value: Any) -> list[float] | None:
     if not isinstance(value, (list, tuple)) or len(value) != 2:
         return None
     try:
@@ -51,7 +51,7 @@ def _range(value: Any) -> Optional[list[float]]:
     return [min(low, high), max(low, high)]
 
 
-def normalize_zoom(value: Any) -> Optional[dict[str, list[float]]]:
+def normalize_zoom(value: Any) -> dict[str, list[float]] | None:
     """A stored zoom as ``{"x": [lo, hi], "y": [lo, hi]}`` (axes optional), or None.
 
     None stands for the full view: no value, an unreadable one, or one without

@@ -7,12 +7,12 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.image_format import image_format_args, validate_image_format
-from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..core.measure import (
     measure_args,
     validate_measure,
 )
 from ..core.registry import register_component
+from ..core.zoom import validate_zoom_identifier, zoom_args
 
 
 @register_component("pca")
