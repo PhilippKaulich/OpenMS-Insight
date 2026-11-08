@@ -1,6 +1,5 @@
 import numpy as np
 import polars as pl
-import scipy.stats as stats
 
 
 def calculate_statistical_tests(
@@ -39,6 +38,9 @@ def calculate_statistical_tests(
             satisfy the chosen method's requirement (e.g. "welch"/"paired"
             need exactly 2 groups, "anova" needs 3+).
     """
+    # imported here: scipy.stats takes about 0.6 s, which a page paid on import
+    import scipy.stats as stats
+
     sample_cols = metadata.select("sample_id").to_series().to_list()
     unique_groups = sorted(metadata.select("group").unique().to_series().to_list())
     group_count = len(unique_groups)

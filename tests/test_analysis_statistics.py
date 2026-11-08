@@ -144,3 +144,23 @@ def test_unknown_fdr_strategy_is_rejected(
     )
     with pytest.raises(ValueError, match="Unknown FDR strategy"):
         adjust_fdr_lazy(tested, strategy="not_a_strategy")
+
+
+def test_import_leaves_scipy_stats_unloaded():
+    """Importing the analysis modules must not load scipy.stats (about 0.6 s):
+    an app imports them with its pages, before any test is computed."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, openms_insight.analysis.statistics\n"
+        "try:\n"
+        "    import openms_insight.analysis.enrichment\n"
+        "except ImportError:\n"  # without the optional 'analysis' extra
+        "    pass\n"
+        "print('scipy.stats' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "False"
