@@ -487,6 +487,10 @@ export interface Plot3DComponentArgs extends BaseComponentArgs, ImageExportArgs 
   zLabel: string
   yDtick?: number | null
   cameraEye?: { x: number; y: number; z: number } | null
+  /** Relative axis lengths of the 3D box */
+  aspectRatio?: { x: number; y: number; z: number } | null
+  /** Point the camera looks at */
+  cameraCenter?: { x: number; y: number; z: number } | null
   showLegend?: boolean
   svgFilename?: string
   height?: number

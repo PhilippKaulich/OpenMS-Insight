@@ -84,6 +84,8 @@ class Plot3D(BaseComponent):
         z_label: str | None = None,
         y_dtick: float | None = None,
         camera_eye: dict[str, float] | None = None,
+        aspect_ratio: dict[str, float] | None = None,
+        camera_center: dict[str, float] | None = None,
         show_legend: bool = True,
         svg_filename: str | None = None,
         title_bold: bool = True,
@@ -130,6 +132,12 @@ class Plot3D(BaseComponent):
             x_label, y_label, z_label: Axis titles (default: column names).
             y_dtick: Tick spacing on the y axis (e.g. 1 for charge states).
             camera_eye: Initial camera position, e.g. {'x': 2.5, 'y': 0, 'z': 0.2}.
+            aspect_ratio: Relative lengths of the axes of the 3D box, e.g.
+                {'x': 2, 'y': 1, 'z': 0.6} for a box wider than deep, which
+                fills a wide cell. None (default) lets Plotly choose.
+            camera_center: Point the camera looks at, in the box's own
+                coordinates (default the middle, {'x': 0, 'y': 0, 'z': 0}); a
+                negative z moves the box up in the view.
             show_legend: Show the legend.
             svg_filename: File name (without extension) of the image download
                 (default: title); the extension follows the image format.
@@ -166,6 +174,8 @@ class Plot3D(BaseComponent):
         self._z_label = z_label or z_column
         self._y_dtick = y_dtick
         self._camera_eye = camera_eye
+        self._aspect_ratio = aspect_ratio
+        self._camera_center = camera_center
         self._show_legend = show_legend
         self._svg_filename = svg_filename
         if export_format not in ("svg", "png"):
@@ -208,6 +218,8 @@ class Plot3D(BaseComponent):
             z_label=z_label,
             y_dtick=y_dtick,
             camera_eye=camera_eye,
+            aspect_ratio=aspect_ratio,
+            camera_center=camera_center,
             show_legend=show_legend,
             svg_filename=svg_filename,
             title_bold=title_bold,
@@ -235,6 +247,8 @@ class Plot3D(BaseComponent):
             "z_label": self._z_label,
             "y_dtick": self._y_dtick,
             "camera_eye": self._camera_eye,
+            **({"aspect_ratio": self._aspect_ratio} if self._aspect_ratio else {}),
+            **({"camera_center": self._camera_center} if self._camera_center else {}),
             "show_legend": self._show_legend,
             "svg_filename": self._svg_filename,
             # Only when set, so caches built without them keep their hash
@@ -277,6 +291,8 @@ class Plot3D(BaseComponent):
         self._z_label = config.get("z_label", self._z_column)
         self._y_dtick = config.get("y_dtick")
         self._camera_eye = config.get("camera_eye")
+        self._aspect_ratio = config.get("aspect_ratio")
+        self._camera_center = config.get("camera_center")
         self._show_legend = config.get("show_legend", True)
         self._svg_filename = config.get("svg_filename")
         self._title_bold = config.get("title_bold", True)
@@ -418,6 +434,8 @@ class Plot3D(BaseComponent):
             "zLabel": self._z_label,
             "yDtick": self._y_dtick,
             "cameraEye": self._camera_eye,
+            **({"aspectRatio": self._aspect_ratio} if self._aspect_ratio else {}),
+            **({"cameraCenter": self._camera_center} if self._camera_center else {}),
             "showLegend": self._show_legend,
         }
         if self._highlight:

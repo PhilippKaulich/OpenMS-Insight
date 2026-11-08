@@ -406,6 +406,26 @@ class TestPlot3DHighlight:
         assert "highlight" not in plot._get_component_args()
         assert "highlightData" not in plot._prepare_vue_data({"scan": 0})
 
+    def test_aspect_ratio(self, mock_streamlit, temp_cache_dir, run_peaks):
+        ratio = {"x": 2.0, "y": 1.0, "z": 0.6}
+        Plot3D(
+            cache_id="wide",
+            data=run_peaks,
+            x_column="mz",
+            y_column="rt",
+            z_column="intensity",
+            aspect_ratio=ratio,
+            camera_center={"x": 0, "y": 0, "z": -0.2},
+            cache_path=str(temp_cache_dir),
+        )
+        restored = Plot3D(cache_id="wide", cache_path=str(temp_cache_dir))
+        args = restored._get_component_args()
+        assert args["aspectRatio"] == ratio
+        assert args["cameraCenter"] == {"x": 0, "y": 0, "z": -0.2}
+        plain = self._plot(run_peaks, temp_cache_dir, cache_id="plain")
+        assert "aspectRatio" not in plain._get_component_args()
+        assert "cameraCenter" not in plain._get_component_args()
+
     def test_unknown_highlight_column(self, mock_streamlit, temp_cache_dir, run_peaks):
         with pytest.raises(ValueError, match="highlight"):
             Plot3D(

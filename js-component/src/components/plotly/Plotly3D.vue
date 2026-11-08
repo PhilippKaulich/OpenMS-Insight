@@ -206,9 +206,19 @@ export default defineComponent({
         yaxis,
         zaxis: { title: { text: this.args.zLabel }, range: [0, this.maxZ] },
       }
-      if (this.args.cameraEye) {
-        scene.camera = { eye: this.args.cameraEye }
+      if (this.args.cameraEye || this.args.cameraCenter) {
+        scene.camera = {
+          ...(this.args.cameraEye ? { eye: this.args.cameraEye } : {}),
+          ...(this.args.cameraCenter ? { center: this.args.cameraCenter } : {}),
+        }
       }
+      if (this.args.aspectRatio) {
+        scene.aspectmode = 'manual'
+        scene.aspectratio = this.args.aspectRatio
+      }
+      // Plotly's default margins (80 px on every side) leave a wide empty frame
+      // around a 3D scene; keep room for the title only
+      const margin = { l: 0, r: 0, b: 0, t: this.title ? 50 : 10 }
       return {
         title: { text: this.args.titleBold === false ? this.title : `<b>${this.title}</b>` },
         paper_bgcolor: this.theme?.backgroundColor,
@@ -219,6 +229,7 @@ export default defineComponent({
           family: this.theme?.font,
         },
         scene: scene as Partial<Plotly.Scene>,
+        margin,
         showlegend: this.args.showLegend !== false,
       }
     },
