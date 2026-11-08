@@ -6,6 +6,7 @@ import polars as pl
 
 from ..core.base import BaseComponent
 from ..core.image_format import image_format_args, validate_image_format
+from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..core.measure import (
     measure_args,
     validate_measure,
@@ -71,6 +72,7 @@ class SeriesPlot(BaseComponent):
         hover_column: str | None = None,
         measure: bool = True,
         image_format: str | None = None,
+        zoom_identifier: str | None = None,
         **kwargs,
     ):
         """
@@ -121,6 +123,11 @@ class SeriesPlot(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            zoom_identifier: State identifier the plot keeps its zoom under,
+                ``{"x": [lo, hi], "y": [lo, hi]}`` (default None: the zoom stays
+                in the browser). The plot reports its ranges there after a zoom
+                or pan and zooms to a value set there, e.g. by a saved view.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):
@@ -153,6 +160,9 @@ class SeriesPlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time option, kept out of the cache config (see core/zoom.py)
+        self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
 
         super().__init__(
             cache_id=cache_id,
@@ -297,4 +307,5 @@ class SeriesPlot(BaseComponent):
             args["font"] = self._font
         args.update(measure_args(self._measure))
         args.update(image_format_args(self._image_format))
+        args.update(zoom_args(self._zoom_identifier))
         return args

@@ -853,6 +853,24 @@ They are plain Plotly annotations with an arrow to their peak, so the image
 download includes them. Like the measure options, `peak_labels` is a render-time
 setting and never part of the cache configuration.
 
+### Keeping the zoom in the state (`zoom_identifier`)
+
+`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot` and `Heatmap` take a `zoom_identifier`. The plot then reports its axis ranges to the `StateManager` under that identifier after a zoom or pan, and zooms to a value set there from Python. The value is plain JSON, so a page can store it (in a saved view, say) and set it before the plot is ever drawn:
+
+```python
+state = StateManager("viewer")
+state.set_selection("zoom@spectrum", {"x": [400.0, 900.0]})        # m/z 400 to 900
+state.set_selection("zoom@peak_map", {"x": [10.0, 20.0], "y": [450.0, 800.0]})
+
+LinePlot(cache_id="spectrum", ..., zoom_identifier="zoom@spectrum")(state_manager=state)
+```
+
+- `x` and `y` are `[low, high]`. A missing axis shows its full extent, and `None` is the full view.
+- The spectrum plots keep only the x range; their y axis follows the visible peaks.
+- Without `zoom_identifier` (the default) the zoom stays in the browser, as before. Only `Heatmap` always reports its zoom (default identifier `heatmap_zoom`), because the zoom picks the resolution of its data; it reads `{"x", "y"}` as well as its own `{"xRange", "yRange"}`.
+- Each report reruns the script once, debounced to 0.4 s after the last zoom or pan, like any change of the state. Give an identifier only to plots whose zoom should be kept.
+- Render-time only: it is not part of the cache.
+
 ### Image downloads (`image_format`)
 
 Every component that offers an image download saves in one format: SVG by

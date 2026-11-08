@@ -17,6 +17,7 @@ import type { HeatmapBox, HeatmapComponentArgs, HeatmapData } from '@/types/comp
 import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables/useMeasure'
 import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
+import { normalizeZoom } from '@/composables/useZoomState'
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
@@ -318,6 +319,12 @@ export default defineComponent({
       }
     },
 
+    /** The zoom in the shared state, normalized, as JSON (see useZoomState). */
+    storedZoom(): string {
+      const zoomIdentifier = this.args.zoomIdentifier || 'heatmap_zoom'
+      return JSON.stringify(normalizeZoom(this.selectionStore.$state[zoomIdentifier]))
+    },
+
     /**
      * Current x range from zoom state.
      */
@@ -583,11 +590,25 @@ export default defineComponent({
     zoomRange: {
       handler() {
         if (this.zoomRange === undefined) return
+        // Already the stored zoom (set from Python): nothing to report
+        if (JSON.stringify(normalizeZoom(this.zoomRange)) === this.storedZoom) return
         // Update selection store with zoom range
         const zoomIdentifier = this.args.zoomIdentifier || 'heatmap_zoom'
         this.selectionStore.updateSelection(zoomIdentifier, this.zoomRange)
       },
       deep: true,
+    },
+
+    // A zoom set from Python (a saved view opened): show it
+    storedZoom: {
+      handler(stored: string) {
+        if (JSON.stringify(normalizeZoom(this.zoomRange)) === stored) return
+        const zoom = JSON.parse(stored) as { x?: number[]; y?: number[] } | null
+        if (!zoom && this.zoomRange === undefined) return
+        this.zoomRange = { xRange: zoom?.x ?? [-1, -1], yRange: zoom?.y ?? [-1, -1] }
+        if (this.isInitialized && this.plotInitialized) this.renderPlot()
+      },
+      immediate: true,
     },
   },
 

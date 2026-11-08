@@ -1,5 +1,6 @@
 """Heatmap component using Plotly scattergl."""
 
+import math
 from typing import Any
 
 import polars as pl
@@ -18,6 +19,7 @@ from ..core.multi_select import (
     values_in_region,
 )
 from ..core.registry import register_component
+from ..core.zoom import normalize_zoom
 from ..preprocessing.compression import (
     compute_compression_levels,
     compute_optimal_bins,
@@ -1020,11 +1022,38 @@ class Heatmap(BaseComponent):
 
     def _is_no_zoom(self, zoom: dict[str, Any] | None) -> bool:
         """Check if zoom state represents no zoom (full view)."""
-        if zoom is None:
-            return True
-        x_range = zoom.get("xRange", [-1, -1])
-        y_range = zoom.get("yRange", [-1, -1])
-        return x_range[0] < 0 and x_range[1] < 0 and y_range[0] < 0 and y_range[1] < 0
+        return normalize_zoom(zoom) is None
+
+    def _zoom_bounds(
+        self, zoom: dict[str, Any], levels: list
+    ) -> tuple[float, float, float, float]:
+        """``x0, x1, y0, y1`` of a zoom; an axis it leaves out spans the data.
+
+        The zoom is ``{"x", "y"}`` or ``{"xRange", "yRange"}`` (see core/zoom.py).
+        """
+        normalized = normalize_zoom(zoom) or {}
+        bounds = []
+        for axis, column in (("x", self._x_column), ("y", self._y_column)):
+            r = normalized.get(axis)
+            if r is None:
+                r = self._full_extent(column, levels)
+            bounds.extend(r)
+        return bounds[0], bounds[1], bounds[2], bounds[3]
+
+    def _full_extent(self, column: str, levels: list) -> list[float]:
+        """The range of ``column`` over the smallest level (all its points)."""
+        if not levels:
+            return [-math.inf, math.inf]
+        level = levels[0]
+        if isinstance(level, pl.DataFrame):
+            level = level.lazy()
+        row = level.select(
+            pl.col(column).min().alias("lo"), pl.col(column).max().alias("hi")
+        ).collect()
+        lo, hi = row["lo"][0], row["hi"][0]
+        if lo is None or hi is None:
+            return [-math.inf, math.inf]
+        return [float(lo), float(hi)]
 
     def _select_level_for_zoom(
         self,
@@ -1052,8 +1081,7 @@ class Heatmap(BaseComponent):
         """
         import sys
 
-        x0, x1 = zoom["xRange"]
-        y0, y1 = zoom["yRange"]
+        x0, x1, y0, y1 = self._zoom_bounds(zoom, levels)
 
         # Add raw data as final level if available
         all_levels = list(levels)
@@ -1546,9 +1574,10 @@ class Heatmap(BaseComponent):
         if self._boxes is None:
             return result
         boxes = self._boxes
-        if not self._is_no_zoom(zoom):
-            x_lo, x_hi = sorted(zoom.get("xRange", [-1, -1]))
-            y_lo, y_hi = sorted(zoom.get("yRange", [-1, -1]))
+        normalized = normalize_zoom(zoom)
+        if normalized is not None:
+            x_lo, x_hi = normalized.get("x", [-math.inf, math.inf])
+            y_lo, y_hi = normalized.get("y", [-math.inf, math.inf])
             boxes = boxes.filter(
                 (pl.col("x1") >= x_lo)
                 & (pl.col("x0") <= x_hi)
