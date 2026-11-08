@@ -3,7 +3,6 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import polars as pl
-from scipy.stats import fisher_exact, hypergeom
 
 try:
     import mygene
@@ -128,6 +127,8 @@ def _term_table(terms, fg, n_fg, n_bg, adjust=True):
     of one category, restricted to the background) that a protein of `fg`
     has. Vectorised: P(X >= a) of the hypergeometric distribution, computed
     once per distinct (count, background count) pair."""
+    from scipy.stats import hypergeom  # only when a table is computed
+
     columns = [c for c in _TABLE_COLUMNS if adjust or c != "p_adj"]
     picked = terms.filter(pl.col("accession").is_in(list(fg)))
     if not picked.height:
@@ -346,6 +347,8 @@ def run_go_category(res_go, fg_set, bg_set, go_type):
         "GO_Term", "Count", "GeneRatio", "p_value", "-log10(p)". Returns
         `(None, None)` if no foreground-annotated GO terms were found.
     """
+    from scipy.stats import fisher_exact  # only when a table is computed
+
     go2fg = defaultdict(set)
     go2bg = defaultdict(set)
 
