@@ -396,6 +396,8 @@ class TestDeconvolvedSpectrum:
             "sequence": "G",
             "selectedIndex": 0,
             "key": 7,
+            "labels": ["G"],
+            "selectedGap": 0,
         }
         spectrum.set_ladder(None)
         assert spectrum._get_component_args()["ladder"] is None

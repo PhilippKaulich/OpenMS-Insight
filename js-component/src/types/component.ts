@@ -532,7 +532,16 @@ export interface DeconvolvedSpectrumComponentArgs extends BaseComponentArgs, Mea
   config?: { xPosScalingFactor?: number; xPosScalingThreshold?: number }
   svgFilename?: string
   /** Sequence tag drawn in the ladder view */
-  ladder?: { masses: number[]; sequence: string; selectedIndex?: number | null; key?: unknown } | null
+  ladder?: {
+    masses: number[]
+    sequence: string
+    selectedIndex?: number | null
+    key?: unknown
+    /** The residues of each gap (masses[i] to masses[i + 1]), assigned by mass */
+    labels?: string[]
+    /** The gap holding the selected residue */
+    selectedGap?: number | null
+  } | null
   /** Theoretical isotope envelope of one mass, drawn on its raw peaks */
   envelope?: {
     massIndex: number

@@ -130,6 +130,22 @@ function labelTrace(labels: PlotLabel[]): Plotly.Data | null {
 }
 
 /**
+ * Label of a ladder step: its residues, shortened to the first and last two
+ * with their number when the step spans more than four.
+ */
+export function ladderLabelText(residues: string): string {
+  if (residues.length <= 4) return residues
+  return `${residues.slice(0, 2)}…${residues.slice(-2)} (${residues.length})`
+}
+
+/** Residues broken into lines of 30 for a hover text. */
+function wrapResidues(residues: string): string {
+  const lines: string[] = []
+  for (let i = 0; i < residues.length; i += 30) lines.push(residues.slice(i, i + 30))
+  return lines.join('<br>')
+}
+
+/**
  * The part of a ladder arrow segment (tail to head) inside the x range, or null
  * when none of it is. A head cut off at the axis loses its arrowhead.
  */
@@ -509,14 +525,62 @@ export default defineComponent({
       return this.args.ladder ? this.args.ladder.key ?? JSON.stringify(this.args.ladder.masses) : null
     },
     /**
-     * A tag's masses arrive in descending order, so the rendered tag letters use a
-     * reversed index (sequence.length - 1 - i). The selected residue is reversed
-     * into that same space so the highlight lands on the residue the user selected.
+     * The residues of each gap of the tag (masses[i] to masses[i + 1]). The
+     * Python side assigns them by mass (a gap may hold several residues); an
+     * older one sends none, and the gaps then read the sequence backwards, one
+     * residue each.
      */
-    reversedSelectedAA(): number | undefined {
+    ladderLabels(): string[] {
       const ladder = this.args.ladder
-      if (!ladder || ladder.selectedIndex === null || ladder.selectedIndex === undefined) return undefined
+      if (!ladder) return []
+      if (Array.isArray(ladder.labels)) return ladder.labels
+      const sequence = ladder.sequence ?? ''
+      return ladder.masses.slice(1).map((_, i) => sequence[sequence.length - 1 - i] ?? '')
+    },
+    /** The gap of the tag holding the selected residue (index into ladderLabels). */
+    selectedGap(): number | undefined {
+      const ladder = this.args.ladder
+      if (!ladder) return undefined
+      if ('selectedGap' in ladder) return ladder.selectedGap ?? undefined
+      if (ladder.selectedIndex === null || ladder.selectedIndex === undefined) return undefined
       return ladder.sequence.length - 1 - ladder.selectedIndex
+    },
+    /**
+     * The tag's masses found in the spectrum: their position in MassValues and
+     * in the tag. A tag mass missing from the spectrum joins its two gaps.
+     */
+    ladderMatches(): { position: number; tagIndex: number }[] {
+      const matches: { position: number; tagIndex: number }[] = []
+      const tagMasses = this.args.ladder?.masses ?? []
+      tagMasses.forEach((v, tagIndex) => {
+        for (let j = 0; j < this.MassValues.length; j++) {
+          if (Math.abs(this.MassValues[j] - v) < 1e-5) {
+            matches.push({ position: j, tagIndex })
+            break
+          }
+        }
+      })
+      return matches
+    },
+    /**
+     * Index (into the drawn tag masses) of the first mass of the drawn step
+     * holding the selected residue, or undefined.
+     */
+    selectedStep(): number | undefined {
+      const gap = this.selectedGap
+      if (gap === undefined) return undefined
+      const matches = this.ladderMatches
+      for (let i = 0; i < matches.length - 1; i++) {
+        if (matches[i].tagIndex <= gap && gap < matches[i + 1].tagIndex) return i
+      }
+      return undefined
+    },
+    /** Positions (into MassValues) of the two masses around the selected residue. */
+    selectedStepPositions(): Set<number> {
+      const step = this.selectedStep
+      const matches = this.ladderMatches
+      if (step === undefined || this.mode !== 'ladder') return new Set()
+      return new Set([matches[step].position, matches[step + 1].position])
     },
     showBackButton(): boolean {
       return this.hasLadder && this.mode === 'ladder-annotated'
@@ -524,16 +588,7 @@ export default defineComponent({
 
     /** Positions (into MassValues) highlighted by the tag or the mass selection. */
     selectedMassPositions(): number[] {
-      let positions: number[] = []
-      const tagMasses = this.args.ladder?.masses ?? []
-      for (const v of tagMasses) {
-        for (let j = 0; j < this.MassValues.length; j++) {
-          if (Math.abs(this.MassValues[j] - v) < 1e-5) {
-            positions.push(j)
-            break
-          }
-        }
-      }
+      let positions: number[] = this.ladderMatches.map((match) => match.position)
       const selected = this.selectedMassIndex
       if (
         selected !== undefined &&
@@ -593,14 +648,14 @@ export default defineComponent({
         I_y: [] as number[],
       }
       const mask = this.isMzMode ? this.highlightedMzPos : this.highlightedMassPos
-      const reversedSelectedAA = this.reversedSelectedAA
+      const selectedPositions = this.selectedStepPositions
       const fragmentKinds = this.fragmentKindPos
       for (let i = 0; i < this.xValues.length; i++) {
         const peak = Math.floor(i / 3)
         const posHighlight = mask[peak]
         if (posHighlight === undefined) continue
         const fragmentKind = fragmentKinds[peak]
-        if (posHighlight && (reversedSelectedAA === peak || reversedSelectedAA === peak - 1)) {
+        if (posHighlight && selectedPositions.has(peak)) {
           result.selected_x.push(this.xValues[i])
           result.selected_y.push(this.yValues[i])
         } else if (posHighlight) {
@@ -702,7 +757,11 @@ export default defineComponent({
 
       // Mass buttons and, for a tag, the ladder arrows between them
       const arrowAnnotations: Partial<Plotly.Annotations>[] = []
-      const reversedSelectedAA = this.reversedSelectedAA
+      // In the ladder view the highlights are the tag's masses (ladderMatches)
+      const isLadder = this.mode === 'ladder'
+      const selectedStep = isLadder ? this.selectedStep : undefined
+      const matches = this.ladderMatches
+      const labels = this.ladderLabels
       const visibleMassBoxes = this.annotationBoxData.filter((box) => box.type === 'mass' && box.visible)
       const scaling = highlighted.length === 1 ? 2 : 1
       const massLabels: PlotLabel[] = []
@@ -714,7 +773,7 @@ export default defineComponent({
         if (!visibleMassBoxes.some((box) => box.index === i)) continue
         let fillcolor = this.styling.annotationColors.massButton
         let family = 'sans-serif'
-        if (reversedSelectedAA === i || reversedSelectedAA === i - 1) {
+        if (selectedStep !== undefined && (selectedStep === i || selectedStep === i - 1)) {
           fillcolor = this.styling.annotationColors.selectedMassButton
           family = 'Arial Black, Arial Bold, Arial, sans-serif'
         }
@@ -754,7 +813,7 @@ export default defineComponent({
 
         let fillcolor = this.styling.annotationColors.sequenceArrow
         let family = 'sans-serif'
-        if (reversedSelectedAA === i) {
+        if (selectedStep !== undefined && selectedStep === i) {
           fillcolor = this.styling.annotationColors.selectedSequenceArrow
           family = 'Arial Black, Arial Bold, Arial, sans-serif'
         }
@@ -764,12 +823,13 @@ export default defineComponent({
         let xMidStart = xMid
         let xMidEnd = xMid
         const diff = Math.abs(xStart - xEnd) * 0.9
-        let AA = ''
+        let residues = ''
         let delta = 0
-        if (sequence !== undefined && sequence.length > 0) {
-          const reverseIndex = sequence.length - 1 - i
-          if (reverseIndex >= 0 && reverseIndex < sequence.length) AA = sequence[reverseIndex]
+        if (isLadder && sequence !== undefined && sequence.length > 0 && i + 1 < matches.length) {
+          // The residues of every tag gap between these two masses
+          residues = labels.slice(matches[i].tagIndex, matches[i + 1].tagIndex).join('')
         }
+        const AA = ladderLabelText(residues)
         if (xStart > xEnd) {
           delta = xStart - xEnd
           xStart -= diff
@@ -813,7 +873,7 @@ export default defineComponent({
           text: AA,
           color: fillcolor,
           family,
-          hover: 'Δ=' + delta.toFixed(2) + ' Da',
+          hover: (residues.length > 1 ? wrapResidues(residues) + '<br>' : '') + 'Δ=' + delta.toFixed(2) + ' Da',
         })
       }
       for (const trace of [labelTrace(massLabels), labelTrace(residueLabels)]) {

@@ -15,6 +15,7 @@ from ..core.measure import (
     validate_measure_tolerance,
 )
 from ..core.registry import register_component
+from ..core.tag_ladder import ladder_steps
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
@@ -370,10 +371,14 @@ class DeconvolvedSpectrum(BaseComponent):
         Args:
             masses: The tag's masses, as they appear in the spectrum's mass list
                 (matched within 1e-5 Da). None or empty clears the ladder.
-            sequence: The tag's residues; residue ``len - 1 - i`` labels the gap
-                between the i-th and (i+1)-th mass.
+            sequence: The tag's residues, N- to C-terminal. Each gap between
+                neighbouring masses is labelled with the residues its mass
+                accounts for: one residue per gap for the usual tag (read
+                backwards along the masses unless they clearly run forwards),
+                several where a gap spans more (a long tag with fragments
+                missing). Gaps the residues do not account for stay unlabelled.
             selected_index: Residue of the tag to emphasise (0-based along
-                ``sequence``), or None.
+                ``sequence``), or None; the gap holding it is emphasised.
             key: Identifies the tag. When it changes, the plot leaves a drilled
                 down m/z view and clears the mass selection.
 
@@ -383,11 +388,31 @@ class DeconvolvedSpectrum(BaseComponent):
         if not masses:
             self._ladder = None
         else:
+            masses = [float(m) for m in masses]
+            sequence = sequence or ""
+            steps = ladder_steps(masses, sequence)
+            selected_gap = None
+            if steps is not None and selected_index is not None:
+                selected_gap = next(
+                    (
+                        gap
+                        for gap, (start, end) in enumerate(steps)
+                        if start <= selected_index < end
+                    ),
+                    None,
+                )
             self._ladder = {
-                "masses": [float(m) for m in masses],
-                "sequence": sequence or "",
+                "masses": masses,
+                "sequence": sequence,
                 "selectedIndex": selected_index,
                 "key": key,
+                # The residues of each gap (masses[i] to masses[i + 1])
+                "labels": (
+                    [sequence[start:end] for start, end in steps]
+                    if steps is not None
+                    else [""] * (len(masses) - 1)
+                ),
+                "selectedGap": selected_gap,
             }
         return self
 
