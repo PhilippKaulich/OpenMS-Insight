@@ -988,7 +988,7 @@ Render-only settings such as `title` and `colorscale` currently take part in the
 
 ## Caches on S3
 
-When the app's workspaces live on an S3 bucket mounted as a file system (the OpenMS streamlit-template's optional S3 storage), components still write their caches to the mounted path, but read the cached parquet files through the S3 API, so polars fetches only the row groups and columns a render needs. This is switched on by the environment, not by component arguments: it applies when `WORKSPACES_S3_ENDPOINT`, `WORKSPACES_S3_BUCKET`, `WORKSPACES_S3_ACCESS_KEY` and `WORKSPACES_S3_SECRET_KEY` are all set and the cache lies under `WORKSPACES_DIR` (the bucket's root). Otherwise files are read from the local path as before. `OPENMS_INSIGHT_S3=0` turns it off. The helper is `openms_insight.core.storage.scan_parquet`.
+When the app's workspaces live on an S3 bucket mounted as a file system (the OpenMS streamlit-template's optional S3 storage), components write their caches to the mounted path and, by default, read them from it too. Setting `OPENMS_INSIGHT_S3=1` reads the cached parquet files through the S3 API instead, so polars fetches only the row groups and columns a render needs; it applies when `WORKSPACES_S3_ENDPOINT`, `WORKSPACES_S3_BUCKET`, `WORKSPACES_S3_ACCESS_KEY` and `WORKSPACES_S3_SECRET_KEY` are all set and the cache lies under `WORKSPACES_DIR` (the bucket's root). It is off by default because a view reads its cache again on every rerun: through the gateway each read is a few ranged requests, where the mount answers from its local cache, and on the live apps that made selecting a table row about three times slower. The helper is `openms_insight.core.storage.scan_parquet`.
 
 ## Cache Reconstruction
 

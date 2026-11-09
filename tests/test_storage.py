@@ -16,7 +16,7 @@ S3_ENV = {
 @pytest.fixture
 def on_s3(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACES_DIR", str(tmp_path))
-    monkeypatch.delenv("OPENMS_INSIGHT_S3", raising=False)
+    monkeypatch.setenv("OPENMS_INSIGHT_S3", "1")
     for name, value in S3_ENV.items():
         monkeypatch.setenv(name, value)
     return tmp_path
@@ -42,6 +42,14 @@ def test_partial_variables_stay_local(on_s3, monkeypatch):
 
 def test_switch_off(on_s3, monkeypatch):
     monkeypatch.setenv("OPENMS_INSIGHT_S3", "0")
+    assert storage.s3_location(on_s3 / "ws" / "a.parquet") is None
+
+
+def test_off_unless_switched_on(on_s3, monkeypatch):
+    """The workspace variables alone keep reads on the mount: a rerun reads
+    every view's cache again, and through the gateway each read costs requests."""
+    monkeypatch.delenv("OPENMS_INSIGHT_S3", raising=False)
+    assert not storage.s3_enabled()
     assert storage.s3_location(on_s3 / "ws" / "a.parquet") is None
 
 

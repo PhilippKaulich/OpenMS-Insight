@@ -15,10 +15,13 @@ The app announces this through environment variables (the template's
 ``WORKSPACES_S3_ACCESS_KEY``, ``WORKSPACES_S3_SECRET_KEY``
     The gateway and its credentials. All four must be set.
 
-When they are not all set, or a file lies outside ``WORKSPACES_DIR``, files are
-read from the local path exactly as before. ``OPENMS_INSIGHT_S3=0`` turns S3
-reads off even when the variables are present. Writes always go to the
-mounted path.
+S3 reads are opt-in: set ``OPENMS_INSIGHT_S3=1`` as well. A view reads its
+small cache files again on every rerun, and through the S3 API each read is a
+few ranged requests to the gateway, where the mount serves them from its local
+cache. On the live apps that made selecting a table row about three times
+slower. Without ``OPENMS_INSIGHT_S3=1``, when the variables are not all set, or
+when a file lies outside ``WORKSPACES_DIR``, files are read from the local
+path. Writes always go to the mounted path.
 """
 
 import os
@@ -36,12 +39,12 @@ _ENV = (
     "WORKSPACES_S3_SECRET_KEY",
 )
 _DEFAULT_ROOT = "/workspaces-streamlit-template"
-_OFF = {"0", "false", "no", "off"}
+_ON = {"1", "true", "yes", "on"}
 
 
 def s3_enabled() -> bool:
-    """True when the workspace is on S3 and S3 reads are not switched off."""
-    if os.environ.get("OPENMS_INSIGHT_S3", "").strip().lower() in _OFF:
+    """True when S3 reads are switched on and the workspace is on S3."""
+    if os.environ.get("OPENMS_INSIGHT_S3", "").strip().lower() not in _ON:
         return False
     return all(os.environ.get(name, "").strip() for name in _ENV)
 
