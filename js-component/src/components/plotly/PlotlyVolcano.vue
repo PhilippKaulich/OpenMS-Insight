@@ -39,6 +39,7 @@ import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
@@ -104,6 +105,7 @@ export default defineComponent({
       streamlitDataStore,
       ...plotlyScatter,
       measure,
+      layers: useLayers(),
       multiSelectEnabled: multi.enabled,
       selectedCount: multi.selectedCount,
       multiSelectionKey: multi.selectionKey,
@@ -137,7 +139,17 @@ export default defineComponent({
       return [
         ...(this.multiSelectEnabled ? [clearSelectionTool(() => this.clearSelection(), this.selectedCount)] : []),
         ...this.measure.tools(),
+        ...this.layers.tool(this.layerList),
         this.downloadTool(),
+      ]
+    },
+
+    /** The point classes the toolbar shows or hides. */
+    layerList(): Layer[] {
+      return [
+        { key: 'up', label: 'Up-regulated', color: this.args.upColor || '#E74C3C' },
+        { key: 'down', label: 'Down-regulated', color: this.args.downColor || '#3498DB' },
+        { key: 'ns', label: 'Not significant', color: this.args.nsColor || '#95A5A6' },
       ]
     },
 
@@ -259,7 +271,7 @@ export default defineComponent({
       const traces: Plotly.Data[] = []
 
       // Not significant points (render first, behind)
-      if (ns.x.length > 0) {
+      if (ns.x.length > 0 && this.layers.visible('ns')) {
         traces.push({
           type: 'scattergl',
           name: 'Not significant',
@@ -279,7 +291,7 @@ export default defineComponent({
       }
 
       // Down-regulated points
-      if (down.x.length > 0) {
+      if (down.x.length > 0 && this.layers.visible('down')) {
         traces.push({
           type: 'scattergl',
           name: 'Down-regulated',
@@ -298,7 +310,7 @@ export default defineComponent({
       }
 
       // Up-regulated points (render last, on top)
-      if (up.x.length > 0) {
+      if (up.x.length > 0 && this.layers.visible('up')) {
         traces.push({
           type: 'scattergl',
           name: 'Up-regulated',
@@ -511,6 +523,10 @@ export default defineComponent({
   },
 
   watch: {
+    // A point class shown or hidden from the toolbar
+    'layers.state.hidden'() {
+      this.renderPlot()
+    },
     // A zoom set from Python (a saved view opened)
     zoomStamp() {
       const incoming = this.zoom.incoming()

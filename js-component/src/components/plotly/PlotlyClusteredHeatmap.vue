@@ -4,6 +4,7 @@
          box or lasso selection ends) measures this element -->
     <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="clustered-heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
+    <ColorbarLegend v-if="isDataReady" :items="legendItems" @change="setColorSpec" />
   </div>
 </template>
 
@@ -15,6 +16,8 @@ import { usePlotlyScatter } from '@/composables/usePlotlyScatter'
 import { clearSelectionTool, SELECTION_ACCENT, SELECTION_LAYOUT, useMultiSelect } from '@/composables/useMultiSelect'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
+import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
+import { scaleStops, specToStops, type ColorStops, type ColorbarSpec } from '@/utils/colorscale'
 import type { ClusteredHeatmapComponentArgs, ClusteredHeatmapData, DendrogramData } from '@/types/component'
 
 // The figure is laid out in pixels from the width the component gets, so
@@ -28,9 +31,10 @@ const ROW_LABEL_CHARS = 28
 const COL_LABEL_CHARS = 18
 const GROUP_BAR_PX = 12
 const GAP_PX = 4
-/** Room for the colorbar: gap, bar, tick labels. */
-const COLORBAR_LANE_PX = 76
-const COLORBAR_THICKNESS = 12
+/** Room right of the row labels for the group key (the colorbar is below the plot). */
+const KEY_LANE_PX = 76
+/** Height of the colorbar row below the plot. */
+const LEGEND_HEIGHT = 30
 /** Low and high end of the default diverging scale (OpenMS corporate blue and orange). */
 const SCALE_LOW = '#3157e9'
 const SCALE_HIGH = '#ff7501'
@@ -83,7 +87,7 @@ interface Geometry {
 
 export default defineComponent({
   name: 'PlotlyClusteredHeatmap',
-  components: { PlotToolbar },
+  components: { PlotToolbar, ColorbarLegend },
   props: {
     args: {
       type: Object as PropType<ClusteredHeatmapComponentArgs>,
@@ -127,12 +131,53 @@ export default defineComponent({
       dragmode: 'select' as string,
       removingOutline: false,
       selectModifier: 'replace' as 'replace' | 'add' | 'remove',
+      /** Colors the user picked in the colorbar editor; null: the plot's own scale. */
+      colorSpec: null as ColorbarSpec | null,
     }
   },
   computed: {
     /** Height of the plot below its toolbar; the frame keeps args.height. */
     plotHeight(): number {
-      return (this.args.height || 500) - TOOLBAR_HEIGHT
+      return (this.args.height || 500) - TOOLBAR_HEIGHT - LEGEND_HEIGHT
+    },
+
+    /** The scale drawn: the user's colors, args.colorscale, or the diverging default. */
+    colorStops(): ColorStops {
+      if (this.colorSpec) return specToStops(this.colorSpec, this.theme?.backgroundColor || '#ffffff')
+      const ownScale = this.args.colorscale as string | ColorStops | undefined
+      return ownScale ? scaleStops(ownScale, this.args.reversescale ?? true) : this.defaultColorscale
+    },
+
+    /** Value range of the scale: centred on 0 by default, the data's own range for args.colorscale. */
+    zRange(): [number, number] {
+      if (!this.args.colorscale) return [-this.zLimit, this.zLimit]
+      let lo = Infinity
+      let hi = -Infinity
+      for (const row of this.zValues) {
+        for (const v of row) {
+          if (typeof v === 'number' && Number.isFinite(v)) {
+            lo = Math.min(lo, v)
+            hi = Math.max(hi, v)
+          }
+        }
+      }
+      return Number.isFinite(lo) ? [lo, hi > lo ? hi : lo + 1] : [0, 1]
+    },
+
+    legendItems(): ColorbarLegendItem[] {
+      const [lo, hi] = this.zRange
+      const text = (v: number) => String(Number(v.toPrecision(3)))
+      return [
+        {
+          id: 'value',
+          label: this.args.intensityLabel || 'Value',
+          stops: this.colorStops,
+          spec: this.colorSpec,
+          low: text(lo),
+          high: text(hi),
+          editable: this.args.colorbarEditor !== false,
+        },
+      ]
     },
 
     toolbarTools(): PlotTool[] {
@@ -227,7 +272,7 @@ export default defineComponent({
       const rowLabelWidth = Math.max(0, ...this.shortRowLabels.map((l) => textWidth(l, font)))
       const rowLabelLane = Math.ceil(rowLabelWidth) + 14
       const left = 8
-      const right = rowLabelLane + COLORBAR_LANE_PX
+      const right = rowLabelLane + KEY_LANE_PX
       const plotWidth = Math.max(width - left - right, 80)
       const rowDendroPx = this.hasRowDendrogram ? clamp(plotWidth * 0.12, 36, 110) : 0
       const heatmapWidthPx = plotWidth - rowDendroPx - (rowDendroPx ? GAP_PX : 0)
@@ -376,7 +421,6 @@ export default defineComponent({
       const customdata = this.rowLabels.map((row) =>
         this.colLabels.map((col, c) => [row, groups[c] ? `${col} (${groups[c]})` : col])
       )
-      const ownScale = this.args.colorscale
       const traces: Plotly.Data[] = [
         {
           type: 'heatmap',
@@ -386,25 +430,11 @@ export default defineComponent({
           xaxis: 'x',
           yaxis: 'y',
           customdata,
-          ...(ownScale
-            ? { colorscale: ownScale, reversescale: this.args.reversescale ?? true }
-            : { colorscale: this.defaultColorscale, zmin: -this.zLimit, zmax: this.zLimit }),
-          // The colorbar has a lane of its own right of the row labels,
-          // spanning the heatmap's height.
-          colorbar: {
-            title: { text: valueLabel, side: 'top', font: { size: FONT_SIZE + 1 } },
-            x: 1 + (geometry.rowLabelLane + 14) / geometry.plotWidth,
-            xanchor: 'left',
-            xpad: 0,
-            y: geometry.heatmapY[1],
-            yanchor: 'top',
-            len: Math.min(geometry.heatmapY[1], 0.6),
-            lenmode: 'fraction',
-            thickness: COLORBAR_THICKNESS,
-            outlinewidth: 0,
-            ticks: '',
-            tickfont: { size: FONT_SIZE },
-          },
+          colorscale: this.colorStops,
+          zmin: this.zRange[0],
+          zmax: this.zRange[1],
+          // The colorbar is drawn below the plot (ColorbarLegend), where it can be edited
+          showscale: false,
           hovertemplate:
             `${yLabel}: <b>%{customdata[0]}</b><br>${xLabel}: %{customdata[1]}` +
             `<br>${valueLabel}: %{z:.2f}<extra></extra>`,
@@ -517,7 +547,7 @@ export default defineComponent({
         for (const name of this.uniqueGroups) {
           const label = shorten(name, 16)
           const width = textWidth(`■ ${label}`, this.fontFamily) + 12
-          if (line && lineWidth + width > g.rowLabelLane + COLORBAR_LANE_PX - 12) {
+          if (line && lineWidth + width > g.rowLabelLane + KEY_LANE_PX - 12) {
             lines.push(line)
             line = ''
             lineWidth = 0
@@ -646,6 +676,12 @@ export default defineComponent({
   },
 
   methods: {
+    /** New colors from the colorbar editor (null: the plot's own scale). */
+    setColorSpec(_id: string, spec: ColorbarSpec | null): void {
+      this.colorSpec = spec
+      if (this.plotInitialized) void this.renderPlot()
+    },
+
     /**
      * This composite figure hand-wires 4 regions (heatmap, column
      * dendrogram, row dendrogram, group bar) via manual axis anchors

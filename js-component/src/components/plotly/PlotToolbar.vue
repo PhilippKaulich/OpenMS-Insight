@@ -6,16 +6,21 @@
         <button
           v-for="tool in group.tools"
           :key="tool.id"
+          :ref="tool.menu ? `menuButton-${tool.id}` : undefined"
           type="button"
           class="toolbar-button"
-          :class="{ active: tool.active, labelled: !!tool.short }"
+          :class="{ active: tool.active || openTool === tool.id, labelled: !!tool.short }"
           :title="titleOf(tool)"
-          :aria-pressed="tool.active === undefined ? undefined : tool.active"
+          :aria-pressed="tool.menu || tool.active === undefined ? undefined : tool.active"
+          :aria-haspopup="tool.menu ? 'menu' : undefined"
+          :aria-expanded="tool.menu ? openTool === tool.id : undefined"
+          :data-tool-menu="tool.menu ? tool.id : undefined"
           :tabindex="collapsed ? -1 : 0"
-          @click="tool.run()"
+          @click="press(tool)"
         >
           <ToolIconSvg :icon="tool.icon" />
           <span v-if="tool.short" class="toolbar-label">{{ tool.short }}</span>
+          <ToolIconSvg v-if="tool.menu" class="toolbar-caret" :icon="CARET" :size="12" />
           <span v-if="tool.count" class="toolbar-count">{{ tool.count }}</span>
           <span
             v-if="tool.clear && tool.count"
@@ -29,6 +34,18 @@
           </span>
         </button>
       </div>
+    </div>
+
+    <!-- The choices of a tool with a menu, below the toolbar -->
+    <div
+      v-if="openMenuTool && !collapsed"
+      ref="toolMenu"
+      class="toolbar-menu"
+      role="menu"
+      :aria-label="openMenuTool.label"
+      :style="{ maxHeight: `${menuMaxHeight}px` }"
+    >
+      <ToolMenuSections :sections="openMenuTool.menu || []" />
     </div>
 
     <!-- Narrow panel: the tools that are on, Reset, and a menu with everything -->
@@ -77,7 +94,8 @@
           <div v-if="index" class="menu-separator"></div>
           <div class="menu-heading">{{ group.label }}</div>
           <template v-for="tool in group.tools" :key="tool.id">
-            <button type="button" class="menu-item" role="menuitem" :title="titleOf(tool)" @click="choose(tool.run)">
+            <ToolMenuSections v-if="tool.menu" class="menu-nested" :sections="tool.menu" />
+            <button v-else type="button" class="menu-item" role="menuitem" :title="titleOf(tool)" @click="choose(tool.run)">
               <ToolIconSvg :icon="tool.icon" />
               <span class="menu-label">{{ tool.label }}</span>
               <span v-if="tool.count" class="toolbar-count">{{ tool.count }}</span>
@@ -113,6 +131,7 @@
  */
 import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
+import ToolMenuSections from './ToolMenuSections.vue'
 import {
   GROUP_LABELS,
   GROUP_ORDER,
@@ -144,6 +163,9 @@ const ToolIconSvg = defineComponent({
   },
 })
 
+/** Small chevron after the name of a tool that opens a menu. */
+const CARET = 'M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z'
+
 interface Group {
   name: ToolGroup
   label: string
@@ -152,7 +174,7 @@ interface Group {
 
 export default defineComponent({
   name: 'PlotToolbar',
-  components: { ToolIconSvg },
+  components: { ToolIconSvg, ToolMenuSections },
   props: {
     /** Id of the element Plotly draws the plot in. */
     plotId: {
@@ -166,13 +188,15 @@ export default defineComponent({
     },
   },
   setup() {
-    return { streamlitDataStore: useStreamlitDataStore(), ICONS }
+    return { streamlitDataStore: useStreamlitDataStore(), ICONS, CARET }
   },
   data() {
     return {
       plotlyButtons: [] as PlotlyTool[],
       collapsed: false,
       menuOpen: false,
+      /** Id of the tool whose menu is open below the toolbar. */
+      openTool: null as string | null,
       menuMaxHeight: 320,
       observer: null as MutationObserver | null,
       resizeObserver: null as ResizeObserver | null,
@@ -188,6 +212,10 @@ export default defineComponent({
         label: GROUP_LABELS[name],
         tools: all.filter((tool) => tool.group === name),
       })).filter((group) => group.tools.length > 0)
+    },
+    /** The tool whose menu is open, as it is now (its choices follow the plot). */
+    openMenuTool(): PlotTool | null {
+      return this.tools.find((tool) => tool.id === this.openTool && tool.menu) ?? null
     },
     /** What a narrow toolbar keeps: tools that are on or hold something, and Reset. */
     pinned(): PlotTool[] {
@@ -277,16 +305,41 @@ export default defineComponent({
       this.menuOpen = false
       run()
     },
+    /** A tool with a menu opens or closes it; any other tool runs. */
+    press(tool: PlotTool): void {
+      if (!tool.menu) {
+        this.openTool = null
+        tool.run()
+        return
+      }
+      this.openTool = this.openTool === tool.id ? null : tool.id
+      if (this.openTool) this.$nextTick(() => this.fit())
+    },
+    menuButton(id: string): HTMLElement | undefined {
+      const ref = this.$refs[`menuButton-${id}`] as HTMLElement | HTMLElement[] | undefined
+      return Array.isArray(ref) ? ref[0] : ref
+    },
     onPointerDown(event: Event): void {
-      if (!this.menuOpen) return
       const target = event.target as Node
+      if (this.openTool) {
+        const panel = this.$refs.toolMenu as HTMLElement | undefined
+        const button = this.menuButton(this.openTool)
+        if (!panel?.contains(target) && !button?.contains(target)) this.openTool = null
+      }
+      if (!this.menuOpen) return
       const menu = this.$refs.menu as HTMLElement | undefined
       const more = this.$refs.moreButton as HTMLElement | undefined
       if (menu?.contains(target) || more?.contains(target)) return
       this.menuOpen = false
     },
     onKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape' && this.menuOpen) {
+      if (event.key !== 'Escape') return
+      if (this.openTool) {
+        const button = this.menuButton(this.openTool)
+        this.openTool = null
+        button?.focus()
+      }
+      if (this.menuOpen) {
         this.menuOpen = false
         ;(this.$refs.moreButton as HTMLElement | undefined)?.focus()
       }
@@ -443,6 +496,13 @@ export default defineComponent({
 }
 .menu-item .menu-check {
   color: var(--tb-accent);
+}
+.toolbar-caret {
+  margin-left: -3px;
+  opacity: 0.7;
+}
+.menu-nested {
+  margin: 0 0 2px;
 }
 </style>
 

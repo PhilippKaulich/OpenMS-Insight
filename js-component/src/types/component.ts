@@ -232,6 +232,12 @@ export interface HeatmapComponentArgs extends BaseComponentArgs, MeasureArgs, Im
   intensityLabel?: string
   /** Column whose text is shown above the intensity when hovering a point */
   hoverColumn?: string
+  /** Label → column of further values the points can be colored by (toolbar "Color") */
+  colorColumns?: Record<string, string>
+  /** Column whose values are layers shown or hidden from the toolbar ("Layers") */
+  layerColumn?: string
+  /** False: the colorbar below the plot cannot be edited */
+  colorbarEditor?: boolean
   /** Identifier → column; the points of each identifier's selected value are ringed */
   highlight?: Record<string, string>
   /** Selections a click sets besides `interactivity` (null clears one) */
@@ -385,6 +391,8 @@ export interface ClusteredHeatmapComponentArgs extends BaseComponentArgs, ImageE
   colorscale?: string | Array<[number, string]>
   reversescale?: boolean
   intensityLabel?: string
+  /** False: the colorbar below the plot cannot be edited */
+  colorbarEditor?: boolean
   height?: number
 }
 

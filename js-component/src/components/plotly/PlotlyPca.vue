@@ -16,6 +16,7 @@ import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables
 import { axisQuantity, pointsKey } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
@@ -128,6 +129,7 @@ export default defineComponent({
       streamlitDataStore,
       ...plotlyScatter,
       measure: useMeasure(() => !!props.args.measure),
+      layers: useLayers(),
       zoom,
       zoomStamp: zoom.stamp,
     }
@@ -141,7 +143,7 @@ export default defineComponent({
   },
   computed: {
     toolbarTools(): PlotTool[] {
-      return [...this.measure.tools(), this.downloadTool()]
+      return [...this.measure.tools(), ...this.layers.tool(this.layerList, 'Groups'), this.downloadTool()]
     },
 
     id(): string {
@@ -211,6 +213,12 @@ export default defineComponent({
       return groups
     },
 
+    /** The groups the toolbar shows or hides. */
+    layerList(): Layer[] {
+      const color = this.getGroupColor
+      return this.orderedGroupKeys.map((key) => ({ key, label: key, color: color(key) }))
+    },
+
     /** Group keys in first-appearance order (stable legend/color order). */
     orderedGroupKeys(): string[] {
       return Array.from(this.groupedPoints.keys())
@@ -239,6 +247,7 @@ export default defineComponent({
       const getColor = this.getGroupColor
 
       for (const groupKey of this.orderedGroupKeys) {
+        if (!this.layers.visible(groupKey)) continue
         const points = this.groupedPoints.get(groupKey)!
         const color = getColor(groupKey)
 
@@ -394,6 +403,10 @@ export default defineComponent({
   },
 
   watch: {
+    // A group shown or hidden from the toolbar
+    'layers.state.hidden'() {
+      this.renderPlot()
+    },
     // A zoom set from Python (a saved view opened)
     zoomStamp() {
       const incoming = this.zoom.incoming()

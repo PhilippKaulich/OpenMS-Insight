@@ -37,6 +37,26 @@ from ..preprocessing.filtering import (
 
 
 # Cache key only includes zoom state (not other selections)
+def _check_columns_exist(
+    data: pl.LazyFrame | None, data_path: str | None, columns: dict[str, str]
+) -> None:
+    """Raise when an option names a column the data does not have.
+
+    `columns` maps the option (for the message) to the column it names. Without
+    data (a component loaded from its cache) there is nothing to check here.
+    """
+    if not columns or (data is None and data_path is None):
+        return
+    source = data if data is not None else scan_parquet(data_path)
+    names = set(source.collect_schema().names())
+    missing = {opt: col for opt, col in columns.items() if col not in names}
+    if missing:
+        listed = ", ".join(f"{opt}={col!r}" for opt, col in missing.items())
+        raise ValueError(
+            f"Heatmap: {listed} not in the data (columns: {', '.join(sorted(names))})"
+        )
+
+
 def _make_zoom_cache_key(zoom: dict[str, Any] | None) -> tuple:
     """Create hashable cache key from zoom state."""
     if zoom is None:
@@ -124,6 +144,9 @@ class Heatmap(BaseComponent):
         multi_select: dict[str, str] | None = None,
         measure: bool = True,
         image_format: str | None = None,
+        color_columns: dict[str, str] | None = None,
+        layer_column: str | None = None,
+        colorbar_editor: bool = True,
         **kwargs,
     ):
         """
@@ -228,6 +251,21 @@ class Heatmap(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            color_columns: Further numeric columns the points can be colored
+                by, as label to column (e.g. ``{'QScore': 'qscore'}``). The
+                toolbar's "Color" button then offers the intensity and these;
+                they are colored on a linear scale. The points kept by
+                downsampling stay those of the highest intensity. The same
+                button shows only the points from a chosen value up.
+                Render-time only: not part of the cache.
+            layer_column: Column whose values are layers the toolbar's
+                "Layers" button shows or hides (e.g. survey masses and chosen
+                precursors). In categorical mode the categories are the layers
+                unless this names another column. One layer always stays shown.
+                Render-time only: not part of the cache.
+            colorbar_editor: The colorbar, drawn below the plot, opens an
+                editor on click: one, two or three colors, presets, reverse and
+                reset (default True; False keeps ``colorscale``).
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -272,6 +310,25 @@ class Heatmap(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+
+        # Render-time options: every level keeps all columns of the data, so the
+        # columns are only picked when the data is sent (not part of the cache)
+        if color_columns is not None and not isinstance(color_columns, dict):
+            raise TypeError(
+                "color_columns must be a dict of label to column, "
+                f"got {type(color_columns).__name__}"
+            )
+        self._color_columns: dict[str, str] = dict(color_columns or {})
+        self._layer_column = layer_column
+        self._colorbar_editor = bool(colorbar_editor)
+        _check_columns_exist(
+            data,
+            data_path,
+            {
+                **{f"color_columns[{k!r}]": v for k, v in self._color_columns.items()},
+                **({"layer_column": layer_column} if layer_column else {}),
+            },
+        )
 
         super().__init__(
             cache_id=cache_id,
@@ -1216,6 +1273,9 @@ class Heatmap(BaseComponent):
                     columns_to_select.append(col)
         if self._hover_column and self._hover_column not in columns_to_select:
             columns_to_select.append(self._hover_column)
+        for col in [*self._color_columns.values(), self._layer_column]:
+            if col and col not in columns_to_select:
+                columns_to_select.append(col)
 
         # Get levels based on current state (may use per-filter levels)
         levels, filtered_raw = self._get_levels_for_state(state)
@@ -1474,6 +1534,12 @@ class Heatmap(BaseComponent):
             args["onSelect"] = self._on_select
         if self._multi_select:
             args["multiSelect"] = self._multi_select
+        if self._color_columns:
+            args["colorColumns"] = self._color_columns
+        if self._layer_column:
+            args["layerColumn"] = self._layer_column
+        if not self._colorbar_editor:
+            args["colorbarEditor"] = False
 
         # Add category column configuration for categorical coloring mode
         if self._category_column:

@@ -19,6 +19,7 @@ import MeasureHint from './MeasureHint.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 import { useZoomState, withZoom, type ZoomValue } from '@/composables/useZoomState'
 
@@ -42,7 +43,15 @@ export default defineComponent({
     const selectionStore = useSelectionStore()
     const measure = useMeasure(() => !!props.args.measure)
     const zoom = useZoomState(() => props.args.zoomIdentifier)
-    return { streamlitDataStore, selectionStore, measure, zoom, zoomStamp: zoom.stamp, uniqueId: `series-plot-${++plotIdCounter}` }
+    return {
+      streamlitDataStore,
+      selectionStore,
+      measure,
+      layers: useLayers(),
+      zoom,
+      zoomStamp: zoom.stamp,
+      uniqueId: `series-plot-${++plotIdCounter}`,
+    }
   },
   data() {
     return {
@@ -55,6 +64,7 @@ export default defineComponent({
     toolbarTools(): PlotTool[] {
       return [
         ...this.measure.tools(this.measureTitle),
+        ...this.layers.tool(this.layerList, 'Series'),
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -102,9 +112,14 @@ export default defineComponent({
       }
       return [...groups.values()]
     },
+    /** The series the toolbar shows or hides. */
+    layerList(): Layer[] {
+      const colors = this.args.seriesColors || {}
+      return this.series.map((s) => ({ key: s.key, label: s.name, color: colors[s.key] }))
+    },
     traces(): Plotly.Data[] {
       const colors = this.args.seriesColors || {}
-      return this.series.map((s) => {
+      return this.series.filter((s) => this.layers.visible(s.key)).map((s) => {
         const trace: Record<string, unknown> = {
           x: s.x,
           y: s.y,
@@ -202,6 +217,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // A series shown or hidden from the toolbar
+    'layers.state.hidden'() {
+      this.requestRender()
+    },
     // A zoom set from Python (a saved view opened)
     zoomStamp() {
       const incoming = this.zoom.incoming()

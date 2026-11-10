@@ -65,6 +65,7 @@ class ClusteredHeatmap(BaseComponent):
         group_colors: dict[str, str] | None = None,
         multi_select: dict[str, str] | None = None,
         image_format: str | None = None,
+        colorbar_editor: bool = True,
         **kwargs,
     ):
         """
@@ -122,6 +123,10 @@ class ClusteredHeatmap(BaseComponent):
                 or 'webp'. None (default) follows
                 ``openms_insight.set_image_format()`` (default 'svg') when the
                 component is drawn. Render-time only: not part of the cache.
+            colorbar_editor: The colorbar, drawn below the plot, opens an
+                editor on click: one, two or three colors, presets, reverse and
+                reset (default True; False keeps ``colorscale``). Render-time
+                only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         if (data is not None or data_path is not None) and not id_col:
@@ -155,6 +160,7 @@ class ClusteredHeatmap(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/image_format.py)
         self._image_format = validate_image_format(image_format, allow_none=True)
+        self._colorbar_editor = bool(colorbar_editor)
 
         super().__init__(
             cache_id=cache_id,
@@ -440,5 +446,7 @@ class ClusteredHeatmap(BaseComponent):
             args["title"] = self._title
         if self._multi_select:
             args["multiSelect"] = self._multi_select
+        if not self._colorbar_editor:
+            args["colorbarEditor"] = False
         args.update(image_format_args(self._image_format))
         return args
