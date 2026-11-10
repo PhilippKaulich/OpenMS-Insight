@@ -37,6 +37,26 @@ from ..preprocessing.filtering import (
 
 
 # Cache key only includes zoom state (not other selections)
+def _check_columns_exist(
+    data: pl.LazyFrame | None, data_path: str | None, columns: dict[str, str]
+) -> None:
+    """Raise when an option names a column the data does not have.
+
+    `columns` maps the option (for the message) to the column it names. Without
+    data (a component loaded from its cache) there is nothing to check here.
+    """
+    if not columns or (data is None and data_path is None):
+        return
+    source = data if data is not None else scan_parquet(data_path)
+    names = set(source.collect_schema().names())
+    missing = {opt: col for opt, col in columns.items() if col not in names}
+    if missing:
+        listed = ", ".join(f"{opt}={col!r}" for opt, col in missing.items())
+        raise ValueError(
+            f"Heatmap: {listed} not in the data (columns: {', '.join(sorted(names))})"
+        )
+
+
 def _make_zoom_cache_key(zoom: dict[str, Any] | None) -> tuple:
     """Create hashable cache key from zoom state."""
     if zoom is None:
@@ -301,6 +321,14 @@ class Heatmap(BaseComponent):
         self._color_columns: dict[str, str] = dict(color_columns or {})
         self._layer_column = layer_column
         self._colorbar_editor = bool(colorbar_editor)
+        _check_columns_exist(
+            data,
+            data_path,
+            {
+                **{f"color_columns[{k!r}]": v for k, v in self._color_columns.items()},
+                **({"layer_column": layer_column} if layer_column else {}),
+            },
+        )
 
         super().__init__(
             cache_id=cache_id,

@@ -353,6 +353,33 @@ Heatmap(
 - `hover_column`: Column whose text is shown when hovering a point, above its intensity
 - `on_select`: Selections a click sets besides `interactivity`, as Table's `on_select` (None clears one)
 - `highlight`: Mapping of identifier names to column names. The points whose column value is the identifier's selected value are ringed, whichever component selected it (looked up in the full data, so a point the current level dropped is still marked)
+- `color_columns`: Your own further numeric columns the points can be colored by, as label to column. The toolbar's **Color** button lists the intensity and these, with a slider that shows only the points from a value up (see [Plot toolbar](#plot-toolbar))
+- `layer_column`: Your own column whose values are layers the toolbar's **Layers** button shows or hides. In categorical mode the categories are the layers unless this names another column
+- `colorbar_editor`: The colorbar below the plot opens an editor on click (default True; False keeps `colorscale`)
+
+**Coloring by your own columns, and layers:**
+Nothing in these options is specific to mass spectrometry: they take any columns of
+your data. A map of weather stations, colored by rainfall, temperature or sunny
+days, with the station networks as layers:
+
+```python
+Heatmap(
+    cache_id="stations",
+    data=stations,
+    x_column="longitude",
+    y_column="latitude",
+    intensity_column="rainfall",
+    log_scale=False,
+    intensity_label="Rainfall (mm)",
+    color_columns={"Temperature (°C)": "temperature", "Sunny days": "sunny_days"},
+    layer_column="network",  # e.g. "Airport", "Volunteer"
+)
+```
+
+The columns are checked when the component is built from data: a name that is
+not in the data raises a `ValueError`. They are render-time options, so adding or
+changing them reuses the cache. Downsampling keeps the points of highest
+intensity; coloring by another column colors those points.
 
 **Marking a selection made elsewhere:**
 ```python
@@ -474,6 +501,7 @@ ClusteredHeatmap(
 - `row_cluster` / `col_cluster`: Cluster that axis and draw its dendrogram (left for rows, top for columns). Skipped automatically when the axis has fewer than 2 entries
 - `linkage_method` / `linkage_metric`: Passed through to `scipy.cluster.hierarchy.linkage`
 - `colorscale`, `reversescale`, `intensity_label`: Cell color mapping and colorbar label. Without a `colorscale`, cells use a diverging scale centred on 0 (blue, the page colour, orange) that follows the app's light or dark theme, which suits z-scores
+- `colorbar_editor`: The colorbar below the plot opens an editor on click (one, two or three colors, presets, reverse, reset); default True, False keeps `colorscale`
 - Layout: the heatmap fills the component's width. Row labels sit right of the heatmap; when the rows are too close to label them all, every n-th one is labelled (the heading of the label column says which) and long labels are cut. Hovering a cell shows its full row label, sample, group and value
 - `group_colors`: Map group value -> color for the annotation bar. Groups without an explicit color get one from a default palette
 
@@ -818,6 +846,35 @@ component keeps the `height` it is given.
 When the groups do not fit the panel's width, the row keeps only the tools that
 are on or hold something, plus Reset, and offers every tool in a menu behind ⋯,
 sorted into the same groups. The toolbar follows the Streamlit theme.
+
+Some tools open a menu below the toolbar (inside ⋯ on a narrow toolbar):
+
+- **Layers** shows or hides parts of a plot, one entry per layer with its color;
+  one layer always stays shown. The layers are what your data defines: the
+  values of `Heatmap(layer_column=...)` or of its `category_column`, the groups
+  of `PCAPlot`, the series of `SeriesPlot` and `Plot3D`, and up-, down-regulated
+  and not significant in `VolcanoPlot`.
+- **Color** (`Heatmap`) picks what the points are colored by: the intensity or
+  a column of `color_columns`, and the lowest value shown.
+
+`Heatmap` and `ClusteredHeatmap` draw their colorbar small below the plot. A
+click opens an editor: one, two or three colors, the position of the middle
+color, presets, Reverse and Reset. `colorbar_editor=False` keeps `colorscale`.
+
+These choices last while the component is on the page; they are not kept in the
+state.
+
+**In a component of your own.** The pieces are not tied to these components. In
+`js-component/src`:
+
+- `utils/plotTools.ts`: a `PlotTool` with `menu` (sections of kind `choice`,
+  `toggles` or `range`) opens that menu instead of running.
+- `composables/useLayers.ts`: `useLayers()` keeps which layers are hidden;
+  `layers.tool(list)` is the Layers button and `layers.visible(key)` tells the
+  component what to draw.
+- `components/plotly/ColorbarLegend.vue` with `utils/colorscale.ts`: the colorbar
+  row and its editor for any Plotly colorscale (a name or a stop list); it emits
+  the chosen colors, which `specToStops()` turns into a stop list for Plotly.
 
 ### Measuring (`measure`)
 
