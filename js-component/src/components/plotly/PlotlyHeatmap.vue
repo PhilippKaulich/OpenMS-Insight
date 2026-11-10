@@ -298,7 +298,10 @@ export default defineComponent({
     legendItems(): ColorbarLegendItem[] {
       const [lo, hi] = this.colorRange
       const label = this.colorOptions.find((o) => o.value === this.colorBy)?.label ?? 'Intensity'
-      const text = (v: number) => (this.colorIsLog ? Math.pow(10, v).toExponential(0) : formatValue(v))
+      // No point has a value in this column (yet): no range to show
+      const anyValue = this.shownColorValues.some((v) => Number.isFinite(v))
+      const text = (v: number) =>
+        !anyValue ? '–' : this.colorIsLog ? Math.pow(10, v).toExponential(0) : formatValue(v)
       return [
         {
           id: this.colorBy,
@@ -636,29 +639,51 @@ export default defineComponent({
       const colors = this.shownColorValues
       const texts = this.hoverTexts
       const [cmin, cmax] = this.colorRange
+      // Points without a value in the shown color column (e.g. a count that
+      // only some rows have) are drawn in a muted grey below the others;
+      // Plotly would otherwise give them a color of its own choosing
+      const valued = shown.filter((i) => Number.isFinite(colors[i]))
+      const missing = shown.filter((i) => !Number.isFinite(colors[i]))
 
       const points: Plotly.Data[] = [
         {
           type: 'scattergl',
           name: 'points',
           showlegend: false,
-          x: shown.map((i) => x[i]),
-          y: shown.map((i) => y[i]),
+          x: valued.map((i) => x[i]),
+          y: valued.map((i) => y[i]),
           mode: 'markers',
           marker: {
-            color: shown.map((i) => colors[i]),
+            color: valued.map((i) => colors[i]),
             colorscale: this.colorStops,
             cmin,
             cmax,
             showscale: false,
             opacity: this.baseOpacity,
           },
-          hovertext: shown.map((i) => texts[i]),
+          hovertext: valued.map((i) => texts[i]),
           hoverinfo: 'x+y+text',
           // Row of each point: a layer or filter leaves points out
-          customdata: shown,
+          customdata: valued,
         } as Plotly.Data,
       ]
+      if (missing.length) {
+        points.unshift({
+          type: 'scattergl',
+          name: 'no value',
+          showlegend: false,
+          x: missing.map((i) => x[i]),
+          y: missing.map((i) => y[i]),
+          mode: 'markers',
+          marker: {
+            color: this.theme?.base === 'dark' ? '#5c5c5a' : '#c3c2b7',
+            opacity: 0.6 * this.baseOpacity,
+          },
+          hovertext: missing.map((i) => texts[i]),
+          hoverinfo: 'x+y+text',
+          customdata: missing,
+        } as Plotly.Data)
+      }
       return this.withBoxes([...points, ...overlays])
     },
 
