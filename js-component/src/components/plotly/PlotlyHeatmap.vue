@@ -5,6 +5,7 @@
          box or lasso selection ends) measures this element -->
     <PlotToolbar :plot-id="id" :tools="toolbarTools" />
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
+    <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>
 </template>
 
@@ -20,11 +21,26 @@ import { axisQuantity } from '@/utils/measure'
 import MeasureHint from './MeasureHint.vue'
 import { ICONS, TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
 import PlotToolbar from './PlotToolbar.vue'
+import ColorbarLegend, { type ColorbarLegendItem } from './ColorbarLegend.vue'
 import { normalizeZoom } from '@/composables/useZoomState'
+import { useLayers, type Layer } from '@/composables/useLayers'
+import { scaleStops, specToStops, type ColorStops, type ColorbarSpec } from '@/utils/colorscale'
+
+/** Height of the colorbar row below the plot. */
+const LEGEND_HEIGHT = 30
+/** The color option that stands for the intensity column. */
+const INTENSITY = '__intensity__'
+
+function formatValue(v: number): string {
+  if (!Number.isFinite(v)) return '-'
+  const a = Math.abs(v)
+  if (a !== 0 && (a >= 1e5 || a < 1e-3)) return v.toExponential(1)
+  return String(Number(v.toPrecision(3)))
+}
 
 export default defineComponent({
   name: 'PlotlyHeatmap',
-  components: { MeasureHint, PlotToolbar },
+  components: { MeasureHint, PlotToolbar, ColorbarLegend },
   props: {
     args: {
       type: Object as PropType<HeatmapComponentArgs>,
@@ -63,11 +79,13 @@ export default defineComponent({
     })
 
     const multi = useMultiSelect(computed(() => props.args.multiSelect))
+    const layers = useLayers()
 
     return {
       streamlitDataStore,
       ...plotlyScatter,
       measure,
+      layers,
       multiSelectEnabled: multi.enabled,
       selectedCount: multi.selectedCount,
       clearMultiSelect: multi.clear,
@@ -91,19 +109,27 @@ export default defineComponent({
       lastZoomUpdateTime: 0 as number,
       // Phase 2: Track plot initialization for Plotly.react() optimization
       plotInitialized: false as boolean,
+      /** The color option shown: INTENSITY or a label of args.colorColumns. */
+      colorBy: INTENSITY as string,
+      /** Colors the user picked, per color option; absent: args.colorscale. */
+      colorSpecs: {} as Record<string, ColorbarSpec | null>,
+      /** Lowest value shown, per color option; absent: everything. */
+      minValues: {} as Record<string, number>,
     }
   },
   computed: {
-    /** Height of the plot below its toolbar; the frame keeps args.height. */
+    /** Height of the plot below its toolbar (and colorbar row); the frame keeps args.height. */
     plotHeight(): number {
-      return (this.args.height || 400) - TOOLBAR_HEIGHT
+      return (this.args.height || 400) - TOOLBAR_HEIGHT - (this.showLegendBar ? LEGEND_HEIGHT : 0)
     },
 
     toolbarTools(): PlotTool[] {
       const tools: PlotTool[] = []
       if (this.multiSelectEnabled) tools.push(clearSelectionTool(() => this.clearMultiSelect(), this.selectedCount))
       tools.push(...this.measure.tools())
+      tools.push(...this.layers.tool(this.layerList))
       if (!this.isCategoricalMode) {
+        tools.push(this.colorTool)
         tools.push({
           id: 'colorbar',
           group: 'show',
@@ -118,15 +144,181 @@ export default defineComponent({
       return tools
     },
 
+    /** The "Color" button: what the points are colored by, and the lowest value shown. */
+    colorTool(): PlotTool {
+      const option = this.colorOptions.find((o) => o.value === this.colorBy) ?? this.colorOptions[0]
+      const [lo, hi] = this.rawColorRange
+      // Counts move in whole steps; other values in a hundredth of their range
+      const step = this.colorIsInteger ? 1 : hi > lo ? (hi - lo) / 100 : 1
+      const min = this.minValues[this.colorBy]
+      const menu: PlotTool['menu'] = []
+      if (this.colorOptions.length > 1) {
+        menu.push({
+          kind: 'choice',
+          label: 'Color by',
+          options: this.colorOptions,
+          value: this.colorBy,
+          select: (value: string) => this.setColorBy(value),
+        })
+      }
+      menu.push({
+        kind: 'range',
+        label: `Show ${option.label} from`,
+        min: lo,
+        max: hi,
+        step,
+        value: min ?? lo,
+        format: (v: number) => (v <= lo ? 'all' : `≥ ${formatValue(v)}`),
+        input: (v: number) => this.setMinValue(v <= lo ? undefined : v),
+      })
+      return {
+        id: 'color',
+        group: 'show',
+        icon: ICONS.palette,
+        label: 'Color',
+        short: this.colorOptions.length > 1 ? option.label : 'Filter',
+        help: 'what the points are colored by, and which are shown',
+        menu,
+        run: () => {},
+      }
+    },
+
+    /** Intensity first, then the extra columns of args.colorColumns. */
+    colorOptions(): { value: string; label: string }[] {
+      const extra = Object.keys(this.args.colorColumns || {}).map((label) => ({ value: label, label }))
+      return [{ value: INTENSITY, label: this.args.intensityLabel || 'Intensity' }, ...extra]
+    },
+
+    /** Column of the color option shown. */
+    activeColorColumn(): string {
+      if (this.colorBy === INTENSITY) return this.args.intensityColumn
+      return this.args.colorColumns?.[this.colorBy] ?? this.args.intensityColumn
+    },
+
+    /** Values of the shown color column, as numbers. */
+    rawColorValues(): number[] {
+      if (this.colorBy === INTENSITY) return this.intensityValues
+      const col = this.activeColorColumn
+      return this.heatmapData.map((row) => Number(row[col]))
+    },
+
+    /** Smallest and largest finite value of the shown color column. */
+    rawColorRange(): [number, number] {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const v of this.rawColorValues) {
+        if (!Number.isFinite(v)) continue
+        if (v < lo) lo = v
+        if (v > hi) hi = v
+      }
+      return Number.isFinite(lo) ? [lo, hi] : [0, 1]
+    },
+
+    /** Every value of the shown color column is a whole number (e.g. a count). */
+    colorIsInteger(): boolean {
+      const values = this.rawColorValues
+      return values.length > 0 && values.every((v) => !Number.isFinite(v) || Number.isInteger(v))
+    },
+
+    /** The color option is on a log scale: only the intensity, when args.logScale. */
+    colorIsLog(): boolean {
+      return this.colorBy === INTENSITY && this.isLogScale
+    },
+
+    /** Values as colored: log10 for a log-scaled intensity. */
+    shownColorValues(): number[] {
+      return this.colorBy === INTENSITY ? this.effectiveColorValues : this.rawColorValues
+    },
+
+    /** Range of the colorscale; a filter leaves it as it is, so colors keep their meaning. */
+    colorRange(): [number, number] {
+      let lo = Infinity
+      let hi = -Infinity
+      for (const v of this.shownColorValues) {
+        if (!Number.isFinite(v)) continue
+        if (v < lo) lo = v
+        if (v > hi) hi = v
+      }
+      return Number.isFinite(lo) ? [lo, hi > lo ? hi : lo + 1] : [0, 1]
+    },
+
+    /** Column whose values are the layers: args.layerColumn, else the category column. */
+    layerColumn(): string | undefined {
+      return this.args.layerColumn || this.args.categoryColumn || undefined
+    },
+
+    layerValues(): string[] {
+      const col = this.layerColumn
+      if (!col || !this.isDataReady) return []
+      return this.heatmapData.map((row) => String(row[col]))
+    },
+
+    /** Layers in order of appearance, with their category color in categorical mode. */
+    layerList(): Layer[] {
+      const seen = new Set<string>()
+      const list: Layer[] = []
+      for (const key of this.layerValues) {
+        if (seen.has(key)) continue
+        seen.add(key)
+        list.push({
+          key,
+          label: key,
+          color: this.isCategoricalMode && this.layerColumn === this.args.categoryColumn ? this.getCategoryColor(key) : undefined,
+        })
+      }
+      return list
+    },
+
+    /** Indices of the points shown: their layer is on and they pass the value filter. */
+    shownIndices(): number[] {
+      const n = this.xValues.length
+      const layerVals = this.layerValues
+      const min = this.isCategoricalMode ? undefined : this.minValues[this.colorBy]
+      const values = this.rawColorValues
+      const out: number[] = []
+      for (let i = 0; i < n; i++) {
+        if (layerVals.length && !this.layers.visible(layerVals[i])) continue
+        if (min !== undefined && !(values[i] >= min)) continue
+        out.push(i)
+      }
+      return out
+    },
+
+    /** The colorscale drawn: the user's colors, or args.colorscale. */
+    colorStops(): ColorStops {
+      const spec = this.colorSpecs[this.colorBy]
+      if (spec) return specToStops(spec, this.theme?.backgroundColor || '#ffffff')
+      return scaleStops(this.args.colorscale as string | ColorStops | undefined, this.args.reversescale ?? false)
+    },
+
+    showLegendBar(): boolean {
+      return !this.isCategoricalMode && this.effectiveColorbarVisible
+    },
+
+    legendItems(): ColorbarLegendItem[] {
+      const [lo, hi] = this.colorRange
+      const label = this.colorOptions.find((o) => o.value === this.colorBy)?.label ?? 'Intensity'
+      const text = (v: number) => (this.colorIsLog ? Math.pow(10, v).toExponential(0) : formatValue(v))
+      return [
+        {
+          id: this.colorBy,
+          label,
+          stops: this.colorStops,
+          spec: this.colorSpecs[this.colorBy] ?? null,
+          low: text(lo),
+          high: text(hi),
+          editable: this.args.colorbarEditor !== false,
+        },
+      ]
+    },
+
     id(): string {
       return `heatmap-${this.index}`
     },
 
+    /** The colorbar sits below the plot and takes no width, so it stays on narrow panels too. */
     effectiveColorbarVisible(): boolean {
-      if (this.userOverrideColorbar) {
-        return this.colorbarVisible
-      }
-      return this.isNarrowPlot ? false : this.colorbarVisible
+      return this.colorbarVisible
     },
 
     /**
@@ -207,6 +399,15 @@ export default defineComponent({
      * when one is set.
      */
     hoverTexts(): string[] {
+      const base = this.baseHoverTexts
+      if (this.colorBy === INTENSITY) return base
+      const label = this.colorOptions.find((o) => o.value === this.colorBy)?.label ?? this.colorBy
+      const values = this.rawColorValues
+      return base.map((text, i) => `${text}<br>${label}: ${formatValue(values[i])}`)
+    },
+
+    /** Hover text without the extra color option. */
+    baseHoverTexts(): string[] {
       const hoverCol = this.args.hoverColumn
       if (!hoverCol) {
         return this.intensityValues.map((v) => v.toExponential(2))
@@ -372,39 +573,6 @@ export default defineComponent({
       return zoom.yRange
     },
 
-    /**
-     * Build colorbar tick values and text.
-     * For log scale: power-of-10 ticks with exponential labels
-     * For linear scale: returns null to let Plotly auto-calculate
-     */
-    colorbarTicks(): { tickvals: number[]; ticktext: string[] } | null {
-      // For linear scale, let Plotly auto-calculate ticks
-      if (!this.isLogScale) {
-        return null
-      }
-
-      const intensities = this.intensityValues.filter((x) => x > 0)
-      if (intensities.length === 0) {
-        return { tickvals: [0], ticktext: ['0'] }
-      }
-
-      const minIntensity = Math.min(...intensities)
-      const maxIntensity = Math.max(...intensities)
-
-      const minPower = Math.floor(Math.log10(minIntensity))
-      const maxPower = Math.ceil(Math.log10(maxIntensity))
-
-      const tickValues = Array.from(
-        { length: maxPower - minPower + 1 },
-        (_, i) => Math.pow(10, minPower + i)
-      )
-
-      return {
-        tickvals: tickValues.map((v) => Math.log10(v)),
-        ticktext: tickValues.map((v) => v.toExponential(0)),
-      }
-    },
-
     /** Rectangles drawn over the points (e.g. detected features), visible range only. */
     boxRows(): HeatmapBox[] {
       if (!this.args.boxes) return []
@@ -460,38 +628,36 @@ export default defineComponent({
         return this.withBoxes([...this.buildCategoricalTraces(), ...overlays])
       }
 
-      // Continuous mode: single trace with colorscale
-      const ticks = this.colorbarTicks
-
-      // Build colorbar config - use custom ticks for log scale, auto for linear
-      const colorbarConfig: Record<string, unknown> = {
-        title: { text: this.colorbarLabel },
-      }
-      if (ticks) {
-        colorbarConfig.tickvals = ticks.tickvals
-        colorbarConfig.ticktext = ticks.ticktext
-        colorbarConfig.tickmode = 'array'
-      }
+      // Continuous mode: single trace with colorscale. The colorbar is drawn
+      // below the plot (ColorbarLegend), where it can be edited.
+      const shown = this.shownIndices
+      const x = this.xValues
+      const y = this.yValues
+      const colors = this.shownColorValues
+      const texts = this.hoverTexts
+      const [cmin, cmax] = this.colorRange
 
       const points: Plotly.Data[] = [
         {
           type: 'scattergl',
           name: 'points',
           showlegend: false,
-          x: this.xValues,
-          y: this.yValues,
+          x: shown.map((i) => x[i]),
+          y: shown.map((i) => y[i]),
           mode: 'markers',
           marker: {
-            color: this.effectiveColorValues,
-            colorscale: this.args.colorscale || 'Portland',
-            reversescale: this.args.reversescale ?? false,
-            showscale: this.effectiveColorbarVisible,
-            colorbar: colorbarConfig,
+            color: shown.map((i) => colors[i]),
+            colorscale: this.colorStops,
+            cmin,
+            cmax,
+            showscale: false,
             opacity: this.baseOpacity,
           },
-          hovertext: this.hoverTexts,
+          hovertext: shown.map((i) => texts[i]),
           hoverinfo: 'x+y+text',
-        },
+          // Row of each point: a layer or filter leaves points out
+          customdata: shown,
+        } as Plotly.Data,
       ]
       return this.withBoxes([...points, ...overlays])
     },
@@ -531,8 +697,8 @@ export default defineComponent({
     layout(): Partial<Plotly.Layout> {
       // In categorical mode, show legend instead of colorbar
       const showLegend = this.isCategoricalMode || !!this.args.boxes?.label
-      // Use extra right margin for colorbar (continuous) or legend (categorical)
-      const needsExtraRightMargin = this.isCategoricalMode || this.effectiveColorbarVisible
+      // Extra right margin for the legend (categorical); the colorbar sits below the plot
+      const needsExtraRightMargin = this.isCategoricalMode
 
       return {
         ...this.themeLayout,
@@ -611,6 +777,11 @@ export default defineComponent({
     },
 
     selectedBoxId() {
+      if (this.isInitialized && this.plotInitialized) this.renderPlot()
+    },
+
+    // A layer shown or hidden from the toolbar
+    'layers.state.hidden'() {
       if (this.isInitialized && this.plotInitialized) this.renderPlot()
     },
 
@@ -697,12 +868,13 @@ export default defineComponent({
     buildCategoricalTraces(): Plotly.Data[] {
       const getColor = this.getCategoryColor
       const traces: Plotly.Data[] = []
+      const shown = new Set(this.shownIndices)
 
       for (const category of this.uniqueCategories) {
-        // Get indices of points belonging to this category
+        // Get indices of the shown points belonging to this category
         const indices: number[] = []
         for (let i = 0; i < this.categoryValues.length; i++) {
-          if (this.categoryValues[i] === category) {
+          if (this.categoryValues[i] === category && shown.has(i)) {
             indices.push(i)
           }
         }
@@ -957,26 +1129,31 @@ export default defineComponent({
       await this.updatePlot()
     },
 
+    /** Redraw after the colorbar row came or went: the plot's height changed with it. */
     async updatePlot() {
-      const plotElement = document.getElementById(this.id) as any
-      if (plotElement) {
-        try {
-          await Plotly.restyle(plotElement, {
-            'marker.showscale': this.effectiveColorbarVisible,
-          }, [0])
+      if (!this.plotInitialized) return
+      await this.$nextTick()
+      await this.renderPlot()
+    },
 
-          await Plotly.relayout(plotElement, {
-            margin: {
-              r: this.effectiveColorbarVisible ? 120 : 20,
-            },
-            // Keep the height: the frame is as tall as the plot, so an autosize
-            // here would measure the plot's own collapsing container
-            height: plotElement._fullLayout?.height ?? this.args.height ?? 400,
-          })
-        } catch (error) {
-          // Silently handle errors
-        }
-      }
+    /** Show or hide a layer, or change the color option: redraw the points. */
+    setColorBy(value: string): void {
+      this.colorBy = value
+      if (this.plotInitialized) void this.renderPlot()
+    },
+
+    setMinValue(value: number | undefined): void {
+      const next = { ...this.minValues }
+      if (value === undefined) delete next[this.colorBy]
+      else next[this.colorBy] = value
+      this.minValues = next
+      if (this.plotInitialized) void this.renderPlot()
+    },
+
+    /** New colors from the colorbar editor (null: the plot's own colorscale). */
+    setColorSpec(id: string, spec: ColorbarSpec | null): void {
+      this.colorSpecs = { ...this.colorSpecs, [id]: spec }
+      if (this.plotInitialized) void this.renderPlot()
     },
 
     setupHeatmapResizeObserver() {
@@ -986,14 +1163,7 @@ export default defineComponent({
           for (const entry of entries) {
             const newWidth = entry.contentRect.width
             if (Math.abs(newWidth - this.plotWidth) > 10) {
-              const wasNarrow = this.isNarrowPlot
               this.plotWidth = newWidth
-              const isNowNarrow = this.isNarrowPlot
-
-              if (wasNarrow !== isNowNarrow && !this.userOverrideColorbar) {
-                this.colorbarVisible = !isNowNarrow
-                this.updatePlot()
-              }
             }
           }
         })

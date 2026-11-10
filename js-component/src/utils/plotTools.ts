@@ -26,6 +26,37 @@ export const GROUP_LABELS: Record<ToolGroup, string> = {
 /** An icon: a path in a 24 x 24 box, or the inner markup of an SVG with its viewBox. */
 export type ToolIcon = string | { viewBox: string; markup: string }
 
+/** One of several values, shown as menu items with a check on the chosen one. */
+export interface ToolMenuChoice {
+  kind: 'choice'
+  label: string
+  options: { value: string; label: string }[]
+  value: string
+  select: (value: string) => void
+}
+
+/** Things to show or hide, each with a check while shown (e.g. the layers of a plot). */
+export interface ToolMenuToggles {
+  kind: 'toggles'
+  label: string
+  items: { value: string; label: string; active: boolean; color?: string; disabled?: boolean }[]
+  toggle: (value: string) => void
+}
+
+/** A number picked with a slider (e.g. the lowest value shown). */
+export interface ToolMenuRange {
+  kind: 'range'
+  label: string
+  min: number
+  max: number
+  step: number
+  value: number
+  input: (value: number) => void
+  format?: (value: number) => string
+}
+
+export type ToolMenuSection = ToolMenuChoice | ToolMenuToggles | ToolMenuRange
+
 export interface PlotTool {
   id: string
   group: ToolGroup
@@ -42,6 +73,11 @@ export interface PlotTool {
   count?: number
   /** Removes what the tool made; shown as × on its button while count > 0. */
   clear?: { label: string; run: () => void }
+  /**
+   * Choices behind the button: a click opens them below the toolbar instead of
+   * calling `run` (on a narrow toolbar they are listed in the ⋯ menu).
+   */
+  menu?: ToolMenuSection[]
   run: () => void
 }
 
@@ -62,6 +98,10 @@ export const ICONS = {
   fragments: 'M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z',
   peaks: 'M5 20h2V10H5v10zm4 0h2V4H9v16zm4 0h2v-7h-2v7zm4 0h2v-12h-2v12z',
   colorbar: 'M5 3h5v18H5V3zm2 2v14h1V5H7zm6 1h6v2h-6v-2zm0 5h6v2h-6v-2zm0 5h6v2h-6v-2z',
+  palette:
+    'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
+  layers:
+    'M11.99 18.54 4.62 12.81 3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z',
   deselect:
     'M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z',
 } as const

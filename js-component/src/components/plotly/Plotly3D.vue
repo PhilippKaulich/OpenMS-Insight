@@ -15,6 +15,7 @@ import type { Plot3DComponentArgs } from '@/types/component'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import { useLayers, type Layer } from '@/composables/useLayers'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Floor the stems and trace starts drop to. Far below zero so the vertical
@@ -49,7 +50,7 @@ export default defineComponent({
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     const selectionStore = useSelectionStore()
-    return { streamlitDataStore, selectionStore, uniqueId: `plot3d-${++plotIdCounter}` }
+    return { streamlitDataStore, selectionStore, layers: useLayers(), uniqueId: `plot3d-${++plotIdCounter}` }
   },
   data() {
     return {
@@ -60,6 +61,7 @@ export default defineComponent({
     toolbarTools(): PlotTool[] {
       const height = this.args.height || 800
       return [
+        ...this.layers.tool(this.layerList, 'Series'),
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -185,9 +187,14 @@ export default defineComponent({
       }
       return group.x.length > 0 ? group : null
     },
+    /** The series the toolbar shows or hides. */
+    layerList(): Layer[] {
+      return this.series.map((s) => ({ key: s.key, label: s.name, color: s.color }))
+    },
     allSeries(): SeriesPoints[] {
       // The highlighted points last, so they are drawn on top
-      return this.highlightSeries ? [...this.series, this.highlightSeries] : this.series
+      const shown = this.series.filter((s) => this.layers.visible(s.key))
+      return this.highlightSeries ? [...shown, this.highlightSeries] : shown
     },
     maxZ(): number {
       let max = 0
@@ -253,6 +260,10 @@ export default defineComponent({
     },
   },
   watch: {
+    // A series shown or hidden from the toolbar
+    'layers.state.hidden'() {
+      this.requestRender()
+    },
     'streamlitDataStore.allDataForDrawing.plotData': {
       handler() {
         this.requestRender()
