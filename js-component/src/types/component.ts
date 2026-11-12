@@ -635,6 +635,10 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   proformaCopy?: boolean
   /** The change-sequence dialog also reads ProForma */
   proformaInput?: boolean
+  /** The change-sequence dialog gets a UniProt accession field that fills in the sequence */
+  uniprotLookup?: boolean
+  /** Identifier holding the shown proteoform as ProForma, both ways */
+  proformaIdentifier?: string | null
   /** Isotope errors tried when matching (shows the setting); null: hidden, exact matches only */
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */

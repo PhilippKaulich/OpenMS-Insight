@@ -757,6 +757,66 @@ class TestProteinSequenceView:
         assert view._get_component_args()["proformaInput"] is True
         assert "proforma_input" not in view._get_cache_config()
 
+    def test_uniprot_lookup_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_uniprot_lookup",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["uniprotLookup"] is False
+        assert view.set_uniprot_lookup() is view
+        assert view._get_component_args()["uniprotLookup"] is True
+        assert (
+            view.set_uniprot_lookup(False)._get_component_args()["uniprotLookup"]
+            is False
+        )
+        assert "uniprot_lookup" not in view._get_cache_config()
+        enabled = ProteinSequenceView(
+            cache_id="seq_uniprot_lookup_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            uniprot_lookup=True,
+        )
+        assert enabled._get_component_args()["uniprotLookup"] is True
+
+    def test_proforma_identifier_args(self, mock_streamlit, temp_cache_dir: Path):
+        data = pl.LazyFrame(
+            {
+                "hit_index": [0],
+                "sequence": [["A"]],
+                "masses": [[1000.0]],
+                "precursor_mass": [1000.0],
+            }
+        )
+        view = ProteinSequenceView(
+            cache_id="seq_proforma_identifier",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+        )
+        assert view._get_component_args()["proformaIdentifier"] is None
+        assert view.set_proforma_identifier("proforma") is view
+        assert view._get_component_args()["proformaIdentifier"] == "proforma"
+        assert "proforma_identifier" not in view._get_cache_config()
+        linked = ProteinSequenceView(
+            cache_id="seq_proforma_identifier_on",
+            data=data,
+            filters={"protein": "hit_index"},
+            cache_path=str(temp_cache_dir),
+            proforma_identifier="proforma",
+        )
+        assert linked._get_component_args()["proformaIdentifier"] == "proforma"
+
     def test_isotope_errors_args(self, mock_streamlit, temp_cache_dir: Path):
         view = ProteinSequenceView(
             cache_id="seq_isotope_errors",

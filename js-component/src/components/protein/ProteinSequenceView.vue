@@ -7,7 +7,7 @@
        the fixed-modification list below its field -->
   <div
     class="sequence-view-row"
-    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT}px` } : undefined"
+    :style="sequenceDialog ? { minHeight: `${SEQUENCE_DIALOG_HEIGHT + (args.uniprotLookup ? UNIPROT_ROW_HEIGHT : 0)}px` } : undefined"
   >
   <div class="sequence-view-column">
   <div v-if="args.title" class="d-flex justify-center">
@@ -274,6 +274,35 @@
           </v-menu>
         </div>
       </div>
+      <!-- A ProForma the app gave that the view cannot read -->
+      <v-alert
+        v-if="proformaSyncError"
+        type="error"
+        variant="tonal"
+        density="compact"
+        class="mx-4 mb-2"
+      >
+        {{ proformaSyncError }}
+      </v-alert>
+      <!-- No sequence yet: one button opens the Change sequence dialog -->
+      <div
+        v-if="sequence.length === 0 && shouldShowSequenceChangeButton && !isEdited"
+        class="d-flex flex-column align-center text-center py-6 px-4"
+      >
+        <v-btn
+          :color="accentColor"
+          variant="tonal"
+          size="large"
+          prepend-icon="mdi-dna"
+          class="text-none"
+          @click="openSequenceDialog"
+        >
+          {{ args.uniprotLookup ? 'Enter a sequence or UniProt accession' : 'Enter a sequence' }}
+        </v-btn>
+        <div class="text-body-2 text-medium-emphasis mt-2">
+          One-letter codes{{ args.proformaInput ? ', or ProForma with modifications' : '' }}{{ args.uniprotLookup ? ', or the sequence of a UniProt entry' : '' }}
+        </div>
+      </div>
       <!-- Regex highlighting input -->
       <div v-if="showRegexHighlight" class="pb-4 px-4">
         <v-card variant="outlined" class="pa-3">
@@ -434,6 +463,42 @@
         Enter Custom Sequence
       </v-card-title>
       <v-card-text style="padding-bottom: 12px">
+        <!-- A UniProt accession fills the field below with its sequence -->
+        <div v-if="args.uniprotLookup" class="mb-4">
+          <div class="d-flex align-start" style="gap: 8px">
+            <v-text-field
+              v-model="uniprotAccession"
+              label="UniProt accession (optional)"
+              placeholder="e.g. P0ACF0"
+              density="compact"
+              clearable
+              :error-messages="uniprotError"
+              :hint="uniprotEntry ? undefined : 'Gets the sequence of the entry; edit it or add modifications below'"
+              :persistent-hint="!uniprotEntry"
+              @keydown.enter.prevent="lookUpUniProt"
+            >
+              <template #prepend-inner>
+                <v-icon>mdi-database-search</v-icon>
+              </template>
+            </v-text-field>
+            <v-btn
+              :color="accentColor"
+              variant="tonal"
+              :loading="uniprotLoading"
+              :disabled="!uniprotAccession || !uniprotAccession.trim()"
+              style="margin-top: 2px"
+              @click="lookUpUniProt"
+            >
+              Get sequence
+            </v-btn>
+          </div>
+          <div v-if="uniprotEntry" class="text-caption" style="margin-top: -14px">
+            <a :href="uniprotEntry.url" target="_blank" rel="noopener">{{ uniprotEntry.accession }}</a>
+            · {{ uniprotEntry.entryName }} · {{ uniprotEntry.proteinName }}
+            <template v-if="uniprotEntry.organism"> · <i>{{ uniprotEntry.organism }}</i></template>
+            · {{ uniprotEntry.sequence.length }} residues
+          </div>
+        </div>
         <!-- The example shows only while typing, under the raised label -->
         <v-textarea
           v-model="customSequenceInput"
@@ -529,6 +594,7 @@ import {
   toProForma,
   type ProFormaModification,
 } from './proforma'
+import { fetchUniProtEntry, type UniProtEntry } from './uniprot'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -554,6 +620,16 @@ import {
 // Height (px) the Change sequence dialog needs: title, the sequence field,
 // the fixed-modification picker with its open list, and the buttons
 const SEQUENCE_DIALOG_HEIGHT = 640
+// Extra height of the UniProt accession row above the sequence field
+const UNIPROT_ROW_HEIGHT = 90
+
+// ProForma name of a residue menu label: a library id such as
+// 'Acetyl (N-term)' gives 'Acetyl'; a custom mass or a sum has none
+function proFormaName(label: string | undefined): string | undefined {
+  if (!label || label === 'Custom' || label.includes(' + ')) return undefined
+  if (/^[+-]?\d/.test(label)) return undefined
+  return label.replace(/\s*\([^)]*\)$/, '')
+}
 
 // One label and value of the summary lines above the sequence
 type SummaryItem = { label: string; value: string }
@@ -753,6 +829,16 @@ export default defineComponent({
       // Sequence change dialog properties
       sequenceDialog: false as boolean,
       SEQUENCE_DIALOG_HEIGHT,
+      UNIPROT_ROW_HEIGHT,
+      // UniProt lookup in the change-sequence dialog
+      uniprotAccession: '' as string | null,
+      uniprotError: '' as string,
+      uniprotLoading: false as boolean,
+      uniprotEntry: null as UniProtEntry | null,
+      // Two-way ProForma link with the app (args.proformaIdentifier): the
+      // residues a ProForma from the app asked for, until the view shows them
+      pendingProFormaSequence: null as string | null,
+      proformaSyncError: '' as string,
       // Modification ids picked in the change-sequence dialog
       customModifications: [] as string[],
       // Where the matched fragments place each modification set on a residue
@@ -763,6 +849,17 @@ export default defineComponent({
     }
   },
   computed: {
+    // The shown proteoform as ProForma, for the app's identifier
+    proFormaText(): string {
+      return this.args.proformaIdentifier ? this.proForma() : ''
+    },
+    // The ProForma the app put in its identifier (null: none)
+    externalProForma(): string | null {
+      const id = this.args.proformaIdentifier
+      if (!id) return null
+      const value = this.selectionStore.$state[id]
+      return typeof value === 'string' ? value : null
+    },
     fragmentationMethodItems(): string[] {
       return [...FRAGMENTATION_METHODS.map((m) => m.name), CUSTOM_METHOD]
     },
@@ -1118,12 +1215,24 @@ export default defineComponent({
     },
   },
   watch: {
+    // The view's proteoform changed (sequence, fixed or variable modifications)
+    proFormaText() {
+      this.publishProForma()
+    },
+    // The app gave a new ProForma
+    externalProForma(value: string | null) {
+      if (value === null || value === this.proFormaText) return
+      this.applyExternalProForma(value)
+    },
     protonShiftAllowed(allowed: boolean) {
       if (!allowed) this.ionTypesExtra['proton loss/addition'] = false
     },
     // An error about the input goes once the input changes
     customSequenceInput() {
       this.sequenceInputError = ''
+    },
+    uniprotAccession() {
+      this.uniprotError = ''
     },
     // The residue menus read the variable-modification library from the store
     'args.variableModificationLibrary': {
@@ -1235,6 +1344,12 @@ export default defineComponent({
     this.setSelectedAA(undefined)
     this.syncStoreFromEntry()
     this.updateSettings()
+    // A ProForma the app gave before the view existed, else the view's own
+    if (this.externalProForma !== null && this.externalProForma !== this.proFormaText) {
+      this.applyExternalProForma(this.externalProForma)
+    } else {
+      this.publishProForma()
+    }
     if (typeof this.args.isotopeErrors === 'number') {
       this.applyIsotopeErrorsArg(this.args.isotopeErrors)
     }
@@ -2078,8 +2193,11 @@ export default defineComponent({
         end: m.end,
         mass: m.mass_diff,
       }))
+      const labels = this.variableModData.variableModLabels ?? {}
       for (const [index, mass] of Object.entries(this.variableModifications)) {
-        if (mass) modifications.push({ start: Number(index), end: Number(index), mass })
+        if (!mass) continue
+        const name = proFormaName(labels[Number(index)])
+        modifications.push({ start: Number(index), end: Number(index), mass, ...(name ? { name } : {}) })
       }
       return toProForma({
         sequence: this.sequence,
@@ -2150,7 +2268,27 @@ export default defineComponent({
         : ''
       this.customModifications = [...(this.args.modifications ?? [])]
       this.sequenceInputError = ''
+      this.uniprotAccession = ''
+      this.uniprotError = ''
+      this.uniprotEntry = null
       this.sequenceDialog = true
+    },
+    // The sequence of a UniProt entry goes into the sequence field
+    async lookUpUniProt(): Promise<void> {
+      const input = this.uniprotAccession ?? ''
+      if (!input.trim() || this.uniprotLoading) return
+      this.uniprotLoading = true
+      this.uniprotError = ''
+      try {
+        const entry = await fetchUniProtEntry(input)
+        this.uniprotEntry = entry
+        this.customSequenceInput = entry.sequence
+      } catch (error) {
+        this.uniprotEntry = null
+        this.uniprotError = error instanceof Error ? error.message : String(error)
+      } finally {
+        this.uniprotLoading = false
+      }
     },
     // The edited residues become the whole sequence; a modification stays on
     // its residue while that residue is unchanged
@@ -2176,6 +2314,56 @@ export default defineComponent({
         end_position: residues.length - 1,
         modifications,
       })
+    },
+    // The shown proteoform goes to the app's ProForma identifier; held back
+    // while the view still waits for residues the app asked for
+    publishProForma(): void {
+      const id = this.args.proformaIdentifier
+      if (!id || this.isEdited) return
+      if (this.pendingProFormaSequence !== null) {
+        if (this.sequence.join('') !== this.pendingProFormaSequence) return
+        this.pendingProFormaSequence = null
+      }
+      const text = this.proFormaText
+      if ((this.selectionStore.$state[id] ?? '') === text) return
+      this.selectionStore.updateSelection(id, text)
+    },
+    // A ProForma from the app becomes the view's sequence and modifications,
+    // as if it was applied in the Change sequence dialog
+    applyExternalProForma(text: string): void {
+      this.proformaSyncError = ''
+      if (this.isEdited) return
+      let read
+      try {
+        read = /[[\]<>(){}?-]/.test(text)
+          ? this.readProForma(text)
+          : { sequence: text.toUpperCase().replace(/\s+/g, ''), fixedIds: [] as string[], masses: {}, labels: {} }
+      } catch (error) {
+        this.proformaSyncError = error instanceof Error ? error.message : String(error)
+        return
+      }
+      this.customModifications = [...read.fixedIds]
+      if (this.args.modificationsIdentifier) {
+        this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...read.fixedIds])
+      }
+      this.pendingProFormaSequence = read.sequence
+      if (this.args.sequenceIdentifier) {
+        this.selectionStore.updateSelection(this.args.sequenceIdentifier, read.sequence)
+      }
+      this.variableModData.setAll(read.masses, read.labels)
+      this.$nextTick(() => this.publishProForma())
+    },
+    // The view goes back to no sequence (an empty ProForma from the app): its
+    // residues, fixed and variable modifications are cleared
+    clearSequence(): void {
+      this.variableModData.clear()
+      this.customModifications = []
+      if (this.args.modificationsIdentifier) {
+        this.selectionStore.updateSelection(this.args.modificationsIdentifier, [])
+      }
+      if (this.args.sequenceIdentifier) {
+        this.selectionStore.updateSelection(this.args.sequenceIdentifier, '')
+      }
     },
     closeSequenceDialog(): void {
       this.sequenceDialog = false

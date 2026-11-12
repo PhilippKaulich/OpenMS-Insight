@@ -264,6 +264,8 @@ class ProteinSequenceView(BaseComponent):
         modifications: list[str] | None = None,
         proforma_copy: bool = False,
         proforma_input: bool = False,
+        uniprot_lookup: bool = False,
+        proforma_identifier: str | None = None,
         isotope_errors: int | None = None,
         method_ion_options: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
@@ -369,6 +371,19 @@ class ProteinSequenceView(BaseComponent):
                 looked up in ``modification_library``), terminal and residue
                 modifications by name (looked up in the libraries) or mass,
                 which become the residues' variable modifications.
+            uniprot_lookup: The "Change sequence" dialog gets a UniProt
+                accession field: "Get sequence" asks the UniProt REST API
+                (from the browser) for the entry and puts its sequence into
+                the sequence field, to edit or annotate before applying.
+                Accepts isoforms (``P0ACF0-2``) and FASTA identifiers
+                (``sp|P0ACF0|DBHA_ECOLI``).
+            proforma_identifier: Identifier holding the shown proteoform as
+                ProForma 2.0, both ways: the view writes it whenever its
+                sequence or modifications change (in the dialog, the residue
+                menus), and a ProForma (or plain sequence) the
+                app writes there becomes the view's sequence, fixed and
+                variable modifications. Needs ``sequence_identifier``; a text
+                the view cannot read is shown as an error in the view.
             isotope_errors: Also match fragment masses that are off by up to
                 this many whole isotopes (± n × 1.00235 Da), as deconvolution
                 can place a monoisotopic mass. Shows a "Match isotope errors"
@@ -436,6 +451,8 @@ class ProteinSequenceView(BaseComponent):
         # Per render, not cached
         self._proforma_copy = bool(proforma_copy)
         self._proforma_input = bool(proforma_input)
+        self._uniprot_lookup = bool(uniprot_lookup)
+        self._proforma_identifier = proforma_identifier
         self.set_isotope_errors(isotope_errors)
         self._method_ion_options = bool(method_ion_options)
         self.set_variable_modification_library(
@@ -749,6 +766,30 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_input = bool(enabled)
         return self
 
+    def set_uniprot_lookup(self, enabled: bool = True) -> "ProteinSequenceView":
+        """Show the UniProt accession field in the "Change sequence" dialog.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``uniprot_lookup`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._uniprot_lookup = bool(enabled)
+        return self
+
+    def set_proforma_identifier(self, identifier: str | None) -> "ProteinSequenceView":
+        """Link the shown proteoform with an identifier, as ProForma, both ways.
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``proforma_identifier`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._proforma_identifier = identifier
+        return self
+
     def set_isotope_errors(self, max_errors: int | None = 1) -> "ProteinSequenceView":
         """Match fragments up to ``max_errors`` isotopes off (None: off).
 
@@ -783,6 +824,8 @@ class ProteinSequenceView(BaseComponent):
             "modifications": self._modifications,
             "proformaCopy": self._proforma_copy,
             "proformaInput": self._proforma_input,
+            "uniprotLookup": self._uniprot_lookup,
+            "proformaIdentifier": self._proforma_identifier,
             "isotopeErrors": self._isotope_errors,
             "methodIonOptions": self._method_ion_options,
             "variableModificationLibrary": self._variable_modification_library,
