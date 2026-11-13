@@ -275,6 +275,8 @@ LinePlot(
 
 Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
 
+The mouse wheel zooms x around the mouse while y follows the peaks in view; zooming out past the full extent shows the full view. Shift + wheel or a sideways (trackpad) wheel pans x, and so does dragging with the middle button; panning stops at the ends of the data. A double-click shows the full view. Outside the plot area the wheel scrolls the page.
+
 ### MirrorPlot
 
 Two stick-style spectra rendered against a shared x-axis with the bottom half flipped, used for comparing paired spectra (experimental vs. theoretical, sample vs. reference, MS1 vs. MS2 fragments). Each half is filtered independently, while clicks on either half feed into one shared selection.

@@ -30,6 +30,7 @@ import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
+import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
@@ -93,7 +94,8 @@ export default defineComponent({
     )
     const zoom = useZoomState(() => props.args.zoomIdentifier)
     const hover = usePeakHover()
-    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom, hover }
+    const navigation = useXNavigation()
+    return { streamlitDataStore, selectionStore, measure, labels, pinZoom, topPeaks, zoom, hover, navigation }
   },
   data() {
     return {
@@ -294,12 +296,14 @@ export default defineComponent({
       if (this.manualXRange) {
         return this.manualXRange
       }
+      return this.fullXRange ?? [0, 1]
+    },
 
-      if (!this.isDataReady || !this.plotData) return [0, 1]
-
+    /** The x range of the full view (all peaks, 2 % padding). */
+    fullXRange(): [number, number] | undefined {
+      if (!this.isDataReady || !this.plotData) return undefined
       const [minX, maxX] = finiteExtent(this.plotData.x_values)
       const padding = (maxX - minX) * 0.02
-
       return [minX - padding, maxX + padding]
     },
 
@@ -964,7 +968,8 @@ export default defineComponent({
         await Plotly.react(this.id, this.traces, this.layout, {
           modeBarButtonsToRemove: ['toImage', 'sendDataToCloud'],
           displaylogo: false,
-          scrollZoom: true,
+          // The wheel is handled by useXNavigation (x only)
+          scrollZoom: false,
           responsive: true,
         })
 
@@ -988,6 +993,20 @@ export default defineComponent({
           yName: this.args.yLabel || this.args.yColumn || 'y',
         }))
         this.topPeaks.bind(plotElement)
+        this.navigation.bind(plotElement, {
+          current: () => {
+            const range = plotElement?._fullLayout?.xaxis?.range
+            return range ? [Number(range[0]), Number(range[1])] : undefined
+          },
+          full: () => this.fullXRange,
+          apply: (range) => {
+            this.onRelayout(
+              range
+                ? { 'xaxis.range[0]': range[0], 'xaxis.range[1]': range[1] }
+                : { 'xaxis.autorange': true },
+            )
+          },
+        })
         if (plotElement && needsListeners) {
           plotElement._insightListeners = true
           plotElement.on('plotly_click', (eventData: any) => {
@@ -1026,7 +1045,17 @@ export default defineComponent({
         this.zoom.report(null)
         this.manualXRange = undefined
         this.lastAutoZoomedPeakIndex = undefined
-        this.renderPlot()
+        // A double-click lets Plotly autorange both axes. When the plot was
+        // already at its full view, the new layout equals the last one, so
+        // Plotly.react kept Plotly's own ranges (tallest peak cut off). Set
+        // the ranges again explicitly.
+        this.renderPlot().then(() => {
+          if (!document.getElementById(this.id)) return
+          Plotly.relayout(this.id, {
+            'xaxis.range': [...this.xRange],
+            'yaxis.range': [...this.yRange],
+          } as Partial<Plotly.Layout>)
+        })
       }
     },
 
@@ -1268,6 +1297,11 @@ export default defineComponent({
 <style scoped>
 .lineplot {
   position: relative;
+}
+
+/* Middle-button pan (useXNavigation) */
+.plot-container :deep(.x-panning .nsewdrag) {
+  cursor: grabbing !important;
 }
 
 .plot-container {
