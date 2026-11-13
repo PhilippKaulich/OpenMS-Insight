@@ -83,6 +83,11 @@ def check_fragment_settings(settings: dict[str, Any] | None) -> None:
         raise ValueError(
             f"settings['tolerance_unit'] must be 'ppm' or 'Da', not {unit!r}"
         )
+    show = settings.get("show_truncations")
+    if show is not None and not isinstance(show, bool):
+        raise ValueError(
+            f"settings['show_truncations'] must be True or False, not {show!r}"
+        )
     method = settings.get("fragmentation")
     if method is not None and (
         not isinstance(method, str)
@@ -357,8 +362,12 @@ class ProteinSequenceView(BaseComponent):
                 y-1 z•, also written a+1 x+1 z+1; default b and y) and
                 ``fragmentation`` ('CID/HCD', 'ETD/ECD', 'EThcD' or 'UVPD',
                 selecting that method's ion series when ``ion_types`` is not
-                given). The user can change all of them in the view. See
-                ``check_fragment_settings``.
+                given), ``show_truncations`` (True default: the residues
+                outside an identified proteoform are drawn greyed; False:
+                each truncated terminus is marked by a break line labelled
+                with the positions of those residues, whose hover text gives
+                their number and the residues themselves). The user can change all of them in the view.
+                See ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
             svg_filename: File name (without extension) of the image download;

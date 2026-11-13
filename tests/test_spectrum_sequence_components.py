@@ -1515,6 +1515,8 @@ class TestFragmentSettings:
             {"tolerance_unit": 1},
             {"fragmentation": "HCD/ETD"},
             {"fragmentation": ["ETD"]},
+            {"show_truncations": "no"},
+            {"show_truncations": 0},
         ],
     )
     def test_invalid_settings_raise(self, settings):
@@ -1536,6 +1538,8 @@ class TestFragmentSettings:
             {"fragmentation": "CID / HCD"},
             {"fragmentation": "uvpd"},
             {"fragmentation": "EThcD", "extra": 1},
+            {"show_truncations": False},
+            {"show_truncations": True, "tolerance": 5},
             # Passed on unchecked, as before
             {"tolerance": "10", "ion_types": ["b", "zp2"]},
         ],

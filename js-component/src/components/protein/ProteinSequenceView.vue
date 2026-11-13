@@ -336,13 +336,35 @@
       </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
+          <!-- With truncations hidden, a break line one cell per truncated
+               residue (at most a row) stands for the residues outside the
+               proteoform. The first row runs: an empty row-number cell, the
+               break line (positions, then zig-zag), N, the sequence; the last:
+               the sequence, C, the break line (zig-zag, then positions), on a
+               row of its own when the rest of C's row is too short for it. -->
           <div
-            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="aa_index === sequence_start && truncatedBefore > 0"
+            class="truncated-gap"
+          ></div>
+          <TruncationBreak
+            :range="truncatedRange(1, truncatedBefore)" :text="truncatedText(truncatedBefore, 1, truncatedBefore)"
+            :mass="truncatedMassText(0, truncatedBefore)" :residues="truncatedResidues(0, truncatedBefore)"
+            testid="truncated-n-term" data-testid="truncated-n-term"
+            v-if="aa_index === sequence_start && truncatedBefore > 0 && nBreakCells > 0"
+            :cells="nBreakCells" :style="{ gridColumn: `span ${nBreakCells}` }"
+          />
+          <ProteinTerminalCell
+            v-if="(aa_index === 0 && truncatedBefore === 0) || (aa_index === sequence_start && truncatedBefore > 0)"
+            protein-terminal="N-term" :truncated=n_truncation :index="-1"
+            :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"
+          />
+          <div
+            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && (aa_index >= sequence_start) && (aa_index <= sequence_end) && (gridCell(aa_index) === 0) && (aa_index > sequence_start || truncatedBefore > 0))"
             class="row-number row-number-start"
+            :style="showTruncations ? undefined : { gridColumn: '1' }"
           >
-          {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+          {{ aa_index + 1 }}
           </div>
-          <ProteinTerminalCell v-if="aa_index === 0" protein-terminal="N-term" :truncated=n_truncation :index="-1" :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"/>
           <AminoAcidCell
             v-if="showTruncations || ((sequence_start <= aa_index) && (sequence_end >= aa_index))"
             :index="aa_index"
@@ -360,10 +382,10 @@
             @selected="aminoAcidSelected"
           />
           <div
-            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && (gridCell(aa_index) === perRow - 1) && (aa_index < sequence_end) && (aa_index >= sequence_start))"
             class="row-number row-number-end"
           >
-            {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+            {{ aa_index + 1 }}
           </div>
           <ProteinTerminalCell
             v-if="aa_index === sequence.length - 1"
@@ -372,6 +394,20 @@
             :disable-variable-modification-selection="disableVariableModifications"
             :determined="c_determined"
             :font-size="fontSize"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline"
+            :cells="cBreakCells" :style="{ gridColumn: `span ${cBreakCells}` }"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline"
+            :cells="cBreakCells" :style="{ gridColumn: `2 / span ${cBreakCells}` }"
           />
           </template>
       </div>
@@ -582,6 +618,8 @@ import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
+import TruncationBreak from './TruncationBreak.vue'
+import { STANDARD_RESIDUE_MASSES } from '@/utils/measure'
 import { builtInLibrary, extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
 import {
   describeLocalization,
@@ -671,6 +709,7 @@ export default defineComponent({
     ProteinTerminalCell,
     ImageScreenshot,
     InternalFragmentTrack,
+    TruncationBreak,
   },
   props: {
     args: {
@@ -1038,6 +1077,38 @@ export default defineComponent({
     },
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
+    },
+    /** Cells of the N-terminal break line: one per truncated residue, at
+     *  most a row beside N */
+    nBreakCells(): number {
+      return Math.min(this.truncatedBefore, Math.max(this.perRow - 1, 0))
+    },
+    /** Cells before the first residue of the proteoform in the grid's first
+     *  row: the break line and N (truncations hidden) */
+    gridOffset(): number {
+      return this.truncatedBefore > 0 ? this.nBreakCells + 1 : 0
+    },
+    /** Cells of the C-terminal break line: one per truncated residue, at
+     *  most a row */
+    cBreakCells(): number {
+      return Math.min(this.truncatedAfter, this.perRow)
+    },
+    /** The C-terminal break line fits in the cells left after C in the last
+     *  row; C takes the row-number column when the last residue ends a row */
+    cBreakInline(): boolean {
+      const last = this.gridCell(this.sequence_end)
+      const free = last === this.perRow - 1 ? 0 : this.perRow - 2 - last
+      return this.cBreakCells <= free
+    },
+    /** Residues before the proteoform truncated from the grid (truncations hidden) */
+    truncatedBefore(): number {
+      return this.showIdentification && !this.showTruncations ? this.sequence_start : 0
+    },
+    /** Residues after the proteoform truncated from the grid (truncations hidden) */
+    truncatedAfter(): number {
+      return this.showIdentification && !this.showTruncations
+        ? Math.max(0, this.sequence.length - 1 - this.sequence_end)
+        : 0
     },
     c_determined(): boolean {
       return this.sequence_end_reported >= 0
@@ -1483,6 +1554,43 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
+    /** "1–23": protein positions (1-based) of truncated residues, the
+     *  label of the break line marking a truncated terminus */
+    truncatedRange(first: number, last: number): string {
+      return first === last ? `${first}` : `${first}–${last}`
+    },
+    /** "23 residues truncated (1–23)": hover text and accessible label
+     *  of the break line */
+    truncatedText(count: number, first: number, last: number): string {
+      return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${this.truncatedRange(first, last)})`
+    },
+    /** Cell (0-based column of the residue cells) of residue `index` in
+     *  the grid with truncations hidden */
+    gridCell(index: number): number {
+      return (this.gridOffset + index - this.sequence_start) % this.perRow
+    },
+    /** Summed monoisotopic residue masses (Da) of the truncated residues
+     *  (0-based, end exclusive); null when one of them is not a standard
+     *  residue */
+    truncatedMass(start: number, end: number): number | null {
+      let mass = 0
+      for (const aa of this.sequence.slice(start, end)) {
+        const m = STANDARD_RESIDUE_MASSES[aa === 'I' || aa === 'L' ? 'I/L' : aa]
+        if (m === undefined) return null
+        mass += m
+      }
+      return mass
+    },
+    /** "Residue mass 2,156.21 Da": hover text of the break line */
+    truncatedMassText(start: number, end: number): string | null {
+      const mass = this.truncatedMass(start, end)
+      if (mass === null) return null
+      return `Residue mass ${mass.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Da`
+    },
+    /** The truncated residues themselves (0-based, end exclusive), shown on hover */
+    truncatedResidues(start: number, end: number): string {
+      return this.sequence.slice(start, end).join('')
+    },
     updateSettings() {
       const settings = this.settings
       if (settings?.ion_types !== undefined && settings.ion_types !== null) {
@@ -1552,7 +1660,9 @@ export default defineComponent({
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
-          this.visibilityOptions.push({ text: 'Truncations', selected: true })
+          // settings.show_truncations === false starts with the truncated
+          // termini summarized instead of drawn
+          this.visibilityOptions.push({ text: 'Truncations', selected: this.settings?.show_truncations !== false })
           this.visibilityOptions.push({ text: 'Tags', selected: true })
           this.visibilityOptions.push({ text: 'Internal fragments', selected: true })
           this.updateSettings()
@@ -2642,6 +2752,19 @@ export default defineComponent({
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   opacity: var(--v-medium-emphasis-opacity);
+}
+
+.sequence-grid > .truncated-gap {
+  aspect-ratio: auto;
+  grid-column: 1;
+}
+
+.sequence-grid > .truncated-residues {
+  aspect-ratio: auto;
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
 }
 
 .row-number-start {
