@@ -595,6 +595,7 @@ import {
   type ProFormaModification,
 } from './proforma'
 import { fetchUniProtEntry, type UniProtEntry } from './uniprot'
+import type { ProFormaLink, ProFormaRead } from '@/types/protein-sequence-data'
 import {
   CUSTOM_METHOD,
   FRAGMENTATION_METHODS,
@@ -622,6 +623,15 @@ import {
 const SEQUENCE_DIALOG_HEIGHT = 640
 // Extra height of the UniProt accession row above the sequence field
 const UNIPROT_ROW_HEIGHT = 90
+
+// The modifications over several residues, as a key to compare entries by
+function spanKey(mods: { start: number; end: number; mass: number }[]): string {
+  return mods
+    .filter((m) => m.start !== m.end)
+    .map((m) => `${m.start}:${m.end}:${m.mass.toFixed(3)}`)
+    .sort()
+    .join(',')
+}
 
 // ProForma name of a residue menu label: a library id such as
 // 'Acetyl (N-term)' gives 'Acetyl'; a custom mass or a sum has none
@@ -838,6 +848,12 @@ export default defineComponent({
       // Two-way ProForma link with the app (args.proformaIdentifier): the
       // residues a ProForma from the app asked for, until the view shows them
       pendingProFormaSequence: null as string | null,
+      // ... and the spans of several residues the app's entry then has
+      pendingProFormaSpans: null as string | null,
+      // A ProForma from the app whose pyOpenMS reading has not come yet
+      waitingProForma: null as string | null,
+      // Number of the app's (or the dialog's) request the view shows
+      appliedProFormaN: 0,
       proformaSyncError: '' as string,
       // Modification ids picked in the change-sequence dialog
       customModifications: [] as string[],
@@ -853,12 +869,28 @@ export default defineComponent({
     proFormaText(): string {
       return this.args.proformaIdentifier ? this.proForma() : ''
     },
-    // The ProForma the app put in its identifier (null: none)
-    externalProForma(): string | null {
+    // The app's ProForma as pyOpenMS read it (Python side), when it can
+    proformaRead(): ProFormaRead | undefined {
+      return (this.streamlitDataStore.allDataForDrawing.proformaRead as ProFormaRead | null) ?? undefined
+    },
+    // What is in the ProForma identifier: {text, by, n}. 'app' and 'dialog'
+    // are requests, numbered; 'view' is what the view shows, with the number
+    // of the request it answers. A plain string counts as a request.
+    proformaLink(): ProFormaLink | null {
       const id = this.args.proformaIdentifier
       if (!id) return null
-      const value = this.selectionStore.$state[id]
-      return typeof value === 'string' ? value : null
+      const value = this.selectionStore.$state[id] as unknown
+      if (typeof value === 'string') return { text: value, by: 'app', n: 0 }
+      if (value && typeof value === 'object' && typeof (value as ProFormaLink).text === 'string') {
+        return value as ProFormaLink
+      }
+      return null
+    },
+    // The ProForma the app (or the dialog) asked for, null when none is new
+    externalProForma(): string | null {
+      const link = this.proformaLink
+      if (!link || link.by === 'view') return null
+      return link.text
     },
     fragmentationMethodItems(): string[] {
       return [...FRAGMENTATION_METHODS.map((m) => m.name), CUSTOM_METHOD]
@@ -1221,7 +1253,24 @@ export default defineComponent({
     },
     // The app gave a new ProForma
     externalProForma(value: string | null) {
-      if (value === null || value === this.proFormaText) return
+      const link = this.proformaLink
+      if (value === null || !link) return
+      if (link.n !== 0 && link.n <= this.appliedProFormaN) return
+      this.appliedProFormaN = link.n
+      if (value === this.proFormaText) {
+        this.publishProForma()
+        return
+      }
+      this.applyExternalProForma(value)
+    },
+    // pyOpenMS's reading of it can come a render later
+    proformaRead(read: ProFormaRead | undefined) {
+      const value = this.externalProForma
+      if (!read || value === null || read.text !== value) return
+      if (value === this.proFormaText) {
+        this.waitingProForma = null
+        return
+      }
       this.applyExternalProForma(value)
     },
     protonShiftAllowed(allowed: boolean) {
@@ -1346,6 +1395,7 @@ export default defineComponent({
     this.updateSettings()
     // A ProForma the app gave before the view existed, else the view's own
     if (this.externalProForma !== null && this.externalProForma !== this.proFormaText) {
+      this.appliedProFormaN = this.proformaLink?.n ?? 0
       this.applyExternalProForma(this.externalProForma)
     } else {
       this.publishProForma()
@@ -1524,12 +1574,6 @@ export default defineComponent({
       }
 
       const observedMass = this.spectrum.precursorMass ?? 0
-      if (observedMass === 0) {
-        // if selected scan is not eligible for this view
-        this.massData = []
-        return
-      }
-
       let theoreticalMass = this.theoreticalMass
       // if variable modification is added, update theoretical mass accordingly
       if (!this.variableModData.isEmpty) {
@@ -1538,14 +1582,25 @@ export default defineComponent({
           theoreticalMass += varMass
         })
       }
-      const deltaMassDa = Math.abs(theoreticalMass - observedMass)
       this.massTitle = 'Precursor'
-      this.massData = [
-        { label: 'Theoretical mass', value: theoreticalMass.toFixed(2) },
-        { label: 'Observed mass', value: observedMass.toFixed(2) },
-        { label: 'Δ Mass (Da)', value: deltaMassDa.toFixed(2) },
-        ...this.precursorIsotopeRows(theoreticalMass, observedMass),
-      ]
+      this.massData = []
+      // Without a sequence there is no theoretical mass to show
+      if (this.sequence.length > 0) {
+        this.massData.push({ label: 'Theoretical mass', value: theoreticalMass.toFixed(2) })
+      }
+      // Without a precursor mass: no observed mass to compare with
+      if (observedMass > 0) {
+        const deltaMassDa = Math.abs(theoreticalMass - observedMass)
+        this.massData.push(
+          { label: 'Observed mass', value: observedMass.toFixed(2) },
+          ...(this.sequence.length > 0
+            ? [
+                { label: 'Δ Mass (Da)', value: deltaMassDa.toFixed(2) },
+                ...this.precursorIsotopeRows(theoreticalMass, observedMass),
+              ]
+            : []),
+        )
+      }
       if (this.spectrumFragmentation) {
         this.massData.push({ label: 'Fragmentation', value: this.spectrumFragmentation })
       }
@@ -2188,11 +2243,10 @@ export default defineComponent({
       // An edited identification carries its modifications in the residue
       // menus' store (below) only
       const searched = this.isEdited ? [] : this.modifications
-      const modifications: ProFormaModification[] = searched.map((m) => ({
-        start: m.start,
-        end: m.end,
-        mass: m.mass_diff,
-      }))
+      const modifications: ProFormaModification[] = searched.map((m) => {
+        const name = proFormaName(m.labels ?? undefined)
+        return { start: m.start, end: m.end, mass: m.mass_diff, ...(name ? { name } : {}) }
+      })
       const labels = this.variableModData.variableModLabels ?? {}
       for (const [index, mass] of Object.entries(this.variableModifications)) {
         if (!mass) continue
@@ -2320,13 +2374,19 @@ export default defineComponent({
     publishProForma(): void {
       const id = this.args.proformaIdentifier
       if (!id || this.isEdited) return
+      // The app's text first, once its reading is there
+      if (this.waitingProForma !== null) return
       if (this.pendingProFormaSequence !== null) {
         if (this.sequence.join('') !== this.pendingProFormaSequence) return
+        const spans = spanKey(this.modifications.map((m) => ({ start: m.start, end: m.end, mass: m.mass_diff })))
+        if (this.pendingProFormaSpans !== null && spans !== this.pendingProFormaSpans) return
         this.pendingProFormaSequence = null
+        this.pendingProFormaSpans = null
       }
       const text = this.proFormaText
-      if ((this.selectionStore.$state[id] ?? '') === text) return
-      this.selectionStore.updateSelection(id, text)
+      // The same text is there already: nothing to tell the app
+      if (this.proformaLink?.text === text) return
+      this.selectionStore.updateSelection(id, { text, by: 'view', n: this.appliedProFormaN })
     },
     // A ProForma from the app becomes the view's sequence and modifications,
     // as if it was applied in the Change sequence dialog
@@ -2334,19 +2394,50 @@ export default defineComponent({
       this.proformaSyncError = ''
       if (this.isEdited) return
       let read
-      try {
-        read = /[[\]<>(){}?-]/.test(text)
-          ? this.readProForma(text)
-          : { sequence: text.toUpperCase().replace(/\s+/g, ''), fixedIds: [] as string[], masses: {}, labels: {} }
-      } catch (error) {
-        this.proformaSyncError = error instanceof Error ? error.message : String(error)
+      const fromApp = this.proformaRead
+      if (fromApp && fromApp.text === text) {
+        this.waitingProForma = null
+        // Read by pyOpenMS: residue and terminal modifications go to the
+        // residue menus; spans of several residues are in the app's entry
+        if (fromApp.error) {
+          this.proformaSyncError = fromApp.error
+          return
+        }
+        const masses: Record<number, number> = {}
+        const labels: Record<number, string> = {}
+        for (const m of fromApp.modifications ?? []) {
+          if (m.start !== m.end) continue
+          masses[m.start] = (masses[m.start] ?? 0) + m.mass
+          labels[m.start] = labels[m.start] ? `${labels[m.start]} + ${m.label}` : m.label
+        }
+        read = { sequence: fromApp.sequence ?? '', fixedIds: fromApp.fixed_ids ?? [], masses, labels }
+      } else if (this.args.proformaReader === 'pyopenms' && /[[\]<>(){}?-]/.test(text)) {
+        // ProForma is read by pyOpenMS on the app's side: wait for it
+        this.waitingProForma = text
         return
+      } else {
+        try {
+          read = /[[\]<>(){}?-]/.test(text)
+            ? this.readProForma(text)
+            : { sequence: text.toUpperCase().replace(/\s+/g, ''), fixedIds: [] as string[], masses: {}, labels: {} }
+        } catch (error) {
+          // The app still sends pyOpenMS's reading of it
+          if (this.args.proformaReader === 'pyopenms') {
+            this.waitingProForma = text
+            return
+          }
+          this.proformaSyncError = error instanceof Error ? error.message : String(error)
+          return
+        }
       }
       this.customModifications = [...read.fixedIds]
       if (this.args.modificationsIdentifier) {
         this.selectionStore.updateSelection(this.args.modificationsIdentifier, [...read.fixedIds])
       }
       this.pendingProFormaSequence = read.sequence
+      this.pendingProFormaSpans = fromApp && fromApp.text === text
+        ? spanKey(fromApp.modifications ?? [])
+        : null
       if (this.args.sequenceIdentifier) {
         this.selectionStore.updateSelection(this.args.sequenceIdentifier, read.sequence)
       }
@@ -2421,6 +2512,22 @@ export default defineComponent({
     },
     submitCustomSequence(): void {
       const input = this.customSequenceInput
+      // Linked with the app and read by pyOpenMS there: the app takes it
+      if (
+        this.args.proformaIdentifier && this.args.proformaReader === 'pyopenms' &&
+        !this.isEdited && /[[\]<>(){}?-]/.test(input)
+      ) {
+        this.proformaSyncError = ''
+        this.selectionStore.updateSelection(this.args.proformaIdentifier, {
+          text: input.trim(),
+          by: 'dialog',
+          n: Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1,
+        })
+        this.sequenceDialog = false
+        this.customSequenceInput = ''
+        this.sequenceInputError = ''
+        return
+      }
       if (this.args.proformaInput && /[[\]<>(){}?-]/.test(input)) {
         let read
         try {

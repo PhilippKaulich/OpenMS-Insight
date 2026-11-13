@@ -23,6 +23,22 @@ export type SequenceData = {
   edited?: boolean | null
 }
 
+// What the ProForma identifier holds: a request of the app or of the view's
+// dialog ('app', 'dialog'; n counts them up) or what the view shows ('view',
+// n: the request it answers). An app may also write a plain string.
+export type ProFormaLink = { text: string; by: 'app' | 'dialog' | 'view'; n: number }
+
+// The app's ProForma (proformaIdentifier) as pyOpenMS read it on the Python
+// side: modifications are spans of residues (start == end: one residue; -1 the
+// N-terminus, the sequence length the C-terminus), or an error to show.
+export type ProFormaRead = {
+  text: string
+  error?: string
+  sequence?: string
+  fixed_ids?: string[]
+  modifications?: { start: number; end: number; mass: number; label: string }[]
+}
+
 // What an edit of an identification writes to editIdentifier. 'edit' starts
 // editing the search result, 'reset' goes back to it, 'update' carries the
 // edited sequence and modifications (positions in `sequence`, start == end;

@@ -92,7 +92,9 @@ export function toProForma(input: ProFormaInput): string {
       const start = Math.max(first, mod.start)
       const end = Math.min(last, mod.end)
       if (end < start) continue
-      ranges.push({ ...mod, start, end })
+      // Anywhere in the proteoform: an unlocalized modification
+      if (start === first && end === last) unlocalized.push(tag(mod))
+      else ranges.push({ ...mod, start, end })
     }
   }
   // Ranges that do not overlap an earlier one, or contain a tagged residue
@@ -124,7 +126,7 @@ export function toProForma(input: ProFormaInput): string {
 
   return (
     prefix +
-    unlocalized.map((t) => `${t}?`).join('') +
+    (unlocalized.length ? `${unlocalized.join('')}?` : '') +
     (nTerm.length ? `${nTerm.join('')}-` : '') +
     body +
     (cTerm.length ? `-${cTerm.join('')}` : '')
