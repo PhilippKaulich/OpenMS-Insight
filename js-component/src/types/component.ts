@@ -481,6 +481,18 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
+  /** Column splitting the rows into views, one shown at a time */
+  viewColumn?: string
+  /** [view value, button label] pairs, in button order */
+  viewNames?: Array<[string, string]>
+  viewDefault?: string
+  /** State identifier the picked view is written to */
+  viewIdentifier?: string
+  /** Numbers of first x values the "Top n" menu offers */
+  topChoices?: number[]
+  topDefault?: number
+  /** Pixels per category of a horizontal plot that grows with its bars */
+  barHeight?: number
 }
 
 /**
