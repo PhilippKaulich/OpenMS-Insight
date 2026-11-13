@@ -35,10 +35,18 @@ export function stableStringify(value: unknown): string {
 
 const COUNTER_KEYS = new Set(['counter', 'selection_counter', 'pagination_counter'])
 
-/** The selection values of a state, without its counters (stableStringify). */
+/**
+ * The selection values of a state, without its counters (stableStringify).
+ * A key without a value counts as absent: Python leaves out a selection it
+ * cleared, while a view keeps it as null, and either means "nothing selected".
+ */
 export function stateValues(state: Record<string, unknown>): string {
   return stableStringify(
-    Object.fromEntries(Object.entries(state).filter(([key]) => !COUNTER_KEYS.has(key)))
+    Object.fromEntries(
+      Object.entries(state).filter(
+        ([key, value]) => !COUNTER_KEYS.has(key) && value !== null && value !== undefined
+      )
+    )
   )
 }
 

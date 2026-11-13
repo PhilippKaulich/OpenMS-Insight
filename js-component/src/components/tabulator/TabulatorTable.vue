@@ -362,6 +362,9 @@ export default defineComponent({
       // These are local state that persists during the request-response cycle
       requestedSortColumn: '' as string,
       requestedSortDir: 'asc' as 'asc' | 'desc',
+      // True while the table loads a page it already holds (after new rows
+      // arrived): Tabulator then shows no Loading overlay
+      quietReload: false as boolean,
       // Track the counter value when AJAX request was made (for stale response detection)
       pendingRequestCounter: null as number | null,
       // multi_select: last check box toggled (for Shift ranges), and a check box
@@ -854,7 +857,10 @@ export default defineComponent({
     }
     // A table fitted to its rows resizes with them: the frame follows it
     if (!this.isServerSidePagination) {
+      // Not before the table is built: until then it is a toolbar over an empty
+      // box, and the frame shrank to that and grew back with the rows
       this.rootResizeObserver = new ResizeObserver(() => {
+        if (!this.isTableBuilt) return
         Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
       })
       this.rootResizeObserver.observe(this.$el as HTMLElement)
@@ -1193,6 +1199,8 @@ export default defineComponent({
           tabulatorOptions.ajaxURL = 'streamlit://data'
           // Custom request handler
           tabulatorOptions.ajaxRequestFunc = this.handleRemoteRequest.bind(this)
+          // No overlay for a page the table already holds
+          tabulatorOptions.dataLoader = () => !this.quietReload
         } else {
           // For client-side pagination, set data directly
           tabulatorOptions.data = this.preparedTableData
@@ -1313,6 +1321,16 @@ export default defineComponent({
             console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
             return
           }
+          // The header click already asked for this sort (handleRemoteRequest):
+          // asking again would cost Python a second rerun
+          if (
+            this.pendingDataRequest &&
+            sortColumn === this.requestedSortColumn &&
+            sortDir === this.requestedSortDir
+          ) {
+            console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort already requested, skipping`)
+            return
+          }
 
           console.log(`[TabulatorTable ${this.args.title}] dataSorting: requesting sorted data`, {
             from: { col: cachedSortCol, dir: cachedSortDir },
@@ -1354,7 +1372,13 @@ export default defineComponent({
     handleRemoteRequest(
       url: string,
       config: any,
-      params: { page?: number; size?: number; sorters?: Array<{ field: string; dir: string }>; filter?: any[] }
+      params: {
+        page?: number
+        size?: number
+        sort?: Array<{ field: string; dir: string }>
+        sorters?: Array<{ field: string; dir: string }>
+        filter?: any[]
+      }
     ): Promise<{ last_page: number; last_row: number; data: any[] }> {
       // Extract pagination parameters
       const page = params.page || 1
@@ -1364,8 +1388,11 @@ export default defineComponent({
       this.lastRequestedPage = page
       // Use requested state (client) for fallbacks, not server state
       // This preserves sort during page navigation before server responds
-      const sortColumn = params.sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
-      const sortDir = (params.sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
+      // Tabulator sends its sorters as `sort` (dataSendParams default); a
+      // header click arrives here before dataSorting, with the new sort
+      const sorters = params.sort ?? params.sorters
+      const sortColumn = sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
+      const sortDir = (sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
 
       console.log(`[TabulatorTable ${this.args.title}] ===== handleRemoteRequest START =====`, {
         timestamp: Date.now(),
@@ -1373,7 +1400,7 @@ export default defineComponent({
         requestedSize: pageSize,
         requestedSortColumn: sortColumn,
         requestedSortDir: sortDir,
-        rawSorters: params.sorters,
+        rawSorters: sorters,
         paginationIdentifier: this.args.paginationIdentifier,
         currentPaginationState: this.paginationState,
         cachedSortColumn: this.paginationState?.sort_column,
@@ -1422,6 +1449,7 @@ export default defineComponent({
               ...this.viewFiltersPatch,
           })
         }
+        this.quietReload = false
 
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
@@ -1435,7 +1463,12 @@ export default defineComponent({
         })
       }
 
+      this.quietReload = false
       this.isLoadingServerData = true
+      if (sorters?.length) {
+        this.requestedSortColumn = sortColumn || ''
+        this.requestedSortDir = sortDir
+      }
 
       // Mark that we're navigating pages (user-initiated, not filter change)
       this.isNavigatingPages = true
@@ -2350,7 +2383,9 @@ export default defineComponent({
               tab.redraw(true)
               // Trigger setPage to refresh pagination counter (Showing X of Y rows)
               // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
+              this.quietReload = true
               tab.setPage(targetPage || tab.getPage() || 1).catch(() => {})
+              this.quietReload = false
             } catch (error) {
               console.error('[TabulatorTable] Error setting pagination limits:', error)
             }
@@ -2362,7 +2397,9 @@ export default defineComponent({
         // Even for page 1, this is necessary because replaceData() + the initial AJAX resolution
         // leaves Tabulator in an inconsistent state without this explicit setPage() call.
         if (this.isServerSidePagination && targetPage && this.isNavigatingPages) {
+          this.quietReload = true
           ;(this.tabulator as any).setPage(targetPage).catch(() => {})
+          this.quietReload = false
         }
 
         // New rows start in the initial order again when the table asks so

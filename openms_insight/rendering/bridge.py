@@ -574,6 +574,13 @@ def _prefetch(
     ):
         return None
 
+    # A selection the new filter leaves out is cleared here, as Phase 4 would, so
+    # that the default row below replaces it in this run. Sent as it was, the view
+    # cleared it itself and sent that back, and the default row cost another rerun.
+    state_changed = _validate_interactivity_selections(component, state_manager, state)
+    if state_changed:
+        state = state_manager.get_state_for_vue()
+
     state_keys = set(component.get_state_dependencies())
     cache_key = _payload_cache_key(component, state, state_keys)
     vue_data, data_hash = _prepare_vue_data_cached(
@@ -583,9 +590,10 @@ def _prefetch(
     if _payload_cache_key(component, after, state_keys) != cache_key:
         return None
 
-    state_changed = _apply_auto_selection(
+    if _apply_auto_selection(
         component, component_id, vue_data.pop("_auto_selection", {}), state_manager
-    )
+    ):
+        state_changed = True
 
     payload: dict[str, Any] = {}
     for data_key, value in vue_data.items():

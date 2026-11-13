@@ -234,3 +234,39 @@ def test_view_event_is_applied_once(rerun, vue, temp_cache_dir):
     with pytest.raises(Rerun):
         render_component(table, state, key="scans")
     assert applied == ["a", "b"]
+
+
+def test_new_filter_replaces_a_stale_selection_in_the_same_run(
+    rerun, vue, temp_cache_dir
+):
+    """A table filtered by a selection made elsewhere gets its new rows with its
+    own selection already replaced. Before, the stale row went out with the new
+    rows: the view cleared it and sent that back, and only the rerun after that
+    selected the first row, so one click cost two more round trips."""
+    data = pl.LazyFrame({"id": [0, 1, 2, 3], "scan": [1, 1, 2, 2]})
+    common = {"data": data, "cache_path": str(temp_cache_dir), "index_field": "id"}
+    scans = Table(cache_id="scans", interactivity={"scan": "scan"}, **common)
+    rows = Table(
+        cache_id="rows", filters={"scan": "scan"}, interactivity={"row": "id"}, **common
+    )
+    state = StateManager(session_key="stale")
+
+    def run():
+        try:
+            with defer_reruns():
+                render_component(scans, state, key="scans")
+                render_component(rows, state, key="rows")
+        except Rerun:
+            pass
+
+    for _ in range(3):
+        run()
+    assert (state.get_selection("scan"), state.get_selection("row")) == (1, 0)
+
+    # A click on scan 2
+    state.set_selection("scan", 2)
+    run()
+    rows_call = vue.call_args_list[-1].kwargs
+    assert list(rows_call["tableData"]["scan"]) == [2, 2]
+    assert rows_call["selection_store"]["row"] == 2
+    assert state.get_selection("row") == 2

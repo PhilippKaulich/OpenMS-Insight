@@ -30,6 +30,15 @@ function isPaginationIdentifier(identifier: string): boolean {
   return identifier.endsWith('_page')
 }
 
+/** JSON with sorted keys: the same value from Python and from Vue compares equal. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]]))
+      : v
+  )
+}
+
 export const useSelectionStore = defineStore('selection', {
   state: (): SelectionState => ({
     id: undefined,
@@ -55,6 +64,11 @@ export const useSelectionStore = defineStore('selection', {
         currentSelectionCounter: this.$state.selection_counter,
         currentPaginationCounter: this.$state.pagination_counter,
       })
+      // A table that loads the page it already shows sends the same
+      // pagination again: moving the counter for it costs Python a rerun
+      if (isPagination && stableJson(this.$state[identifier]) === stableJson(value)) {
+        return
+      }
       this.$patch((state) => {
         state[identifier] = value
         // Increment appropriate counter based on identifier type
