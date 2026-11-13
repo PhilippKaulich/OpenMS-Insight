@@ -1912,10 +1912,23 @@ export default defineComponent({
               spectrum: this.spectrum?.key ?? null,
               tolerance: { value: this.fragmentMassTolerance, unit: this.toleranceUnit },
               fragments,
+              ...(this.args.fragmentMatchesProteoform ? { proteoform: this.matchedProteoform() } : {}),
             }
       // Skip no-op writes: each write is a round trip to Python
       if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
       this.selectionStore.updateSelection(id, next)
+    },
+    // The proteoform the fragments are matched against (fragmentMatchesProteoform)
+    matchedProteoform(): NonNullable<FragmentMatches['proteoform']> {
+      let theoreticalMass = this.theoreticalMass
+      for (const mass of Object.values(this.variableModifications)) theoreticalMass += mass
+      return {
+        proforma: this.proForma(),
+        sequence: this.sequence.join(''),
+        length: this.sequence.length,
+        theoreticalMass,
+        cleavagePercentage: this.calculateCleavagePercentage,
+      }
     },
     publishSelectedFragment(rowIndex?: number) {
       const id = this.args.fragmentIdentifier

@@ -1056,6 +1056,23 @@ class TestProteinSequenceView:
         assert restored.set_fragment_matches_identifier("matches") is restored
         assert restored._get_component_args()["fragmentMatchesIdentifier"] == "matches"
 
+        # The matched proteoform is written only on request, never cached
+        assert keyed._get_component_args()["fragmentMatchesProteoform"] is False
+        with_proteoform = ProteinSequenceView(
+            cache_id="seq_matches_keyed",
+            fragment_matches_identifier="matches",
+            fragment_matches_proteoform=True,
+            cache_path=str(temp_cache_dir),
+        )
+        assert (
+            with_proteoform._get_component_args()["fragmentMatchesProteoform"] is True
+        )
+        assert "fragment_matches_proteoform" not in with_proteoform._get_cache_config()
+        assert restored.set_fragment_matches_proteoform() is restored
+        assert restored._get_component_args()["fragmentMatchesProteoform"] is True
+        restored.set_fragment_matches_proteoform(False)
+        assert restored._get_component_args()["fragmentMatchesProteoform"] is False
+
 
 def test_table_navigation_uses_render_state_manager():
     """Navigation state goes to the manager the table is rendered with, and

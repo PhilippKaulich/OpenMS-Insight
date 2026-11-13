@@ -278,6 +278,7 @@ class ProteinSequenceView(BaseComponent):
         fragment_identifier: str | None = None,
         edit_identifier: str | None = None,
         fragment_matches_identifier: str | None = None,
+        fragment_matches_proteoform: bool = False,
         entry_title: str = "Identification",
         observed_mass_label: str = "Observed mass",
         image_format: str | None = None,
@@ -424,6 +425,15 @@ class ProteinSequenceView(BaseComponent):
                 ``charge`` and ``mz``. None while no spectrum is matched. Pass
                 the same identifier to ``DeconvolvedSpectrum``. Render-time
                 only: not part of the cache.
+            fragment_matches_proteoform: Also write the proteoform the
+                fragments were matched against to
+                ``fragment_matches_identifier``, as ``proteoform``: a dict
+                with ``proforma`` (the sequence with its fixed and variable
+                modifications), ``sequence``, ``length``,
+                ``theoreticalMass`` (with the variable modifications) and
+                ``cleavagePercentage`` (the share of bonds explained by a
+                matched fragment), so a page can keep the proteoforms it tried and compare them.
+                Render-time only: not part of the cache.
             entry_title: Heading of the mass summary of an entry with an
                 observed mass.
             observed_mass_label: Label of the entry's observed mass in that
@@ -471,6 +481,8 @@ class ProteinSequenceView(BaseComponent):
         self._edit_identifier = edit_identifier
         # Render-time option, kept out of the cache config
         self._fragment_matches_identifier = fragment_matches_identifier
+        # Render-time option, kept out of the cache config
+        self._fragment_matches_proteoform = bool(fragment_matches_proteoform)
         self._entry_title = entry_title
         self._observed_mass_label = observed_mass_label
         # Sequence tag marked on the sequence (set per render, not cached)
@@ -742,6 +754,20 @@ class ProteinSequenceView(BaseComponent):
         self._fragment_matches_identifier = identifier
         return self
 
+    def set_fragment_matches_proteoform(
+        self, enabled: bool = True
+    ) -> "ProteinSequenceView":
+        """Write the matched proteoform with the matched fragment ions.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``fragment_matches_proteoform`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._fragment_matches_proteoform = bool(enabled)
+        return self
+
     def set_proforma_copy(self, enabled: bool = True) -> "ProteinSequenceView":
         """Show or hide the "Copy as ProForma" button.
 
@@ -838,6 +864,7 @@ class ProteinSequenceView(BaseComponent):
             "fragmentIdentifier": self._fragment_identifier,
             "editIdentifier": self._edit_identifier,
             "fragmentMatchesIdentifier": self._fragment_matches_identifier,
+            "fragmentMatchesProteoform": self._fragment_matches_proteoform,
             "entryTitle": self._entry_title,
             "observedMassLabel": self._observed_mass_label,
         }

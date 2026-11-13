@@ -599,6 +599,16 @@ export interface FragmentMatches {
   spectrum: unknown
   tolerance: { value: number; unit: string }
   fragments: MatchedFragmentIon[]
+  /** The proteoform matched (fragmentMatchesProteoform only) */
+  proteoform?: {
+    proforma: string
+    sequence: string
+    length: number
+    /** With the variable modifications */
+    theoreticalMass: number
+    /** Share of the bonds with a matched fragment on either side (%) */
+    cleavagePercentage: number
+  }
 }
 
 /**
@@ -653,6 +663,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
+  /** Write the matched proteoform with the matched fragments */
+  fragmentMatchesProteoform?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');
