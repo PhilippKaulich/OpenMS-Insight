@@ -42,6 +42,15 @@ export function stateValues(state: Record<string, unknown>): string {
   )
 }
 
+// The row tables of the data held before the current one, by hash, newest last.
+// Python may send a delta against them: a rerun makes it forget the data it
+// sent last, whose message may have been dropped, so it builds on data sent
+// before. As many versions as Python keeps (_DELTA_VERSIONS in bridge.py); a
+// delta that builds on none of them asks for the full data. Not part of the
+// reactive state: nothing draws from it.
+const HELD_VERSIONS = 4
+let previousTables: { hash: string; tables: Record<string, unknown> }[] = []
+
 export const useStreamlitDataStore = defineStore('streamlit-data', {
   state: () => ({
     renderData: null as RenderData | null,
@@ -86,6 +95,8 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
       delete newData.args.selection_store
       delete newData.args.hash
       delete newData.args.dataChanged
+      const delta = newData.args._delta as { base: string; tables: string[] } | undefined
+      delete newData.args._delta
 
       console.log('[StreamlitDataStore] ===== updateRenderData START =====', {
         timestamp: Date.now(),
@@ -173,8 +184,30 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
         return
       }
 
+      // Tables sent as deltas: rebuild them from the rows held and the new
+      // ones, or ask for everything when the rows held are not the base
+      if (delta && dataChanged && newHash) {
+        if (!this.applyDelta(newData.args as StreamlitData, delta)) {
+          console.warn('[StreamlitDataStore] Delta base not held - requesting data from Python')
+          this.requestData = true
+          return
+        }
+      }
+
       // Only process data if Python says it changed (optimization to avoid re-parsing same data)
       if (dataChanged && newHash) {
+        // Keep the row tables held now, which a later delta may build on
+        if (this.hash) {
+          previousTables = previousTables.filter((version) => version.hash !== this.hash)
+          previousTables.push({
+            hash: this.hash,
+            tables: Object.fromEntries(
+              Object.entries(this.dataForDrawing).filter(([, value]) => Array.isArray(value))
+            ),
+          })
+          previousTables = previousTables.slice(-(HELD_VERSIONS - 1))
+        }
+
         // Store render data
         this.renderData = newData
 
@@ -267,6 +300,45 @@ export const useStreamlitDataStore = defineStore('streamlit-data', {
           return
         }
       }
+    },
+
+    /**
+     * Rebuild the tables Python sent as deltas, in place in `args`.
+     *
+     * For a table `name`, `name__src` says where the rows of the new table
+     * come from, as runs of `n` rows from `s`: s >= 0 the rows held from index
+     * s on, -(j + 1) the rows of `name__add` (those Vue does not hold) from j on. Returns false, leaving `args`
+     * as it is, when the rows held are not those the delta was made from.
+     */
+    applyDelta(args: StreamlitData, delta: { base: string; tables: string[] }): boolean {
+      const source =
+        this.hash === delta.base
+          ? this.dataForDrawing
+          : previousTables.find((version) => version.hash === delta.base)?.tables ?? null
+      if (!source) return false
+      for (const name of delta.tables) {
+        if (!Array.isArray(source[name])) return false
+      }
+      for (const name of delta.tables) {
+        const held = source[name] as Record<string, unknown>[]
+        const runs = (args[`${name}__src`] as ArrowTable).table
+        const starts = runs.getChild('s')!.toArray() as Int32Array
+        const lengths = runs.getChild('n')!.toArray() as Int32Array
+        const added = this.parseArrowTable(args[`${name}__add`] as ArrowTable)
+        const rows: Record<string, unknown>[] = []
+        for (let r = 0; r < starts.length; r++) {
+          const s = starts[r]
+          if (s >= 0) {
+            for (let i = 0; i < lengths[r]; i++) rows.push(held[s + i])
+          } else {
+            for (let i = 0; i < lengths[r]; i++) rows.push(added[-s - 1 + i])
+          }
+        }
+        delete args[`${name}__src`]
+        delete args[`${name}__add`]
+        args[name] = rows
+      }
+      return true
     },
 
     /**

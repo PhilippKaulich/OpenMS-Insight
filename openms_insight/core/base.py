@@ -57,6 +57,10 @@ class BaseComponent(ABC):
 
     _component_type: str = ""
 
+    # Payload tables that are sent as deltas once Vue holds an earlier version:
+    # only their new rows, and where each row comes from (see bridge._as_delta)
+    _delta_tables: tuple[str, ...] = ()
+
     # Rows per parquet row group in the cache, or None for the writer's default.
     # Components that keep large list columns (one row per spectrum) set a small
     # value so that filtering to one row reads one small row group.

@@ -97,6 +97,19 @@ _COMPONENT_ANNOTATIONS_KEY = "_svc_component_annotations"
 # ALL hashes on the next render so all components get data in one rerun
 _BATCH_RESEND_KEY = "_svc_batch_resend"
 
+# Per component key: the data hash of the payload last sent and, for each table
+# the component sends as a delta (BaseComponent._delta_tables), its columns and
+# row hashes. A later payload of that component only sends the rows Vue does not
+# hold yet (see _as_delta).
+_HELD_TABLES_KEY = "_svc_held_tables"
+# A table is sent as a delta only from this many rows, and only while at most
+# this share of its rows are new: below, the full table is barely larger.
+_DELTA_MIN_ROWS = 1000
+_DELTA_MAX_NEW_FRACTION = 0.5
+# Versions of a delta table kept to build deltas on, here and in Vue
+# (streamlit-data.ts, HELD_VERSIONS)
+_DELTA_VERSIONS = 4
+
 
 # Payload entries that ask Vue to act (not part of the data hash): a payload that
 # carries one is always sent
@@ -734,13 +747,133 @@ _deferred_rerun: contextvars.ContextVar[list[bool] | None] = contextvars.Context
 )
 
 
+def _row_hashes(df: pd.DataFrame) -> Any:
+    """One 64-bit hash per row of `df`, over its values (not its index)."""
+    return pd.util.hash_pandas_object(df, index=False).to_numpy()
+
+
+def _row_sources(old: Any, new: Any) -> tuple[Any, Any]:
+    """Where each row of a new table comes from, by row hashes.
+
+    Returns (sources, is_new): sources[i] is the index of the old row equal to new
+    row i, or -(j + 1) for the j-th new row that the old table does not have.
+    """
+    import numpy as np
+
+    unique, first = np.unique(old, return_index=True)
+    position = np.clip(np.searchsorted(unique, new), 0, max(len(unique) - 1, 0))
+    found = unique[position] == new if len(unique) else np.zeros(len(new), dtype=bool)
+    is_new = ~found
+    sources = np.where(
+        found,
+        first[position] if len(unique) else 0,
+        -np.cumsum(is_new),
+    ).astype("int32")
+    return sources, is_new
+
+
+def _source_runs(sources: Any) -> pd.DataFrame:
+    """`sources` (see _row_sources) as runs: ``s``, the first source, ``n`` rows.
+
+    A run of held rows counts up from s (s, s+1, ...), a run of new rows counts
+    down (s, s-1, ...: new rows j, j+1, ...). An unchanged table is one run.
+    """
+    import numpy as np
+
+    if len(sources) == 0:
+        return pd.DataFrame({"s": np.array([], "int32"), "n": np.array([], "int32")})
+    held = sources >= 0
+    step = np.where(held[1:], 1, -1)
+    continues = (held[1:] == held[:-1]) & (sources[1:] - sources[:-1] == step)
+    starts = np.flatnonzero(np.concatenate(([True], ~continues)))
+    lengths = np.diff(np.append(starts, len(sources)))
+    return pd.DataFrame(
+        {"s": sources[starts].astype("int32"), "n": lengths.astype("int32")}
+    )
+
+
+def _as_delta(
+    key: str, component: "BaseComponent", payload: dict[str, Any], data_hash: str
+) -> dict[str, Any]:
+    """The payload to send, with the tables Vue mostly holds already as deltas.
+
+    A component lists such tables in ``_delta_tables`` (e.g. a heatmap whose data
+    grows while an acquisition runs). Each is replaced by ``<name>__src``, where
+    each row of the new table comes from (the index of the row Vue holds that
+    equals it, or -(j + 1) for row j of ``<name>__add``) as runs (_source_runs),
+    and ``<name>__add``, the new rows. Vue rebuilds the table in the same order from the rows it holds, so the
+    result equals a full send. ``_delta`` names the hash Vue must hold; one that
+    holds other data asks for the full payload again (_requestData).
+    """
+    names = getattr(component, "_delta_tables", ())
+    if not names:
+        return payload
+    held_all = st.session_state.setdefault(_HELD_TABLES_KEY, {})
+    # The tables of the data sent to this view, by hash, newest last; Vue
+    # keeps as many versions. A rerun forgets the data sent in the run it ends
+    # (_rerun), as its message may never arrive, so the sent hash can be older
+    # than the data Vue holds, or None. The base is therefore the data itself
+    # if it was sent before (sent again after a rerun, or a zoom undone: no rows
+    # added), else the data sent last, else the newest version sent. Vue ignores
+    # data it holds, rebuilds a delta from a version it keeps, and asks for the
+    # data when it holds none of them. That request, or a remounted view, clears
+    # these versions with the sent hashes, so the next payload goes in full.
+    # (Vue's echoed hash is not used: it can be older than the data it holds.)
+    versions = held_all.get(key, {})
+    sent = st.session_state.get(_SENT_HASH_KEY, {}).get(key)
+    if data_hash in versions:
+        base = data_hash
+    elif sent in versions:
+        base = sent
+    else:
+        base = next(reversed(versions), None)
+    held = versions.get(base) if base is not None else None
+    out = dict(payload)
+    tables = {}
+    sent_as_delta = []
+    for name in names:
+        df = payload.get(name)
+        if not isinstance(df, pd.DataFrame):
+            continue
+        columns = [str(c) for c in df.columns]
+        hashes = _row_hashes(df)
+        tables[name] = (columns, hashes)
+        before = held["tables"].get(name) if held is not None else None
+        if before is None or before[0] != columns or len(df) < _DELTA_MIN_ROWS:
+            continue
+        sources, is_new = _row_sources(before[1], hashes)
+        if is_new.sum() > _DELTA_MAX_NEW_FRACTION * len(df):
+            continue
+        del out[name]
+        out[f"{name}__src"] = _source_runs(sources)
+        out[f"{name}__add"] = df[is_new].reset_index(drop=True)
+        sent_as_delta.append(name)
+        if _DEBUG_STATE_SYNC:
+            _logger.warning(
+                f"[Bridge:{key}] delta {name}: {int(is_new.sum())} of {len(df)} "
+                f"rows new, {len(before[1]) - int((sources >= 0).sum())} dropped"
+            )
+    if sent_as_delta:
+        out["_delta"] = {"base": base, "tables": sent_as_delta}
+    if tables:
+        versions = {h: v for h, v in versions.items() if h != data_hash}
+        versions[data_hash] = {"tables": tables}
+        held_all[key] = dict(list(versions.items())[-_DELTA_VERSIONS:])
+    else:
+        held_all.pop(key, None)
+    return out
+
+
 def _sent_this_run() -> dict[str, Any]:
     """The sent hashes recorded during this script run, with their earlier values."""
     from streamlit.runtime.scriptrunner import get_script_run_ctx
 
     ctx = get_script_run_ctx()
-    # A new set per run (ScriptRunContext.reset), so it identifies the run
-    run = getattr(ctx, "widget_ids_this_run", None)
+    # ScriptRunContext.reset() makes a new cursors dict for every run, so it
+    # identifies the run. (widget_ids_this_run did too, until Streamlit moved it
+    # to ctx.shared and began clearing it in place: then every run counted as
+    # one, and a rerun reverted the sent hashes to those of the first run.)
+    run = getattr(ctx, "cursors", None)
     entry = st.session_state.get(_RUN_SENT_KEY)
     if entry is None or entry[0] is not run:
         entry = (run, {})
@@ -888,6 +1021,7 @@ def _render_component(
     if st.session_state.get(_BATCH_RESEND_KEY):
         st.session_state[_VUE_ECHOED_HASH_KEY] = {}
         st.session_state[_SENT_HASH_KEY] = {}
+        st.session_state.pop(_HELD_TABLES_KEY, None)
         _sent_this_run().clear()
         st.session_state.pop(_BATCH_RESEND_KEY, None)
 
@@ -904,6 +1038,7 @@ def _render_component(
     if key not in st.session_state:
         st.session_state[_SENT_HASH_KEY].pop(key, None)
         st.session_state[_VUE_ECHOED_HASH_KEY].pop(key, None)
+        st.session_state.get(_HELD_TABLES_KEY, {}).pop(key, None)
         st.session_state.get(_HANDLED_REQUESTS_KEY, {}).pop(key, None)
 
     # === PHASE 1: Get CACHED data from previous render ===
@@ -1034,6 +1169,7 @@ def _render_component(
             )
 
     if data_payload["dataChanged"]:
+        data_payload = _as_delta(key, component, data_payload, data_payload["hash"])
         _record_sent(key, data_payload["hash"])
 
     # Arguments that follow the state (e.g. the stepper's neighbours)

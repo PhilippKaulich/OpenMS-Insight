@@ -106,6 +106,10 @@ class Heatmap(BaseComponent):
 
     _component_type: str = "heatmap"
 
+    # Data that grows while it is shown (e.g. a live acquisition) changes in a
+    # few rows per refresh: only those are sent again
+    _delta_tables = ("heatmapData",)
+
     def __init__(
         self,
         cache_id: str,
