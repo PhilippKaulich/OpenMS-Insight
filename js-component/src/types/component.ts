@@ -190,6 +190,9 @@ export interface LinePlotComponentArgs
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
   xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers sorted by x (x_markers)
   xMarkerTolerance?: number | null // Distance within which a marker takes a peak (x_marker_tolerance)
 }
@@ -451,6 +454,9 @@ export interface MirrorPlotComponentArgs
   height?: number
   /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
 }
 
 export interface MirrorPlotStyling {

@@ -24,6 +24,14 @@ import { useMeasure, type MeasureOverlay, type MeasureSpec } from '@/composables
 import { usePinZoom } from '@/composables/usePinZoom'
 import { useTopPeakLabels } from '@/composables/useTopPeakLabels'
 import {
+  currentWindow,
+  windowOverlay,
+  windowText,
+  windowTool,
+  type CurrentWindow,
+  type WindowOverlay,
+} from '@/utils/mzWindow'
+import {
   markerDots,
   markerOverlay,
   matchMarkers,
@@ -109,6 +117,8 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      // The Window button hides the shaded window (window_identifier) and shows it again
+      windowShown: true as boolean,
       // The Markers button hides the x markers (x_markers) and shows them again
       markersShown: true as boolean,
       manualXRange: undefined as number[] | undefined,
@@ -759,11 +769,13 @@ export default defineComponent({
           b: 50,
         },
         shapes: [
+          ...this.windowLayer.shapes,
           ...this.markerLayer.shapes,
           ...this.annotationShapes,
           ...this.measureOverlay.shapes,
         ],
         annotations: [
+          ...this.windowLayer.annotations,
           ...this.peakAnnotations,
           ...this.markerLayer.annotations,
           ...this.topPeakAnnotations,
@@ -801,6 +813,31 @@ export default defineComponent({
             : undefined,
         color: this.theme?.textColor || '#262730',
       })
+    },
+
+    /** The window kept under window_identifier, if one is set. */
+    currentWindow(): CurrentWindow | null {
+      return currentWindow(this.args, this.selectionStore.$state)
+    },
+
+    /** The Window switch, only while a window is set. */
+    windowTools(): PlotTool[] {
+      if (!this.currentWindow) return []
+      return [windowTool(this.windowShown, () => (this.windowShown = !this.windowShown))]
+    },
+
+    /** The shaded window kept under window_identifier (none without one). */
+    windowLayer(): WindowOverlay {
+      const window = this.currentWindow
+      if (!window || !this.windowShown) return { shapes: [], annotations: [] }
+      const { value, range, tolerance, unit } = window
+      return windowOverlay(
+        range,
+        windowText(value, range, tolerance, unit),
+        this.xRange,
+        this.actualPlotWidth - 80,
+        this.styling.selectedColor,
+      )
     },
 
     /**
@@ -851,6 +888,7 @@ export default defineComponent({
         ...this.measure.tools(this.measureTitle),
         ...this.labels.tools(),
         ...this.topPeaks.tools(),
+        ...this.windowTools,
         ...this.markerTools,
         ...this.pinZoom.tools(),
         downloadTool({
@@ -907,6 +945,11 @@ export default defineComponent({
 
     // Top peak labels switched on or off
     'topPeaks.on'() {
+      if (this.isInitialized && this.isDataReady) this.renderPlot()
+    },
+
+    // Window button: the shaded window hidden or shown again
+    windowShown() {
       if (this.isInitialized && this.isDataReady) this.renderPlot()
     },
 

@@ -14,6 +14,12 @@ from ..core.measure import (
     validate_measure_residues,
     validate_measure_tolerance,
 )
+from ..core.mz_window import (
+    DEFAULT_WINDOW_TOLERANCE,
+    mz_window_args,
+    validate_window_identifier,
+    validate_window_tolerance,
+)
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
 from ..core.top_peak_labels import (
@@ -97,6 +103,8 @@ class LinePlot(BaseComponent):
         x_marker_tolerance: float | None = None,
         zoom_identifier: str | None = None,
         stepper: str | None = None,
+        window_identifier: str | None = None,
+        window_tolerance: float | str = DEFAULT_WINDOW_TOLERANCE,
         **kwargs,
     ):
         """
@@ -182,6 +190,14 @@ class LinePlot(BaseComponent):
                 buttons in the toolbar, e.g. the spectra of a run filtered by
                 scan (default None: no buttons). Render-time only: not part of
                 the cache.
+            window_identifier: State identifier of an x window to shade, e.g.
+                the m/z window of an XIC shown elsewhere (default None). The
+                value there is a centre (widened by ``window_tolerance``),
+                ``[low, high]``, or None for no band. Render-time only: not
+                part of the cache.
+            window_tolerance: Half-width of the band around a stored centre:
+                a number of Da (default 0.01) or a string such as '10 ppm',
+                '0.02 Da' or '0.5 m/z'.
             x_markers: Positions on the x axis to mark, as ``{label: x}`` or
                 a list of ``{'x', 'label', 'color'}`` dicts (default None).
                 Each gets a dotted guide in its own colour and its label.
@@ -227,6 +243,10 @@ class LinePlot(BaseComponent):
         self._x_marker_tolerance = validate_x_marker_tolerance(x_marker_tolerance)
         # Render-time option, kept out of the cache config (see core/zoom.py)
         self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
+
+        # Render-time options, kept out of the cache config (see core/mz_window.py)
+        self._window_identifier = validate_window_identifier(window_identifier)
+        self._window_tolerance = validate_window_tolerance(window_tolerance)
 
         super().__init__(
             cache_id=cache_id,
@@ -536,6 +556,7 @@ class LinePlot(BaseComponent):
         args.update(peak_label_args(self._peak_labels))
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
+        args.update(mz_window_args(self._window_identifier, self._window_tolerance))
         args.update(keep_zoom_args(self._keep_zoom))
         args.update(
             top_peak_label_args(self._top_peak_labels, self._show_top_peak_labels)
