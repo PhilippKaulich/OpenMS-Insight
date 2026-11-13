@@ -43,6 +43,8 @@ class SeriesPlot(BaseComponent):
         fdr_plot(key="fdr", state_manager=state_manager)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "series_plot"
 
     def __init__(

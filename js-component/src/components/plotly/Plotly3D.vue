@@ -1,6 +1,6 @@
 <template>
   <div class="plot3d">
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container" :class="{ bordered: args.border !== false }"></div>
   </div>
 </template>

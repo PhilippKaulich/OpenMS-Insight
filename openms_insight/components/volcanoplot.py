@@ -54,6 +54,8 @@ class VolcanoPlot(BaseComponent):
         )
     """
 
+    _supports_stepper = True
+
     _component_type: str = "volcanoplot"
 
     def __init__(

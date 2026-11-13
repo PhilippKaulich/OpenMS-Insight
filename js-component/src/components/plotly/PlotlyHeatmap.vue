@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <!-- As tall as the plot: a relayout that autosizes (Plotly does one when a
          box or lasso selection ends) measures this element -->
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="heatmap-container" :style="{ minHeight: `${plotHeight}px` }"></div>
     <ColorbarLegend v-if="showLegendBar" :items="legendItems" @change="setColorSpec" />
   </div>

@@ -1,3 +1,4 @@
+import type { StepperArgs } from '@/utils/stepper'
 /**
  * Type definitions for component configuration and data structures.
  */
@@ -20,6 +21,8 @@ export interface BaseComponentArgs {
    * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
    */
   zoomIdentifier?: string
+  /** Previous / next buttons for one filter, shown by PlotToolbar (core/stepper.py). */
+  stepper?: StepperArgs
 }
 
 /**

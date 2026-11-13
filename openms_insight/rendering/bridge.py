@@ -1036,6 +1036,11 @@ def _render_component(
     if data_payload["dataChanged"]:
         _record_sent(key, data_payload["hash"])
 
+    # Arguments that follow the state (e.g. the stepper's neighbours)
+    state_args = getattr(component, "_state_args", None)
+    if callable(state_args):
+        component_args.update(state_args(initial_state))
+
     # Component layout: [[{componentArgs: {...}}]]
     components = [[{"componentArgs": component_args}]]
 

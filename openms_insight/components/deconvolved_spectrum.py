@@ -82,6 +82,8 @@ class DeconvolvedSpectrum(BaseComponent):
         spectrum(key="spectrum", state_manager=state_manager)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "deconvolved_spectrum"
     # One row holds a whole spectrum: keep row groups small so that selecting a
     # spectrum reads a few spectra rather than a large slice of the run.

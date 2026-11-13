@@ -125,12 +125,16 @@
  * the tools that are on (with their counts and clear buttons) and Reset, and
  * offers every tool in a menu behind ⋯.
  *
- * `tools` are the component's own tools (see utils/plotTools.ts). Plotly's
+ * `tools` are the component's own tools (see utils/plotTools.ts). A
+ * component given a `stepper` (core/stepper.py) gets its ‹ value › buttons
+ * first in the View group, on a narrow toolbar too. Plotly's
  * navigation buttons (zoom, pan, select, reset) are read from the plot's mode
  * bar, which stays in the page but hidden, so they work exactly as before.
  */
 import { defineComponent, h, type PropType } from 'vue'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
+import { useSelectionStore } from '@/stores/selection'
+import { stepperTools, type StepperArgs } from '@/utils/stepper'
 import ToolMenuSections from './ToolMenuSections.vue'
 import {
   GROUP_LABELS,
@@ -186,9 +190,14 @@ export default defineComponent({
       type: Array as PropType<PlotTool[]>,
       default: () => [],
     },
+    /** The component's `stepper` argument: previous / next buttons for one filter. */
+    stepper: {
+      type: Object as PropType<StepperArgs | undefined>,
+      default: undefined,
+    },
   },
   setup() {
-    return { streamlitDataStore: useStreamlitDataStore(), ICONS, CARET }
+    return { streamlitDataStore: useStreamlitDataStore(), selectionStore: useSelectionStore(), ICONS, CARET }
   },
   data() {
     return {
@@ -205,8 +214,19 @@ export default defineComponent({
     }
   },
   computed: {
+    stepperTools(): PlotTool[] {
+      const stepper = this.stepper
+      if (!stepper) return []
+      return stepperTools(stepper, this.selectionStore.$state[stepper.identifier], (identifier, value) =>
+        this.selectionStore.updateSelection(identifier, value),
+      )
+    },
+    /** The component's tools with the stepper's buttons first. */
+    allTools(): PlotTool[] {
+      return [...this.stepperTools, ...this.tools]
+    },
     groups(): Group[] {
-      const all: PlotTool[] = [...this.plotlyButtons, ...this.tools]
+      const all: PlotTool[] = [...this.plotlyButtons, ...this.allTools]
       return GROUP_ORDER.map((name) => ({
         name,
         label: GROUP_LABELS[name],
@@ -215,13 +235,13 @@ export default defineComponent({
     },
     /** The tool whose menu is open, as it is now (its choices follow the plot). */
     openMenuTool(): PlotTool | null {
-      return this.tools.find((tool) => tool.id === this.openTool && tool.menu) ?? null
+      return this.allTools.find((tool) => tool.id === this.openTool && tool.menu) ?? null
     },
     /** What a narrow toolbar keeps: tools that are on or hold something, and Reset. */
     pinned(): PlotTool[] {
       const keep = this.plotlyButtons.filter((tool) => tool.keep)
       const on = this.tools.filter((tool) => tool.active || (tool.count ?? 0) > 0)
-      return [...on, ...keep]
+      return [...this.stepperTools, ...on, ...keep]
     },
     cssCustomProperties(): Record<string, string> {
       const theme = this.streamlitDataStore.theme

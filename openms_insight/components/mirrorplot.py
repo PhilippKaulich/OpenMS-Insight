@@ -47,6 +47,8 @@ class MirrorPlot(BaseComponent):
         mirror(key="mirror", state_manager=state_manager)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "mirrorplot"
 
     def __init__(

@@ -59,6 +59,7 @@ class LinePlot(BaseComponent):
     """
 
     _component_type: str = "lineplot"
+    _supports_stepper = True
 
     def __init__(
         self,
@@ -88,6 +89,7 @@ class LinePlot(BaseComponent):
         top_peak_labels: int = 10,
         show_top_peak_labels: bool = False,
         zoom_identifier: str | None = None,
+        stepper: str | None = None,
         **kwargs,
     ):
         """
@@ -169,6 +171,10 @@ class LinePlot(BaseComponent):
                 in the browser). The plot reports its ranges there after a zoom
                 or pan and zooms to a value set there, e.g. by a saved view.
                 Render-time only: not part of the cache.
+            stepper: A filter identifier to step through with ``◀`` / ``▶``
+                buttons in the toolbar, e.g. the spectra of a run filtered by
+                scan (default None: no buttons). Render-time only: not part of
+                the cache.
             **kwargs: Additional configuration options
         """
         self._x_column = x_column
@@ -222,6 +228,7 @@ class LinePlot(BaseComponent):
             annotation_column=annotation_column,
             styling=styling,
             config=config,
+            stepper=stepper,
             **kwargs,
         )
 
