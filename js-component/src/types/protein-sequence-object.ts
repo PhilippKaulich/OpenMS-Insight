@@ -22,6 +22,9 @@ export type SequenceObject = {
   xIon: boolean
   yIon: boolean
   zIon: boolean
+  // Ion types matched here only as ambiguous fragments: cut inside a
+  // modification range, so with or without its shift (drawn faint, not counted)
+  ambiguousIons?: string[]
   extraTypes: string[]
   // Annotated internal fragments covering this residue
   internalDepth?: number

@@ -386,6 +386,25 @@
         :theme="theme"
         @select="onInternalFragmentSelected"
       />
+      <!-- What the matched fragments say about each modification range -->
+      <div
+        v-for="note in spanNotes"
+        :key="`span-${note.index}`"
+        class="d-flex align-center flex-wrap px-4 mb-2 text-body-2"
+        :class="note.warning ? 'text-warning' : ''"
+      >
+        <v-icon size="small" class="mr-1">{{ note.warning ? 'mdi-alert-outline' : 'mdi-target' }}</v-icon>
+        <span>{{ note.text }}</span>
+        <v-btn
+          v-if="note.narrow && args.proformaIdentifier"
+          size="x-small"
+          variant="tonal"
+          class="ml-2 text-none"
+          @click="narrowSpan(note.index)"
+        >
+          Narrow to {{ note.narrow }}
+        </v-btn>
+      </div>
       <!-- Variable modifications set on residues, with the library only -->
       <div
         v-if="(variableModData.library !== null || isEdited || hasLocalizationNotes) && appliedVariableModifications.length > 0"
@@ -633,6 +652,52 @@ function spanKey(mods: { start: number; end: number; mass: number }[]): string {
     .join(',')
 }
 
+// A modification range and the window its matched fragments leave
+// (lo..hi; lo > hi: they disagree), and whether any carries its shift
+type SpanLocalization = {
+  start: number; end: number; mass: number; lo: number; hi: number
+  // any fragment cut in the range matched with the shift; how many agree with
+  // lo..hi (negative: as many say the shift is not there, they disagree)
+  support: boolean; agree: number; total: number
+}
+
+// Where a range's shift sits, by the fragments cut inside it: a prefix ion
+// ending at `edge` carries the shift when it sits at or before edge, a suffix
+// ion starting at `edge` when it sits at or after it. Every residue of the
+// range is scored by the fragments that agree with it; the best scored ones
+// are the window. Votes, not hard bounds: a large fragment matching by chance
+// (near the precursor, with an isotope error) does not empty the window.
+function localizeSpan(
+  m: { start: number; end: number; mass_diff: number },
+  evidence: { prefix: boolean; edge: number; carries: boolean }[],
+): SpanLocalization {
+  const base = { start: m.start, end: m.end, mass: m.mass_diff, total: evidence.length }
+  const support = evidence.some((e) => e.carries)
+  if (!support) return { ...base, lo: m.start, hi: m.end, support, agree: evidence.length }
+  let best = -1
+  let lo = m.start
+  let hi = m.end
+  for (let p = m.start; p <= m.end; p++) {
+    const agree = evidence.filter((e) => e.carries === (e.prefix ? p <= e.edge : p >= e.edge)).length
+    if (agree > best) {
+      best = agree
+      lo = p
+      hi = p
+    } else if (agree === best) {
+      hi = p
+    }
+  }
+  // The shift not in the range at all: every fragment without it agrees.
+  // When that explains the fragments as well as any residue, they do not
+  // support the shift there
+  const without = evidence.filter((e) => !e.carries).length
+  if (without > best) return { ...base, lo: m.start, hi: m.end, support: false, agree: without }
+  // As many say "not here" as agree on any residue: they disagree
+  if (without === best) return { ...base, lo: m.start, hi: m.end, support: true, agree: -without }
+  return { ...base, lo, hi, support, agree: best }
+}
+type SpanNote = { index: number; text: string; warning: boolean; narrow: string | null }
+
 // ProForma name of a residue menu label: a library id such as
 // 'Acetyl (N-term)' gives 'Acetyl'; a custom mass or a sum has none
 function proFormaName(label: string | undefined): string | undefined {
@@ -749,7 +814,10 @@ export default defineComponent({
       visibilityOptions: [
         { text: 'Fragments', selected: true },
         { text: 'Modifications', selected: true },
+        { text: 'Ambiguous fragments', selected: true },
       ] as { text: string; selected: boolean }[],
+      // Per modification range: where the matched fragments place its shift
+      spanLocalizations: [] as SpanLocalization[],
       fragmentTableColumnDefinitions: [
         {
           title: 'Name', field: 'Name',
@@ -952,8 +1020,59 @@ export default defineComponent({
     activeIsotopeErrors(): number {
       return this.isotopeErrorsEnabled && this.isotopeMatching ? this.isotopeErrors : 0
     },
+    // Modifications over several residues (an ambiguous range or an
+    // unlocalized shift): the shift sits on one residue in the range
+    spanModifications(): ModificationData[] {
+      if (this.isEdited) return []
+      const n = this.sequence.length
+      return this.modifications.filter((m) => m.start !== m.end && m.start >= 0 && m.end < n && !!m.mass_diff)
+    },
+    showAmbiguousFragments(): boolean {
+      return this.visibilityOptions.find((o) => o.text === 'Ambiguous fragments')?.selected ?? true
+    },
+    // What the matched fragments say about each range, as a line under the sequence
+    spanNotes(): SpanNote[] {
+      if (this.usesAnnotator || this.spectrum === undefined) return []
+      const residue = (i: number) => `${this.sequence[i]}${i + 1}`
+      const range = (a: number, b: number) => (a === b ? residue(a) : `${residue(a)}–${residue(b)}`)
+      return this.spanLocalizations.flatMap((span, index): SpanNote[] => {
+        const shift = formatMass(span.mass)
+        const where = span.start === this.sequence_start && span.end === this.sequence_end
+          ? 'anywhere in the sequence'
+          : `in ${range(span.start, span.end)}`
+        if (span.total === 0) return []
+        if (!span.support) {
+          const said = span.agree === span.total
+            ? `None of the ${span.total} fragments cut ${where} matched with the ${shift} shift`
+            : `${span.agree} of the ${span.total} fragments cut ${where} matched without the ${shift} shift`
+          return [{ index, warning: true, narrow: null,
+            text: `${said}: they do not support it there` }]
+        }
+        if (span.agree < 0) {
+          const without = -span.agree
+          return [{ index, warning: true, narrow: null,
+            text: `The ${span.total} fragments cut ${where} disagree on the ${shift} shift (${span.total - without} with it, ${without} without)` }]
+        }
+        const votes = `${span.agree} of ${span.total} fragments cut in the range agree`
+        if (span.lo === span.start && span.hi === span.end) {
+          return [{ index, warning: span.agree < span.total, narrow: null,
+            text: `The fragments do not narrow down the ${shift} shift ${where} (${votes})` }]
+        }
+        return [{ index, warning: span.agree < span.total, narrow: range(span.lo, span.hi),
+          text: `The fragments place the ${shift} shift at ${range(span.lo, span.hi)} (${votes})` }]
+      })
+    },
     fragmentColumns(): ColumnDefinition[] {
-      const columns = this.fragmentTableColumnDefinitions
+      const base = this.spanModifications.length === 0
+        ? this.fragmentTableColumnDefinitions
+        : [
+            ...this.fragmentTableColumnDefinitions,
+            {
+              title: 'Shift', field: 'Shift',
+              headerTooltip: 'For a fragment cut inside a modification range: whether it matched with or without that shift. Such a fragment is ambiguous, since the shift may sit on either side of the cut; it narrows the range down but is not counted as a match.',
+            } as unknown as ColumnDefinition,
+          ]
+      const columns = base
       if (this.activeIsotopeErrors === 0) return columns
       const at = columns.findIndex((column) => column.field === 'ObservedMass') + 1
       return [
@@ -1332,6 +1451,10 @@ export default defineComponent({
     fragmentMassTolerance() {
       this.recomputeFragments()
     },
+    // Ambiguous fragments shown or left out
+    showAmbiguousFragments() {
+      this.recomputeFragments()
+    },
     toleranceUnit() {
       this.recomputeFragments()
     },
@@ -1647,6 +1770,12 @@ export default defineComponent({
       let matching_fragments: Record<string, unknown>[] = []
       const matchedIons: MatchedFragmentIon[] = []
       const sequence_size = this.sequence_end
+      // Ranges of a modification: a fragment cut inside one may carry the
+      // shift or not (its masses list both); the one that matched says on
+      // which side of the cut the shift sits
+      const spans = this.spanModifications
+      const evidence: { prefix: boolean; edge: number; carries: boolean }[][] = spans.map(() => [])
+      let ambiguousCount = 0
       
       this.selectedIonSeries
         .forEach((series) => {
@@ -1669,7 +1798,7 @@ export default defineComponent({
           ) {
             const aaIndex = theoIndex + this.sequence_start
 
-            theoretical_frags[theoIndex].forEach((theoretical_mass) => {
+            theoretical_frags[theoIndex].forEach((theoretical_mass, altIndex) => {
               // if any variable modifications are given, change the theoretical mass accordingly
             if (!this.variableModData.isEmpty) {
               if (iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c')
@@ -1705,6 +1834,20 @@ export default defineComponent({
                 const massDiffDa = observed_masses[obsIndex] - shiftedMass
                 const massDiffPpm = (massDiffDa / shiftedMass) * 1e6
 
+                // A prefix ion ends at residue `edge`, a suffix ion starts there
+                const prefix = isPrefixIon(iontype.text)
+                const edge = prefix ? aaIndex : sequence_size - theoIndex
+                let ambiguousShift: number | null = null
+                spans.forEach((m, j) => {
+                  const cut = prefix ? m.start <= edge && edge < m.end : m.start < edge && edge <= m.end
+                  if (!cut) return
+                  ambiguousShift = m.mass_diff
+                  evidence[j].push({ prefix, edge, carries: altIndex > 0 })
+                })
+                const ambiguous = ambiguousShift !== null
+                if (ambiguous && !this.showAmbiguousFragments) return
+                if (ambiguous) ambiguousCount++
+
                 const matched = {
                   Name: `${series.name}${theoIndex + 1}`,
                   IonType: `${series.name}${typeName}`,
@@ -1713,6 +1856,9 @@ export default defineComponent({
                   ObservedMass: observed_masses[obsIndex], // should not have "toFixed" to be used as comparison factor
                   MassDiffDa: massDiffDa.toFixed(3),
                   MassDiffPpm: massDiffPpm.toFixed(3),
+                  ...(spans.length > 0
+                    ? { Shift: ambiguous ? `${altIndex > 0 ? 'with' : 'without'} ${formatMass(ambiguousShift ?? 0)} (ambiguous)` : '' }
+                    : {}),
                 }
                 matching_fragments.push(
                   this.isotopeErrorsEnabled ? { ...matched, Isotope: isotope } : matched
@@ -1724,13 +1870,17 @@ export default defineComponent({
                   mass: observed_masses[obsIndex],
                   massIndex: obsIndex,
                 })
-                // setting the fragment mark for fragment map
+                // setting the fragment mark for fragment map; an ambiguous
+                // fragment is drawn faint and does not count as a cleavage
                 let aa_index = aaIndex
-                if (iontype.text === 'a' || iontype.text === 'b' || iontype.text === 'c')
-                  this.sequenceObjects[aa_index][`${iontype.text}Ion`] = true
                 if (iontype.text === 'x' || iontype.text === 'y' || iontype.text === 'z') {
-                  this.sequenceObjects[sequence_size - theoIndex][`${iontype.text}Ion`] = true
                   aa_index = sequence_size - theoIndex
+                }
+                if (ambiguous) {
+                  const object = this.sequenceObjects[aa_index]
+                  object.ambiguousIons = [...(object.ambiguousIons ?? []), iontype.text]
+                } else {
+                  this.sequenceObjects[aa_index][`${iontype.text}Ion`] = true
                 }
                 if (typeName || isVariant) {
                   this.sequenceObjects[aa_index]['extraTypes'].push(`${series.name}${typeName}`)
@@ -1740,9 +1890,12 @@ export default defineComponent({
           })
         }
         })
+      this.spanLocalizations = spans.map((m, j) => localizeSpan(m, evidence[j]))
       this.residueCleavagePercentage = this.calculateCleavagePercentage
       this.fragmentTableData = matching_fragments
-      this.fragmentTableTitle = `Matching fragments (# ${matching_fragments.length})`
+      this.fragmentTableTitle = ambiguousCount > 0
+        ? `Matching fragments (# ${matching_fragments.length - ambiguousCount}, ${ambiguousCount} ambiguous)`
+        : `Matching fragments (# ${matching_fragments.length})`
       this.publishFragmentMatches(matchedIons)
     },
     // Externally annotated fragment ions: the envelopes accepted on the raw
@@ -2127,7 +2280,32 @@ export default defineComponent({
           }
         }
       })
+      // The window the fragments leave for a range's shift
+      for (const span of this.spanLocalizations) {
+        if (!span.support || span.agree < 0) continue
+        if (span.lo === span.start && span.hi === span.end) continue
+        for (let i = span.lo; i <= span.hi; i++) {
+          const o = this.sequenceObjects[i]
+          if (!o) continue
+          o.ambStart = o.ambStart || i === span.lo
+          o.ambEnd = o.ambEnd || i === span.hi
+          o.ambCenter = o.ambCenter || (i !== span.lo && i !== span.hi)
+        }
+      }
       this.prepareModificationLocalization()
+    },
+    // Narrow a range down to the window its fragments leave (through the app)
+    narrowSpan(index: number): void {
+      const id = this.args.proformaIdentifier
+      const span = this.spanLocalizations[index]
+      const target = this.spanModifications[index]
+      if (!id || !span || !target) return
+      const text = this.proForma({ target, start: span.lo, end: span.hi })
+      this.selectionStore.updateSelection(id, {
+        text,
+        by: 'dialog',
+        n: Math.max(this.appliedProFormaN, this.proformaLink?.n ?? 0) + 1,
+      })
     },
     // Where the matched fragments place each modification set on a residue:
     // a window of several possible residues (or several modifications of the
@@ -2239,13 +2417,14 @@ export default defineComponent({
         console.error('Copy failed:', error)
       }
     },
-    proForma(): string {
+    proForma(narrow?: { target: ModificationData; start: number; end: number }): string {
       // An edited identification carries its modifications in the residue
       // menus' store (below) only
       const searched = this.isEdited ? [] : this.modifications
       const modifications: ProFormaModification[] = searched.map((m) => {
         const name = proFormaName(m.labels ?? undefined)
-        return { start: m.start, end: m.end, mass: m.mass_diff, ...(name ? { name } : {}) }
+        const at = narrow && m === narrow.target ? { start: narrow.start, end: narrow.end } : { start: m.start, end: m.end }
+        return { ...at, mass: m.mass_diff, ...(name ? { name } : {}) }
       })
       const labels = this.variableModData.variableModLabels ?? {}
       for (const [index, mass] of Object.entries(this.variableModifications)) {

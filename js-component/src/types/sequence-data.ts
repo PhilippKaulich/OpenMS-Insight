@@ -84,6 +84,9 @@ export interface SequenceObject {
   yIon: boolean
   /** Whether this position has a matched z ion */
   zIon: boolean
+  // Ion types matched here only as ambiguous fragments: cut inside a
+  // modification range, so with or without its shift (drawn faint, not counted)
+  ambiguousIons?: string[]
   /** Extra fragment type labels (e.g., '-H2O', '-NH3') */
   extraTypes: string[]
 }
