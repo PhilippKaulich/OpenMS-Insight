@@ -1139,7 +1139,11 @@ class Table(BaseComponent):
             if _LAST_SORT_FILTER_KEY not in st.session_state:
                 st.session_state[_LAST_SORT_FILTER_KEY] = {}
 
-            component_key = self._cache_id  # Unique key for this table instance
+            # The table's own pagination slot, not its cache id: an app that
+            # rebuilds the cache when the data grows (a live view) gives each
+            # version its own cache id, and keyed by it every version saw the
+            # selection as new and jumped to its page, costing a rerun each time
+            component_key = self._pagination_identifier
 
             # Get PREVIOUS states (from last render)
             last_selections = st.session_state[_LAST_SELECTION_KEY].get(

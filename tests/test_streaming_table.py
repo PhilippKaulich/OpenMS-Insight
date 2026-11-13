@@ -324,6 +324,35 @@ class TestStreamingTableNavigation:
         # Should NOT include navigation hint
         assert "_navigate_to_page" not in result
 
+    def test_new_data_version_keeps_page(self, mock_streamlit, temp_cache_dir):
+        """A table rebuilt under a new cache id as its data grows (a live view)
+        stays on its page: the selection did not change, so it is not followed."""
+        pagination_id = "live_page"
+
+        def version(n):
+            return Table(
+                cache_id=f"live_{n}",
+                data=pl.LazyFrame({"id": list(range(n, 0, -1))}),
+                cache_path=str(temp_cache_dir),
+                interactivity={"selected_id": "id"},
+                index_field="id",
+                pagination_identifier=pagination_id,
+                page_size=100,
+            )
+
+        state = {pagination_id: {"page": 1, "page_size": 100}, "selected_id": 150}
+        first = version(200)._prepare_vue_data(state)
+        assert "_navigate_to_page" not in first
+
+        # 100 newer rows on top move the selected row to page 2
+        grown = version(300)._prepare_vue_data(state)
+        assert "_navigate_to_page" not in grown
+
+        # A new selection is still followed to its page
+        state["selected_id"] = 10
+        picked = version(300)._prepare_vue_data(state)
+        assert picked["_navigate_to_page"] == 3
+
 
 class TestStreamingTableGoTo:
     """Tests for server-side go-to functionality."""
