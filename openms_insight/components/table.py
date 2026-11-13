@@ -2,6 +2,7 @@
 
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 import polars as pl
@@ -351,6 +352,8 @@ class Table(BaseComponent):
             if isinstance(row_overview, str) and row_overview
             else bool(row_overview)
         )
+        # Buttons per row (on_row_action): set per render, never cached
+        self._row_actions: dict[str, dict[str, Any]] = {}
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -1646,7 +1649,52 @@ class Table(BaseComponent):
         rest = [c for c in df.columns if c not in shown]
         return df.select(shown + rest)
 
+    def on_row_action(
+        self,
+        action_id: str,
+        handler: Callable[[dict[str, Any]], Any] | None,
+        icon: str = "mdi-open-in-new",
+        label: str = "",
+    ) -> "Table":
+        """
+        Add a button to each row that hands the row to ``handler``, for an
+        action on one row (open it on another page, for example). Clicking
+        the button also selects the row, as a click on the row does.
+
+        Args:
+            action_id: Name of the action; one button per name, in the order
+                they are added.
+            handler: Called once per click with the row: its values by
+                field, as the table holds them (the index field included).
+                Returns True if the page should rerun to show the result.
+                None removes the button.
+            icon: Material Design icon of the button (``mdi-...``).
+            label: Tooltip and accessible name of the button.
+
+        Returns:
+            Self for method chaining.
+        """
+        if handler is None:
+            self._row_actions.pop(action_id, None)
+        else:
+            self._row_actions[action_id] = {
+                "id": action_id,
+                "icon": icon,
+                "label": label,
+                "handler": handler,
+            }
+        return self
+
     def _handle_event(self, event: dict[str, Any]) -> bool:
+        if event.get("type") == "row_action":
+            action = self._row_actions.get(str(event.get("id")))
+            row = event.get("row")
+            if action is None or not isinstance(row, dict):
+                return False
+            return bool(action["handler"](row))
+        return self._select_all(event)
+
+    def _select_all(self, event: dict[str, Any]) -> bool:
         """The header check box: select (or unselect) every row passing the
         table's filters, on all pages."""
         if event.get("type") != "multi_select_all" or not self._multi_select:
@@ -1781,6 +1829,11 @@ class Table(BaseComponent):
                 args["rowOverviewTitle"] = self._row_overview
         if self._multi_select:
             args["multiSelect"] = self._multi_select
+        if self._row_actions:
+            args["rowActions"] = [
+                {k: v for k, v in action.items() if k != "handler"}
+                for action in self._row_actions.values()
+            ]
 
         # Add any extra config options
         args.update(self._config)

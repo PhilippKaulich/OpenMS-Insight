@@ -145,6 +145,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   fillRow?: boolean
   rowOverview?: boolean
   rowOverviewTitle?: string
+  /** A button per row and action, sending the row to Python */
+  rowActions?: Array<{ id: string, icon: string, label?: string }>
   /** False hides the column menu */
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */

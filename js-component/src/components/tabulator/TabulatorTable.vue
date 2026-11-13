@@ -1148,7 +1148,7 @@ export default defineComponent({
           title: '',
           hozAlign: 'right',
         },
-        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...this.rowActionColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -2848,6 +2848,41 @@ export default defineComponent({
           this.openRowOverview(cell.getRow().getData() as Record<string, unknown>)
         },
       } as unknown as ColumnDefinition]
+    },
+
+    // Row actions: a button per row and action, sending the row to Python
+    rowActionColumns(): ColumnDefinition[] {
+      return (this.args.rowActions || []).map((action) => {
+        const label = action.label || action.id
+        const icon = /^mdi-[a-z0-9-]+$/.test(action.icon) ? action.icon : 'mdi-open-in-new'
+        return {
+          title: '',
+          field: `__row_action_${action.id}`,
+          headerSort: false,
+          resizable: false,
+          width: 36,
+          minWidth: 36,
+          hozAlign: 'center',
+          download: false,
+          responsive: 0,
+          headerTooltip: false,
+          tooltip: label,
+          formatter: () => {
+            const el = document.createElement('i')
+            el.className = `mdi ${icon} row-overview-button`
+            el.setAttribute('role', 'button')
+            el.setAttribute('aria-label', label)
+            el.dataset.testid = `row-action-${action.id}`
+            return el
+          },
+          // The row is selected too: rowClick follows this cellClick
+          cellClick: (_event: UIEvent, cell: CellComponent) => {
+            const row = { ...(cell.getRow().getData() as Record<string, unknown>) }
+            for (const key of Object.keys(row)) if (key.startsWith('__')) delete row[key]
+            this.streamlitDataStore.sendEvent({ type: 'row_action', id: action.id, row })
+          },
+        } as unknown as ColumnDefinition
+      })
     },
 
     rowOverviewValue(col: Record<string, any>, value: unknown): string {
