@@ -70,6 +70,8 @@ export interface PaginationState {
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
   toggles?: Record<string, boolean>
+  /** On/off state of the filter presets, keyed by id */
+  presets?: Record<string, boolean>
   /** The filter dialog's filters in force (sent only when there are any) */
   column_filters?: ColumnFilter[]
   /** The search in force (sent only when there is one) */
@@ -126,6 +128,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMetadata?: Record<string, ColumnMetadata>
   /** Title-row checkboxes that restrict rows to a boolean column */
   toggleFilters?: Array<{ label: string; column: string; default: boolean; group_column?: string | null }>
+  /** Ready-made filters at the top of the filter dialog (filter_presets) */
+  filterPresets?: import('../components/filterPresets').FilterPreset[]
   /** Selections set (null clears) when a row click changes the selection */
   onSelect?: Record<string, unknown>
   /** Clicking the selected row again clears the interactivity selections */
@@ -677,6 +681,8 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
+  /** List the observed masses no selected fragment ion matches, below the fragment table */
+  unmatchedMasses?: boolean
   /** Write the matched proteoform with the matched fragments */
   fragmentMatchesProteoform?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)

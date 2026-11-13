@@ -888,6 +888,35 @@ class TestProteinSequenceView:
         with pytest.raises(TypeError):
             view.set_isotope_errors(True)
 
+    def test_unmatched_masses_args(self, mock_streamlit, temp_cache_dir: Path):
+        def view(**kwargs):
+            return ProteinSequenceView(
+                cache_id="seq_unmatched",
+                data=pl.LazyFrame(
+                    {
+                        "hit_index": [0],
+                        "sequence": [["A"]],
+                        "masses": [[1000.0]],
+                        "precursor_mass": [1000.0],
+                    }
+                ),
+                filters={"protein": "hit_index"},
+                cache_path=str(temp_cache_dir),
+                **kwargs,
+            )
+
+        plain = view()
+        assert plain._get_component_args()["unmatchedMasses"] is False
+        assert plain.set_unmatched_masses() is plain
+        assert plain._get_component_args()["unmatchedMasses"] is True
+        assert (
+            plain.set_unmatched_masses(False)._get_component_args()["unmatchedMasses"]
+            is False
+        )
+        listed = view(unmatched_masses=True)
+        assert listed._get_component_args()["unmatchedMasses"] is True
+        assert "unmatched_masses" not in listed._get_cache_config()
+
     def test_modification_picker_from_pyopenms(
         self, mock_streamlit, temp_cache_dir: Path
     ):

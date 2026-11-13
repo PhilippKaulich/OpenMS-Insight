@@ -268,6 +268,7 @@ class ProteinSequenceView(BaseComponent):
         proforma_identifier: str | None = None,
         isotope_errors: int | None = None,
         method_ion_options: bool = False,
+        unmatched_masses: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
@@ -393,6 +394,15 @@ class ProteinSequenceView(BaseComponent):
                 table has an Isotope column. The precursor's Δ in ppm and its
                 isotope reading are shown either way. None (default): no
                 setting, exact matches only.
+            unmatched_masses: List the observed masses that no fragment ion
+                of the selected types matches as rows of the fragment table
+                ('unmatched', with the nearest theoretical fragment ion and the
+                differences to it; a shift shared by several masses can point
+                at a modification). The table's filter dialog has a preset,
+                'Hide unmatched masses', that is on by default, so the rows
+                show only once the user switches it off. Clicking such a row
+                selects the mass in the mass table. Not offered with annotated
+                fragments. Default False.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -465,6 +475,7 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_identifier = proforma_identifier
         self.set_isotope_errors(isotope_errors)
         self._method_ion_options = bool(method_ion_options)
+        self._unmatched_masses = bool(unmatched_masses)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
         )
@@ -837,6 +848,18 @@ class ProteinSequenceView(BaseComponent):
         self._method_ion_options = bool(enabled)
         return self
 
+    def set_unmatched_masses(self, enabled: bool = True) -> "ProteinSequenceView":
+        """List unmatched masses in the fragment table (hidden by a preset).
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``unmatched_masses`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._unmatched_masses = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -854,6 +877,7 @@ class ProteinSequenceView(BaseComponent):
             "proformaIdentifier": self._proforma_identifier,
             "isotopeErrors": self._isotope_errors,
             "methodIonOptions": self._method_ion_options,
+            "unmatchedMasses": self._unmatched_masses,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,

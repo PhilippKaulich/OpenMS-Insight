@@ -175,6 +175,7 @@ Table(
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 - `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
 - `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+- `filter_presets`: Ready-made filters at the top of the filter dialog, each a check box with a label, optional help and a default state. The same card lists the filters the viewer set (column filters, search), each removed by unticking it. A preset that is on keeps only the rows matching all of its conditions (`{"column", "op", "value"}`, op one of `==`, `!=`, `<=`, `>=`, `<`, `>`, `in`, `not in`) and counts in the filter badge and chips. The sequence view's fragment table uses the same presets.
 - `collapse_columns`: Columns that do not fit the table's width fold into a row overview (default). `False` keeps every column and scrolls the table sideways instead, for a narrow table whose columns all matter. It does not affect the cache.
 - `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
 
@@ -197,6 +198,22 @@ Table(
         },
         "peptides": {"op": ">=", "suggestions": [2, 3], "default": 2},
     },
+    filter_presets=[
+        {
+            "label": "Hide contaminants",
+            "column": "is_contaminant",
+            "op": "!=",
+            "value": True,
+            "default": True,
+        },
+        {
+            "label": "Well supported",
+            "filters": [
+                {"column": "peptides", "op": ">=", "value": 2},
+                {"column": "q_value", "op": "<=", "value": 0.01},
+            ],
+        },
+    ],
 )
 ```
 

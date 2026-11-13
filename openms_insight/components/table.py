@@ -15,6 +15,7 @@ from ..core.excel_export import (
     flatten_nested,
     xlsx_payload,
 )
+from ..core.filter_presets import normalize_filter_presets, preset_expression
 from ..core.multi_select import (
     combine,
     filter_selection,
@@ -86,6 +87,7 @@ _VUE_OPTION_KEYS = (
     "search",
     "search_placeholder",
     "numeric_filters",
+    "filter_presets",
     "fill_height",
     "fill_row",
     "row_overview",
@@ -171,6 +173,7 @@ class Table(BaseComponent):
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
+        filter_presets: list[dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
         collapse_columns: bool = True,
         export_info: dict[str, Any] | None = None,
@@ -307,6 +310,24 @@ class Table(BaseComponent):
                   the table's filters.
                 Example: {'q_value': {'op': '<=', 'suggestions': [0.01, 0.001]},
                 'peptides': {'op': '>=', 'suggestions': [2, 3], 'default': 2}}
+            filter_presets: Ready-made filters listed at the top of the filter
+                dialog, each switched on and off with a check box and counted
+                in the filter badge while on. A preset that is on keeps only
+                the rows matching all of its conditions; the filtering runs on
+                the server, over every row. Each entry is a dict:
+                - label: Check box label
+                - filters: Conditions, each {"column", "op", "value"} with op
+                  one of "==", "!=", "<=", ">=", "<", ">", "in", "not in".
+                  A single condition can be given as "column", "op" and
+                  "value" on the preset itself.
+                - help: Optional text shown below the check box
+                - default: Initial state (default: False)
+                - id: Optional key of its state (default: the label)
+                Example: [{'label': 'Hide decoys', 'column': 'is_decoy',
+                'op': '!=', 'value': True, 'default': True},
+                {'label': 'Confident PSMs', 'filters': [{'column': 'q_value',
+                'op': '<=', 'value': 0.01}, {'column': 'charge', 'op': '>=',
+                'value': 2}]}]
             collapse_columns: Fold the columns that do not fit the width into
                 a row overview (default). False keeps every column and scrolls
                 the table sideways instead, which suits a narrow table whose
@@ -363,6 +384,7 @@ class Table(BaseComponent):
             self._search = bool(search)
         self._search_placeholder = search_placeholder
         self._numeric_filters = self._normalize_numeric_filters(numeric_filters)
+        self._filter_presets = normalize_filter_presets(filter_presets)
         self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
         self._on_select = dict(on_select) if on_select else {}
         if reclick not in ("keep", "unhighlight", "deselect"):
@@ -415,6 +437,7 @@ class Table(BaseComponent):
             search=search,
             search_placeholder=search_placeholder,
             numeric_filters=numeric_filters,
+            filter_presets=filter_presets,
             **kwargs,
         )
         self._config.pop("multi_select", None)
@@ -524,6 +547,9 @@ class Table(BaseComponent):
                 if self._numeric_filters
                 else {}
             ),
+            **(
+                {"filter_presets": self._filter_presets} if self._filter_presets else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -552,6 +578,7 @@ class Table(BaseComponent):
         self._search = config.get("search", False)
         self._search_placeholder = config.get("search_placeholder")
         self._numeric_filters = config.get("numeric_filters") or {}
+        self._filter_presets = config.get("filter_presets") or []
         self._fill_height = config.get("fill_height", False)
         self._fill_row = config.get("fill_row", True)
         self._row_overview = config.get("row_overview", False)
@@ -1136,6 +1163,8 @@ class Table(BaseComponent):
             }
             if self._toggle_filters:
                 current_sort_filter["toggles"] = self._toggle_states(pagination_state)
+            if self._filter_presets:
+                current_sort_filter["presets"] = self._preset_states(pagination_state)
             if self._search:
                 current_sort_filter["search"] = search
 
@@ -1336,6 +1365,11 @@ class Table(BaseComponent):
                     if self._toggle_filters
                     else {}
                 ),
+                **(
+                    {"presets": self._preset_states(pagination_state)}
+                    if self._filter_presets
+                    else {}
+                ),
                 # The filters in force, so a view that is drawn again (e.g. after
                 # the page was left and opened again) shows them
                 **({"column_filters": column_filters} if column_filters else {}),
@@ -1456,11 +1490,25 @@ class Table(BaseComponent):
     def _apply_toggle_filters(
         self, data: pl.LazyFrame, pagination_state: dict[str, Any]
     ) -> pl.LazyFrame:
-        """Keep rows whose column is true for every ticked toggle filter."""
+        """Keep rows whose column is true for every ticked toggle filter.
+
+        The filter presets that are on apply here too.
+        """
         for column, enabled in self._toggle_states(pagination_state).items():
             if enabled:
                 data = data.filter(pl.col(column))
+        for preset in self._filter_presets:
+            if self._preset_states(pagination_state).get(preset["id"]):
+                data = data.filter(preset_expression(preset))
         return data
+
+    def _preset_states(self, pagination_state: dict[str, Any]) -> dict[str, bool]:
+        """Current on/off state of each filter preset, keyed by id."""
+        requested = pagination_state.get("presets") or {}
+        return {
+            preset["id"]: bool(requested.get(preset["id"], preset["default"]))
+            for preset in self._filter_presets
+        }
 
     def _effective_column_filters(
         self, pagination_state: dict[str, Any]
@@ -1857,6 +1905,8 @@ class Table(BaseComponent):
                 args["searchPlaceholder"] = self._search_placeholder
         if self._numeric_filters:
             args["numericFilters"] = self._numeric_filters
+        if self._filter_presets:
+            args["filterPresets"] = self._filter_presets
 
         return args
 
