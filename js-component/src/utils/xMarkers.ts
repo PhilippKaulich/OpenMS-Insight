@@ -5,9 +5,10 @@
  * tolerance, the most intense peak within it of the marker is the marker's
  * peak: it gets a dot in the marker colour, and the label sits above it (at
  * the plot's top for a marker without a peak, whose guide is then fainter).
- * The guide stops short of the dot and the label, so neither is crossed out:
- * above a peak it runs from the label up, otherwise from the axis up to the
- * label. Labels are left out where they would overlap a label already
+ * No guide crosses a dot or a label: above a peak it runs from the label up,
+ * otherwise from the axis up to the label, and it is cut where it would pass
+ * another marker's dot or label (markers closer together than a label is
+ * wide, such as neighbouring reporter channels). Labels are left out where they would overlap a label already
  * placed, left to right, so zooming in shows more of them.
  */
 
@@ -117,22 +118,19 @@ export function markerOverlay(input: MarkerOverlayInput): MarkerOverlay {
   if (!(span > 0) || widthPx <= 0) return { shapes, annotations }
 
   const ySpan = yRange[1] - yRange[0]
-  const guide = (m: MarkerMatch, y0: number, y1: number) => {
-    if (!(y1 > y0)) return
-    shapes.push({
-      type: 'line',
-      xref: 'x',
-      yref: 'paper',
-      x0: m.x,
-      x1: m.x,
-      y0,
-      y1,
-      line: { color: m.color, width: 1, dash: 'dot' },
-      opacity: m.index !== undefined || !input.matching ? 0.9 : 0.45,
-      layer: 'below',
-    })
-  }
   const px2paper = (px: number) => (input.heightPx > 0 ? px / input.heightPx : 0)
+  const toPx = (value: number) => ((value - xRange[0]) / span) * widthPx
+
+  // What each marker draws besides its guide: boxes in pixels across and
+  // paper units up, which no guide may cross
+  interface Box {
+    left: number
+    right: number
+    bottom: number
+    top: number
+  }
+  const boxes: Box[] = []
+  const guides: { m: MarkerMatch; px: number; y0: number; y1: number }[] = []
 
   let labelRight = -Infinity
   for (const m of matches) {
@@ -140,12 +138,13 @@ export function markerOverlay(input: MarkerOverlayInput): MarkerOverlay {
     const matched = m.index !== undefined
     const peakY = matched ? y[m.index as number] : undefined
     const onPeak = matched && (peakY as number) < yRange[1] && ySpan > 0
+    const peak = onPeak ? Math.max(0, ((peakY as number) - yRange[0]) / ySpan) : 0
     // The label sits over the marker's peak, or at the top without one;
     // it is left out where it would overlap a label placed before it
     let labelled = false
     const labelX = matched ? x[m.index as number] : m.x
     if (m.label) {
-      const px = ((labelX - xRange[0]) / span) * widthPx
+      const px = toPx(labelX)
       const width = input.textWidth(m.label, FONT_SIZE)
       if (px - width / 2 >= labelRight + LABEL_GAP_PX) {
         labelRight = px + width / 2
@@ -162,16 +161,65 @@ export function markerOverlay(input: MarkerOverlayInput): MarkerOverlay {
           font: { size: FONT_SIZE, color: m.color },
           captureevents: false,
         })
+        const bottom = onPeak ? peak + px2paper(6) : 1 - px2paper(LABEL_HEIGHT_PX)
+        boxes.push({
+          left: px - width / 2,
+          right: px + width / 2,
+          bottom,
+          top: bottom + px2paper(LABEL_HEIGHT_PX),
+        })
       }
     }
     if (onPeak) {
+      const px = toPx(labelX)
+      boxes.push({
+        left: px - DOT_RADIUS_PX,
+        right: px + DOT_RADIUS_PX,
+        bottom: peak - px2paper(DOT_RADIUS_PX),
+        top: peak + px2paper(DOT_RADIUS_PX),
+      })
       // From above the dot (and its label) to the top
-      const peak = Math.max(0, ((peakY as number) - yRange[0]) / ySpan)
       const above = labelled ? 6 + LABEL_HEIGHT_PX : DOT_RADIUS_PX
-      guide(m, peak + px2paper(above + GUIDE_GAP_PX), 1)
+      guides.push({ m, px: toPx(m.x), y0: peak + px2paper(above + GUIDE_GAP_PX), y1: 1 })
     } else {
       // From the axis to below the label at the top
-      guide(m, 0, labelled ? 1 - px2paper(LABEL_HEIGHT_PX + GUIDE_GAP_PX) : 1)
+      const y1 = labelled ? 1 - px2paper(LABEL_HEIGHT_PX + GUIDE_GAP_PX) : 1
+      guides.push({ m, px: toPx(m.x), y0: 0, y1 })
+    }
+  }
+
+  // Each guide is cut where it would cross another marker's dot or label
+  // (markers closer than a label's width, such as neighbouring channels)
+  const gap = px2paper(GUIDE_GAP_PX)
+  const minLength = px2paper(4)
+  for (const g of guides) {
+    let pieces: [number, number][] = [[g.y0, g.y1]]
+    for (const box of boxes) {
+      if (g.px < box.left - GUIDE_GAP_PX || g.px > box.right + GUIDE_GAP_PX) continue
+      const lo = box.bottom - gap
+      const hi = box.top + gap
+      pieces = pieces.flatMap(([a, b]): [number, number][] => {
+        if (hi <= a || lo >= b) return [[a, b]]
+        const out: [number, number][] = []
+        if (lo > a) out.push([a, lo])
+        if (hi < b) out.push([hi, b])
+        return out
+      })
+    }
+    for (const [y0, y1] of pieces) {
+      if (y1 - y0 < minLength) continue
+      shapes.push({
+        type: 'line',
+        xref: 'x',
+        yref: 'paper',
+        x0: g.m.x,
+        x1: g.m.x,
+        y0,
+        y1,
+        line: { color: g.m.color, width: 1, dash: 'dot' },
+        opacity: g.m.index !== undefined || !input.matching ? 0.9 : 0.45,
+        layer: 'below',
+      })
     }
   }
 
