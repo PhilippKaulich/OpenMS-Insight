@@ -30,6 +30,7 @@ import { plotPointPosition, usePeakLabels } from '@/composables/usePeakLabels'
 import PeakLabelEditor from './PeakLabelEditor.vue'
 import PeakHoverTip from './PeakHoverTip.vue'
 import { usePeakHover } from '@/composables/usePeakHover'
+import { pickedValue, sameValue, selectedValue } from '@/utils/pickValue'
 import { useXNavigation } from '@/composables/useXNavigation'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
@@ -231,7 +232,7 @@ export default defineComponent({
         if (columnValues && Array.isArray(columnValues)) {
           // Find the index with matching value
           for (let i = 0; i < columnValues.length; i++) {
-            if (columnValues[i] === selectedValue) {
+            if (sameValue(columnValues[i], selectedValue)) {
               return i
             }
           }
@@ -239,7 +240,7 @@ export default defineComponent({
           // Fallback: if no interactivity column data, try matching x values
           const xValues = this.plotData.x_values
           for (let i = 0; i < xValues.length; i++) {
-            if (xValues[i] === selectedValue) {
+            if (sameValue(xValues[i], selectedValue)) {
               return i
             }
           }
@@ -1009,8 +1010,30 @@ export default defineComponent({
         })
         if (plotElement && needsListeners) {
           plotElement._insightListeners = true
+          // Plotly reports a click only near a vertex of a stick, so a click
+          // half-way up a tall peak is lost. A click on a peak the hover shows
+          // that Plotly did not report is handled the same way.
+          let plotlyClickAt = -Infinity
+          let downAt: { x: number; y: number } | null = null
           plotElement.on('plotly_click', (eventData: any) => {
+            plotlyClickAt = performance.now()
             this.onPlotClick(eventData)
+          })
+          plotElement.addEventListener('mousedown', (event: MouseEvent) => {
+            downAt = { x: event.clientX, y: event.clientY }
+          })
+          plotElement.addEventListener('click', (event: MouseEvent) => {
+            const start = downAt
+            downAt = null
+            // A zoom box or pan ends with a click too
+            if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return
+            const index = this.hover.indexAt(event)
+            if (index === undefined || !this.plotData) return
+            const x = this.plotData.x_values[index]
+            setTimeout(() => {
+              if (performance.now() - plotlyClickAt < 300) return
+              this.onPlotClick({ event, points: [{ x }] })
+            })
           })
 
           plotElement.on('plotly_relayout', (eventData: any) => {
@@ -1223,14 +1246,18 @@ export default defineComponent({
         if (!this.plotData) return
 
         const xValues = this.plotData.x_values
-        let nearestIndex = 0
-        let nearestDistance = Infinity
-
-        for (let i = 0; i < xValues.length; i++) {
-          const distance = Math.abs(xValues[i] - clickedX)
-          if (distance < nearestDistance) {
-            nearestDistance = distance
-            nearestIndex = i
+        // The peak the hover read-out shows, so a click selects what is shown;
+        // else the peak nearest the clicked x
+        let nearestIndex = eventData.event ? this.hover.indexAt(eventData.event) : undefined
+        if (nearestIndex === undefined) {
+          let nearestDistance = Infinity
+          nearestIndex = 0
+          for (let i = 0; i < xValues.length; i++) {
+            const distance = Math.abs(xValues[i] - clickedX)
+            if (distance < nearestDistance) {
+              nearestDistance = distance
+              nearestIndex = i
+            }
           }
         }
 
@@ -1242,10 +1269,10 @@ export default defineComponent({
 
           if (columnValues && Array.isArray(columnValues) && nearestIndex < columnValues.length) {
             // Use the value from the interactivity column
-            this.selectionStore.updateSelection(identifier, columnValues[nearestIndex])
+            this.selectionStore.updateSelection(identifier, selectedValue(columnValues[nearestIndex]))
           } else if (column === this.args.xColumn) {
             // Fallback: use x value if no interactivity column data
-            this.selectionStore.updateSelection(identifier, xValues[nearestIndex])
+            this.selectionStore.updateSelection(identifier, pickedValue(xValues[nearestIndex]))
           }
         }
       }

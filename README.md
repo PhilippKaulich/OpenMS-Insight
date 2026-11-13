@@ -970,6 +970,26 @@ They are plain Plotly annotations with an arrow to their peak, so the image
 download includes them. Like the measure options, `peak_labels` is a render-time
 setting and never part of the cache configuration.
 
+### Using a clicked peak elsewhere (an XIC, say)
+
+A click on a LinePlot peak writes the `interactivity` columns of that peak to the state. Map an identifier to the x column to hand the m/z to the rest of the page, next to any id the click already selects:
+
+```python
+LinePlot(
+    cache_id="ms2",
+    data=peaks,
+    x_column="mz",
+    y_column="intensity",
+    interactivity={"peak": "peak_id", "xic_mz": "mz"},
+)(state_manager=state)
+
+mz = state.get_selection("xic_mz")  # None until a peak is clicked
+if mz is not None:
+    show_xic(mz)  # the page's own code
+```
+
+The peak is the one the hover read-out shows. Columns reach the browser as 32-bit floats, so a float is written as the shortest decimal that is the same 32-bit float (`341.3387`, not `341.33868408203125`); the plot still marks that peak as selected.
+
 ### Stepping through a filter (`stepper`)
 
 Every plot with a toolbar (`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot`, `Plot3D`, `Heatmap`) takes a `stepper`: one of its filter identifiers. The plot toolbar then shows `‹ frame 12 ›`; the arrows set that identifier to the previous or next value of its column, in sorted order, and the tooltip says where the value is (`12 of 340`). While the filter has no value (and no `filter_defaults` entry) the plot starts at the first one. A peak map of one ion-mobility frame steps through the frames, a spectrum plot through its spectra:

@@ -148,28 +148,43 @@ export function usePeakHover() {
     tip.value = null
   }
 
-  function update(): void {
-    frame = 0
-    const event = lastEvent
+  /** The plot area, the peaks drawn now and the mouse in plot pixels. */
+  function locate(event: MouseEvent | null) {
     const layout = (element as unknown as { _fullLayout?: PlotLayout } | null)?._fullLayout
     const size = layout?._size
     const xaxis = layout?.xaxis
-    const { x, y, extra, xName, yName } = source()
+    const src = source()
+    const { x, y } = src
     if (!event || !element || !size || !xaxis?.p2l || !xaxis.l2p || !x || !y || x.length === 0) {
-      return hide()
+      return null
     }
-    // Hidden while a button is held (a zoom box or pan)
-    if (event.buttons !== 0) return hide()
     const rect = element.getBoundingClientRect()
     const px = event.clientX - rect.left - size.l
     const py = event.clientY - rect.top - size.t
-    if (px < 0 || px > size.w || py < 0 || py > size.h) return hide()
+    if (px < 0 || px > size.w || py < 0 || py > size.h) return null
 
     if (!sorted || sorted.x !== x) sorted = { x, order: xOrder(x) }
     const target = xaxis.p2l(px)
     const halfWidth = Math.abs(xaxis.p2l(px + PIXEL_WINDOW) - target)
     const index = peakAt(x, y, sorted.order, target, halfWidth)
-    if (index === undefined || Math.abs(xaxis.l2p(x[index]) - px) > SNAP_PX) return hide()
+    if (index === undefined || Math.abs(xaxis.l2p(x[index]) - px) > SNAP_PX) return null
+    return { index, x, y, src, size, rect }
+  }
+
+  /** Index of the peak the hover would show for this mouse event, if any. */
+  function indexAt(event: MouseEvent): number | undefined {
+    return locate(event)?.index
+  }
+
+  function update(): void {
+    frame = 0
+    const event = lastEvent
+    // Hidden while a button is held (a zoom box or pan)
+    if (!event || event.buttons !== 0) return hide()
+    const found = locate(event)
+    if (!found || !element) return hide()
+    const { index, x, y, src, size, rect } = found
+    const { extra, xName, yName } = src
 
     const position = plotPointPosition(element, container, x[index], y[index])
     if (!position) return hide()
@@ -235,5 +250,5 @@ export function usePeakHover() {
     unbind()
   })
 
-  return reactive({ tip, bind, hide })
+  return reactive({ tip, bind, hide, indexAt })
 }
