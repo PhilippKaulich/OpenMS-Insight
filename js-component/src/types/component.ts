@@ -186,6 +186,8 @@ export interface LinePlotComponentArgs
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
+  xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers sorted by x (x_markers)
+  xMarkerTolerance?: number | null // Distance within which a marker takes a peak (x_marker_tolerance)
 }
 
 export interface LinePlotStyling {
