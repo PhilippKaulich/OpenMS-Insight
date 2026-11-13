@@ -52,7 +52,13 @@ analysis = [
     "mygene",
     "plotly",
 ]
+# Excel (.xlsx) in the Table's download menu. Without it the download is CSV only.
+excel = [
+    "xlsxwriter>=3.0",
+]
 dev = [
+    "xlsxwriter>=3.0",
+    "openpyxl>=3.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "black>=23.0.0",

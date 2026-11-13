@@ -7,6 +7,13 @@ from typing import Any
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.excel_export import (
+    EXCEL_MAX_ROWS,
+    about_rows,
+    excel_available,
+    flatten_nested,
+    xlsx_payload,
+)
 from ..core.multi_select import (
     combine,
     filter_selection,
@@ -164,6 +171,7 @@ class Table(BaseComponent):
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
+        export_info: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -306,6 +314,12 @@ class Table(BaseComponent):
                 for 200 ms, so holding a key down does not rerun the app for
                 every row it passes. False leaves the keys to the browser.
                 Display-only, so not part of the cache configuration.
+            export_info: What the Excel download's "About" sheet says besides
+                the table, its sort, filters and search: ``{"Run": "Run 3",
+                "Search": "10 ppm, Trypsin/P"}``, one row per item, in this
+                order. The download menu offers Excel (.xlsx) next to CSV when
+                ``xlsxwriter`` is installed and the table is paginated on the
+                server. Not part of the cache configuration.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -321,6 +335,7 @@ class Table(BaseComponent):
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
+        self._export_info = dict(export_info or {})
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
@@ -1007,11 +1022,22 @@ class Table(BaseComponent):
         # and the displayed columns, which is all Tabulator's own download sees).
         download_payload = None
         if download_request is not None:
-            download_payload = {
-                "request_id": download_request,
-                "filename": f"{self._title or self._cache_id}.csv",
-                "csv": csv_safe(self._order_export_columns(data.collect())).write_csv(),
-            }
+            rows = self._order_export_columns(data.collect())
+            if pagination_state.get("download_format") == "xlsx" and excel_available():
+                download_payload = self._xlsx_download(
+                    download_request,
+                    rows,
+                    sort_column,
+                    sort_dir,
+                    column_filters,
+                    search,
+                )
+            else:
+                download_payload = {
+                    "request_id": download_request,
+                    "filename": f"{self._title or self._cache_id}.csv",
+                    "csv": csv_safe(flatten_nested(rows)).write_csv(),
+                }
 
         data = project(data)
 
@@ -1559,6 +1585,50 @@ class Table(BaseComponent):
             )
         return data
 
+    def _column_titles(self, columns: list[str]) -> dict[str, str]:
+        """Column titles to use as the Excel header, where they are unique."""
+        titles = {
+            col_def["field"]: str(col_def["title"])
+            for col_def in (self._column_definitions or [])
+            if col_def.get("field") in columns and col_def.get("title")
+        }
+        taken = [titles.get(c, c) for c in columns]
+        return {f: t for f, t in titles.items() if taken.count(t) == 1}
+
+    def _xlsx_download(
+        self,
+        request_id: Any,
+        rows: pl.DataFrame,
+        sort_column: str | None,
+        sort_dir: str,
+        column_filters: list[dict[str, Any]],
+        search: str,
+    ) -> dict[str, Any]:
+        """The rows as an Excel workbook, with an 'About' sheet."""
+        titles = self._column_titles(rows.columns)
+        named_filters = [
+            {**f, "field": titles.get(f.get("field"), f.get("field"))}
+            for f in column_filters
+        ]
+        exported = min(rows.height, EXCEL_MAX_ROWS - 1)
+        about = about_rows(
+            self._title or self._cache_id,
+            rows.height,
+            exported,
+            titles.get(sort_column, sort_column) if sort_column else None,
+            sort_dir,
+            named_filters,
+            search,
+            self._export_info,
+        )
+        return xlsx_payload(
+            request_id,
+            f"{self._title or self._cache_id}.xlsx",
+            rows.rename(titles),
+            self._title or self._cache_id,
+            about,
+        )
+
     def _order_export_columns(self, df: pl.DataFrame) -> pl.DataFrame:
         """Put the displayed columns first, in display order, then the rest."""
         shown = [
@@ -1687,6 +1757,8 @@ class Table(BaseComponent):
             args["columnMenu"] = False
         if not self._keyboard_navigation:
             args["keyboardNavigation"] = False
+        if self._pagination and excel_available():
+            args["excelExport"] = True
         if self._reset_sort:
             args["resetSort"] = True
         if self._reset_sort_on:

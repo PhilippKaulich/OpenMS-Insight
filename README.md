@@ -12,7 +12,7 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
 - **Cache reconstruction** - components can be restored from cache without re-specifying configuration
-- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV export
+- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV and Excel export
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
 - **Mirror plot component** for paired-spectrum comparison with independent per-side filtering and shared click selection
 - **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
@@ -239,6 +239,22 @@ columns come first. The same export is available in Python:
 table.export_data()  # whole table, initial sort
 table.export_data(state)  # as rendered for this selection state
 ```
+
+**Excel export.** With `xlsxwriter` installed (`pip install openms-insight[excel]`),
+the download button of a paginated table opens a menu with CSV and **Excel (.xlsx)**.
+The workbook holds the same rows, with the column titles as its header and list
+columns joined with `; `, and an "About" sheet: the table, when it was exported,
+the number of rows, the sort, the filters and the search. `export_info` adds rows
+of your own to that sheet, such as the run and its settings; it is not part of the
+cache configuration:
+
+```python
+Table(..., export_info={"Run": "Run 3", "Database": "yeast.fasta, 6,115 proteins"})
+```
+
+Text is written as text, so a value starting with `=` is not run as a formula. A
+sheet holds at most 1,048,575 rows; beyond that the About sheet says how many were
+left out.
 
 ### LinePlot
 

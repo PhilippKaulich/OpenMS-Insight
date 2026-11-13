@@ -8,13 +8,35 @@
       <div class="table-toolbar">
         <div class="table-toolbar-buttons">
           <v-btn
+            v-if="!offersExcel"
             variant="text"
             size="small"
             icon="mdi-download"
             :loading="pendingDownloadId !== null"
             :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
-            @click="downloadTable"
+            @click="downloadTable('csv')"
           />
+          <v-btn
+            v-else
+            variant="text"
+            size="small"
+            icon="mdi-download"
+            :loading="pendingDownloadId !== null"
+            title="Download all rows and columns"
+          >
+            <v-icon>mdi-download</v-icon>
+            <v-menu activator="parent" location="bottom start">
+              <v-list density="compact">
+                <v-list-item prepend-icon="mdi-file-delimited-outline" title="CSV" @click="downloadTable('csv')" />
+                <v-list-item
+                  prepend-icon="mdi-file-excel-outline"
+                  title="Excel (.xlsx)"
+                  subtitle="With a sheet on the sort and filters"
+                  @click="downloadTable('xlsx')"
+                />
+              </v-list>
+            </v-menu>
+          </v-btn>
           <div style="position: relative; display: inline-flex">
             <v-btn
               variant="text"
@@ -539,9 +561,15 @@ export default defineComponent({
       return typeof val === 'number' ? val : null
     },
     // Full-table CSV export prepared by Python in answer to a download request
-    downloadPayload(): { request_id: number; filename: string; csv: string } | null {
+    downloadPayload(): { request_id: number; filename: string; csv?: string; xlsx?: string } | null {
       const val = this.streamlitDataStore.allDataForDrawing?._download
-      return val && typeof val === 'object' ? (val as { request_id: number; filename: string; csv: string }) : null
+      return val && typeof val === 'object'
+        ? (val as { request_id: number; filename: string; csv?: string; xlsx?: string })
+        : null
+    },
+    // Excel next to CSV: Python writes the workbook, so only for server-side tables
+    offersExcel(): boolean {
+      return this.isServerSidePagination && this.args.excelExport === true
     },
     // Check if server-side pagination is enabled
     isServerSidePagination(): boolean {
@@ -570,7 +598,15 @@ export default defineComponent({
     downloadPayload(payload) {
       if (!payload || payload.request_id !== this.pendingDownloadId) return
       this.pendingDownloadId = null
-      const blob = new Blob([payload.csv], { type: 'text/csv;charset=utf-8' })
+      let blob: Blob
+      if (typeof payload.xlsx === 'string') {
+        const binary = atob(payload.xlsx)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      } else {
+        blob = new Blob([payload.csv ?? ''], { type: 'text/csv;charset=utf-8' })
+      }
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -2406,7 +2442,7 @@ export default defineComponent({
         // Storage can be unavailable (private window, blocked site data)
       }
     },
-    downloadTable(): void {
+    downloadTable(format: 'csv' | 'xlsx' = 'csv'): void {
       // A server-side paginated table only holds the current page, and only the
       // displayed columns, so ask Python for the whole filtered, sorted table.
       const paginationIdentifier = this.args.paginationIdentifier as string | undefined
@@ -2421,6 +2457,7 @@ export default defineComponent({
           column_filters: this.currentColumnFilters,
               ...this.viewFiltersPatch,
           download_request: requestId,
+          ...(format === 'xlsx' ? { download_format: 'xlsx' } : {}),
         })
         return
       }

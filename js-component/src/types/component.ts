@@ -149,6 +149,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
+  excelExport?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
