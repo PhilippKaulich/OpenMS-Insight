@@ -175,6 +175,7 @@ Table(
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 - `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
 - `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+- `collapse_columns`: Columns that do not fit the table's width fold into a row overview (default). `False` keeps every column and scrolls the table sideways instead, for a narrow table whose columns all matter. It does not affect the cache.
 - `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
@@ -706,7 +707,9 @@ spectrum(key="spectrum", state_manager=state_manager)
 
 ### SeriesPlot
 
-Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
+Line, marker, bar or box plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`), and for counts or distributions per sample.
+
+`mode` is `"lines"` (default), `"markers"`, `"lines+markers"`, `"bars"` (one bar per x value and series, the series side by side) or `"box"` (one box per x value and series, drawn from all y values at that x). `orientation="h"` turns bars and boxes sideways, the x values listed top to bottom, which suits long labels such as GO terms or file names.
 
 ```python
 from openms_insight import SeriesPlot
@@ -722,6 +725,27 @@ SeriesPlot(
     x_label="Score",
     y_label="Density",
 )(key="density", state_manager=state_manager)
+
+# Identified proteins per sample, as bars
+SeriesPlot(
+    cache_id="proteins_per_sample",
+    data=counts,  # columns: sample, proteins, kind
+    x_column="sample",
+    y_column="proteins",
+    series_column="kind",
+    mode="bars",
+)(key="per_sample", state_manager=state_manager)
+
+# Abundances per sample, as boxes
+SeriesPlot(
+    cache_id="abundances",
+    data=abundances,  # columns: sample, log2_abundance, step
+    x_column="sample",
+    y_column="log2_abundance",
+    series_column="step",
+    mode="box",
+    y_range_mode="normal",
+)(key="abundances", state_manager=state_manager)
 ```
 
 ### Plot3D

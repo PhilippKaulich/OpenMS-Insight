@@ -270,6 +270,53 @@ class TestSeriesPlot:
                 cache_path=str(temp_cache_dir),
             )
 
+    def test_bars_and_box(self, mock_streamlit, temp_cache_dir):
+        counts = pl.LazyFrame(
+            {
+                "sample": ["s1", "s2", "s1", "s2"],
+                "n": [10, 12, 4, 5],
+                "kind": ["a", "a", "b", "b"],
+            }
+        )
+        bars = SeriesPlot(
+            cache_id="bars",
+            data=counts,
+            x_column="sample",
+            y_column="n",
+            series_column="kind",
+            mode="bars",
+            orientation="h",
+            cache_path=str(temp_cache_dir),
+        )
+        args = bars._get_component_args()
+        assert args["mode"] == "bars"
+        assert args["orientation"] == "h"
+        cached = SeriesPlot(cache_id="bars", cache_path=str(temp_cache_dir))
+        assert cached._get_component_args()["mode"] == "bars"
+        assert cached._get_component_args()["orientation"] == "h"
+
+        box = SeriesPlot(
+            cache_id="box",
+            data=counts,
+            x_column="sample",
+            y_column="n",
+            mode="box",
+            cache_path=str(temp_cache_dir),
+        )
+        assert box._get_component_args()["mode"] == "box"
+        assert box._get_component_args()["orientation"] == "v"
+
+    def test_rejects_unknown_mode_and_orientation(self, mock_streamlit, temp_cache_dir):
+        data = pl.LazyFrame({"x": [1.0], "y": [1.0]})
+        with pytest.raises(ValueError, match="mode"):
+            SeriesPlot(
+                cache_id="m", data=data, mode="pie", cache_path=str(temp_cache_dir)
+            )
+        with pytest.raises(ValueError, match="orientation"):
+            SeriesPlot(
+                cache_id="o", data=data, orientation="x", cache_path=str(temp_cache_dir)
+            )
+
 
 class TestPlot3D:
     def _plot(self, data, cache_dir):

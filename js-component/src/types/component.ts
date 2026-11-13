@@ -149,6 +149,7 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  collapseColumns?: boolean
   /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
   excelExport?: boolean
   /** Show the toolbar search box */
@@ -463,7 +464,9 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   /** [series value, legend name] pairs, in drawing order */
   seriesNames?: Array<[string, string]>
   seriesColors?: Record<string, string>
-  mode?: 'lines' | 'markers' | 'lines+markers'
+  mode?: 'lines' | 'markers' | 'lines+markers' | 'bars' | 'box'
+  /** 'h': bars and boxes horizontal, the x column on the vertical axis */
+  orientation?: 'v' | 'h'
   title?: string
   xLabel?: string
   yLabel?: string

@@ -1140,7 +1140,8 @@ export default defineComponent({
         minHeight: 150,
         maxHeight: Math.max(tableMaxHeight, 150),
         height: Math.max(tableMaxHeight, 150),
-        responsiveLayout: 'collapse',
+        // Columns that do not fit fold into the row, unless the table scrolls sideways
+        responsiveLayout: this.args.collapseColumns === false ? false : 'collapse',
         layout: this.args.tableLayoutParam || 'fitDataFill',
         selectable: 1,
         columnDefaults: {
