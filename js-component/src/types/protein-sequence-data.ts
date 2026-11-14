@@ -112,6 +112,8 @@ export type FragmentSettings = {
   tolerance : number
   // 'ppm' (default) or 'Da'
   tolerance_unit? : string | null
+  // false: start with truncated termini marked by a break line labelled with their positions (count and residues on hover)
+  show_truncations? : boolean | null
   // Ion series: a b c x y z and the variants a• x• y-1 z• (also a+1, x+1, z+1)
   ion_types? : string[] | null
   // Fragmentation method choosing the ion series when ion_types is not given:

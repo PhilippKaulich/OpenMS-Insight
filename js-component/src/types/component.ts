@@ -1,3 +1,4 @@
+import type { StepperArgs } from '@/utils/stepper'
 /**
  * Type definitions for component configuration and data structures.
  */
@@ -20,6 +21,8 @@ export interface BaseComponentArgs {
    * (see composables/useZoomState.ts). Without it the zoom stays in the browser.
    */
   zoomIdentifier?: string
+  /** Previous / next buttons for one filter, shown by PlotToolbar (core/stepper.py). */
+  stepper?: StepperArgs
 }
 
 /**
@@ -67,6 +70,8 @@ export interface PaginationState {
   sort_column?: string
   sort_dir?: 'asc' | 'desc'
   toggles?: Record<string, boolean>
+  /** On/off state of the filter presets, keyed by id */
+  presets?: Record<string, boolean>
   /** The filter dialog's filters in force (sent only when there are any) */
   column_filters?: ColumnFilter[]
   /** The search in force (sent only when there is one) */
@@ -123,6 +128,8 @@ export interface TableComponentArgs extends BaseComponentArgs {
   columnMetadata?: Record<string, ColumnMetadata>
   /** Title-row checkboxes that restrict rows to a boolean column */
   toggleFilters?: Array<{ label: string; column: string; default: boolean; group_column?: string | null }>
+  /** Ready-made filters at the top of the filter dialog (filter_presets) */
+  filterPresets?: import('../components/filterPresets').FilterPreset[]
   /** Selections set (null clears) when a row click changes the selection */
   onSelect?: Record<string, unknown>
   /** Clicking the selected row again clears the interactivity selections */
@@ -142,10 +149,15 @@ export interface TableComponentArgs extends BaseComponentArgs {
   fillRow?: boolean
   rowOverview?: boolean
   rowOverviewTitle?: string
+  /** A button per row and action, sending the row to Python */
+  rowActions?: Array<{ id: string, icon: string, label?: string }>
   /** False hides the column menu */
   columnMenu?: boolean
   /** False turns off stepping through the rows with the arrow keys */
   keyboardNavigation?: boolean
+  collapseColumns?: boolean
+  /** Offer Excel (.xlsx) next to CSV in the download menu (Python writes it) */
+  excelExport?: boolean
   /** Show the toolbar search box */
   search?: boolean
   /** Columns the search box looks in */
@@ -178,6 +190,11 @@ export interface LinePlotComponentArgs
   keepZoom?: boolean // Start with the zoom pinned (kept when new data is plotted)
   topPeakLabels?: number // How many of the most intense peaks in view the "Label top peaks" button labels (0: no button)
   showTopPeakLabels?: boolean // Start with the top peak labels shown
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
+  xMarkers?: Array<{ x: number; label: string; color?: string }> | null // Labelled x markers sorted by x (x_markers)
+  xMarkerTolerance?: number | null // Distance within which a marker takes a peak (x_marker_tolerance)
 }
 
 export interface LinePlotStyling {
@@ -437,6 +454,9 @@ export interface MirrorPlotComponentArgs
   height?: number
   /** Start with the zoom pinned (the pin button in the plot toolbar toggles it). */
   keepZoom?: boolean
+  windowIdentifier?: string // State identifier of an x window to shade (a centre or [low, high])
+  windowTolerance?: number // Half-width of the band around a stored centre
+  windowToleranceUnit?: 'Da' | 'ppm' | 'm/z'
 }
 
 export interface MirrorPlotStyling {
@@ -458,7 +478,9 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   /** [series value, legend name] pairs, in drawing order */
   seriesNames?: Array<[string, string]>
   seriesColors?: Record<string, string>
-  mode?: 'lines' | 'markers' | 'lines+markers'
+  mode?: 'lines' | 'markers' | 'lines+markers' | 'bars' | 'box'
+  /** 'h': bars and boxes horizontal, the x column on the vertical axis */
+  orientation?: 'v' | 'h'
   title?: string
   xLabel?: string
   yLabel?: string
@@ -471,6 +493,18 @@ export interface SeriesPlotComponentArgs extends BaseComponentArgs, MeasureArgs,
   svgFilename?: string
   interactivity?: InteractivityMapping
   height?: number
+  /** Column splitting the rows into views, one shown at a time */
+  viewColumn?: string
+  /** [view value, button label] pairs, in button order */
+  viewNames?: Array<[string, string]>
+  viewDefault?: string
+  /** State identifier the picked view is written to */
+  viewIdentifier?: string
+  /** Numbers of first x values the "Top n" menu offers */
+  topChoices?: number[]
+  topDefault?: number
+  /** Pixels per category of a horizontal plot that grows with its bars */
+  barHeight?: number
 }
 
 /**
@@ -589,6 +623,16 @@ export interface FragmentMatches {
   spectrum: unknown
   tolerance: { value: number; unit: string }
   fragments: MatchedFragmentIon[]
+  /** The proteoform matched (fragmentMatchesProteoform only) */
+  proteoform?: {
+    proforma: string
+    sequence: string
+    length: number
+    /** With the variable modifications */
+    theoreticalMass: number
+    /** Share of the bonds with a matched fragment on either side (%) */
+    cleavagePercentage: number
+  }
 }
 
 /**
@@ -645,6 +689,10 @@ export interface ProteinSequenceViewComponentArgs extends BaseComponentArgs, Ima
   isotopeErrors?: number | null
   /** Offer proton loss/addition only with c/z or radical series selected */
   methodIonOptions?: boolean
+  /** List the observed masses no selected fragment ion matches, below the fragment table */
+  unmatchedMasses?: boolean
+  /** Write the matched proteoform with the matched fragments */
+  fragmentMatchesProteoform?: boolean
   // Variable modifications the residue menus offer (instead of the built-in list)
   variableModificationLibrary?: { id: string; mass: number; site?: string | null }[] | null
   // Library ids suggested per site (residue letter, 'N-term', 'C-term');

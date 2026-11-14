@@ -12,7 +12,7 @@ Interactive visualization components for mass spectrometry data in Streamlit, ba
 - **Memory-efficient preprocessing** via subprocess isolation
 - **Automatic disk caching** with config-based invalidation
 - **Cache reconstruction** - components can be restored from cache without re-specifying configuration
-- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV export
+- **Table component** (Tabulator.js) with server-side pagination, filtering, sorting, go-to, CSV and Excel export
 - **Line plot component** (Plotly.js) with highlighting, annotations, zoom
 - **Mirror plot component** for paired-spectrum comparison with independent per-side filtering and shared click selection
 - **Heatmap component** (Plotly scattergl) with multi-resolution downsampling for millions of points
@@ -175,6 +175,8 @@ Table(
 - `hidden_columns`: Columns that start hidden. The viewer can show them, or hide any other column, from the column menu in the table toolbar. Their choice is kept in their browser, per table.
 - `search`: A search box in the toolbar. `True` searches the text columns, a list of column names searches those (they need not be shown). Rows must contain every word, in any of the columns; case is ignored and words are matched literally. `search_placeholder` sets its placeholder.
 - `numeric_filters`: Numeric columns offered in the filter dialog as a one-sided threshold, with one-click suggested values and an optional default.
+- `filter_presets`: Ready-made filters at the top of the filter dialog, each a check box with a label, optional help and a default state. The same card lists the filters the viewer set (column filters, search), each removed by unticking it. A preset that is on keeps only the rows matching all of its conditions (`{"column", "op", "value"}`, op one of `==`, `!=`, `<=`, `>=`, `<`, `>`, `in`, `not in`) and counts in the filter badge and chips. The sequence view's fragment table uses the same presets.
+- `collapse_columns`: Columns that do not fit the table's width fold into a row overview (default). `False` keeps every column and scrolls the table sideways instead, for a narrow table whose columns all matter. It does not affect the cache.
 - `keyboard_navigation`: Step through the rows with the keyboard once a row is clicked or the table is tabbed to (default: True). Up and Down select the previous and next row, Page Up and Page Down move by the rows in view, Home and End go to the first and last row, across pages. The row reached is highlighted at once and selected, as if clicked, once no key has been pressed for 200 ms, so holding a key down reruns the app once rather than for every row. Keys typed in the search box or a dialog are left alone. `False` turns it off; it does not affect the cache.
 
 **Filters.** The filter button opens a dialog with a filter per column: values to
@@ -196,6 +198,22 @@ Table(
         },
         "peptides": {"op": ">=", "suggestions": [2, 3], "default": 2},
     },
+    filter_presets=[
+        {
+            "label": "Hide contaminants",
+            "column": "is_contaminant",
+            "op": "!=",
+            "value": True,
+            "default": True,
+        },
+        {
+            "label": "Well supported",
+            "filters": [
+                {"column": "peptides", "op": ">=", "value": 2},
+                {"column": "q_value", "op": "<=", "value": 0.01},
+            ],
+        },
+    ],
 )
 ```
 
@@ -240,6 +258,22 @@ table.export_data()  # whole table, initial sort
 table.export_data(state)  # as rendered for this selection state
 ```
 
+**Excel export.** With `xlsxwriter` installed (`pip install openms-insight[excel]`),
+the download button of a paginated table opens a menu with CSV and **Excel (.xlsx)**.
+The workbook holds the same rows, with the column titles as its header and list
+columns joined with `; `, and an "About" sheet: the table, when it was exported,
+the number of rows, the sort, the filters and the search. `export_info` adds rows
+of your own to that sheet, such as the run and its settings; it is not part of the
+cache configuration:
+
+```python
+Table(..., export_info={"Run": "Run 3", "Database": "yeast.fasta, 6,115 proteins"})
+```
+
+Text is written as text, so a value starting with `=` is not run as a formula. A
+sheet holds at most 1,048,575 rows; beyond that the About sheet says how many were
+left out.
+
 ### LinePlot
 
 Stick-style line plot using Plotly.js for mass spectra visualization.
@@ -272,8 +306,12 @@ LinePlot(
 - `styling`: Color configuration dict
 - `keep_zoom`: Start with the zoom pinned (default `False`). The pin button in the plot toolbar toggles it: pinned, the zoomed x range stays when another spectrum is selected; unpinned, each new spectrum is shown in full. Double-click resets the zoom either way. `MirrorPlot` and `DeconvolvedSpectrum` have the same button and argument
 - `top_peak_labels`, `show_top_peak_labels`: The **Label top peaks** button (a number sign) in the plot toolbar shows the m/z of the most intense peaks in view, 10 by default (`top_peak_labels=0` removes the button). The labels are placed again on every zoom or pan, most intense first, leaving out any that would overlap, so zooming in labels more peaks. `show_top_peak_labels=True` starts with them shown. Peaks carrying one of your own labels keep only that label. Render-time only, like `keep_zoom`
+- `window_identifier`, `window_tolerance`: Shade an x window kept in the shared state, e.g. the m/z window of an XIC shown elsewhere on the page. The value under `window_identifier` is a centre (widened by `window_tolerance` on each side: a number of Da, default 0.01, or a string such as `"10 ppm"`, `"0.02 Da"` or `"0.5 m/z"`), `[low, high]`, or `None` for no band. The band is labelled (`1950.7319 ± 10 ppm`) and stays at least 3 px wide, so it is visible at full range. `MirrorPlot` takes the same two arguments and shades the window over both spectra. While a window is set, a **Window** button in the plot toolbar hides the band and shows it again. Render-time only
+- `x_markers`, `x_marker_tolerance`: Labelled positions on the x axis, as `{label: x}` or a list of `{"x", "label", "color"}` dicts (`label` and `color` optional). Each marker gets a dotted guide over the plot's height in its own colour (or the one given) and its label at the top. With `x_marker_tolerance` (x units) the most intense peak within that distance of a marker is its peak: it gets a dot in the marker's colour, the label moves above it, and the hover read-out names it; a marker without a peak keeps a fainter guide. Labels that would overlap are left out, left to right, so zooming in shows more of them. A **Markers** button in the plot toolbar, shown only when the plot has markers, hides them and shows them again. Expected positions such as reporter ions or diagnostic fragments: `x_markers={"126": 126.1277, "127N": 127.1248, ...}, x_marker_tolerance=0.003`. Render-time only
 
 Hovering shows the peak nearest the mouse along x, anywhere in the plot's height: a dot on the peak top and a box with its x and y (and its annotation, if any). Within two pixels of the mouse the most intense peak wins, so a dense profile spectrum reports the peak that is drawn.
+
+The mouse wheel zooms x around the mouse while y follows the peaks in view; zooming out past the full extent shows the full view. Shift + wheel or a sideways (trackpad) wheel pans x, and so does dragging with the middle button; panning stops at the ends of the data. A double-click shows the full view. Outside the plot area the wheel scrolls the page.
 
 ### MirrorPlot
 
@@ -688,7 +726,9 @@ spectrum(key="spectrum", state_manager=state_manager)
 
 ### SeriesPlot
 
-Line and marker plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`).
+Line, marker, bar or box plot with one trace per series, for continuous curves where the x values are sampled points rather than peaks (for stick spectra use `LinePlot`), and for counts or distributions per sample.
+
+`mode` is `"lines"` (default), `"markers"`, `"lines+markers"`, `"bars"` (one bar per x value and series, the series side by side) or `"box"` (one box per x value and series, drawn from all y values at that x). `orientation="h"` turns bars and boxes sideways, the x values listed top to bottom, which suits long labels such as GO terms or file names.
 
 ```python
 from openms_insight import SeriesPlot
@@ -704,6 +744,27 @@ SeriesPlot(
     x_label="Score",
     y_label="Density",
 )(key="density", state_manager=state_manager)
+
+# Identified proteins per sample, as bars
+SeriesPlot(
+    cache_id="proteins_per_sample",
+    data=counts,  # columns: sample, proteins, kind
+    x_column="sample",
+    y_column="proteins",
+    series_column="kind",
+    mode="bars",
+)(key="per_sample", state_manager=state_manager)
+
+# Abundances per sample, as boxes
+SeriesPlot(
+    cache_id="abundances",
+    data=abundances,  # columns: sample, log2_abundance, step
+    x_column="sample",
+    y_column="log2_abundance",
+    series_column="step",
+    mode="box",
+    y_range_mode="normal",
+)(key="abundances", state_manager=state_manager)
 ```
 
 ### Plot3D
@@ -927,6 +988,45 @@ spectrum shows that spectrum's labels, and going back shows the earlier ones aga
 They are plain Plotly annotations with an arrow to their peak, so the image
 download includes them. Like the measure options, `peak_labels` is a render-time
 setting and never part of the cache configuration.
+
+### Using a clicked peak elsewhere (an XIC, say)
+
+A click on a LinePlot peak writes the `interactivity` columns of that peak to the state. Map an identifier to the x column to hand the m/z to the rest of the page, next to any id the click already selects:
+
+```python
+LinePlot(
+    cache_id="ms2",
+    data=peaks,
+    x_column="mz",
+    y_column="intensity",
+    interactivity={"peak": "peak_id", "xic_mz": "mz"},
+)(state_manager=state)
+
+mz = state.get_selection("xic_mz")  # None until a peak is clicked
+if mz is not None:
+    show_xic(mz)  # the page's own code
+```
+
+The peak is the one the hover read-out shows. Columns reach the browser as 32-bit floats, so a float is written as the shortest decimal that is the same 32-bit float (`341.3387`, not `341.33868408203125`); the plot still marks that peak as selected.
+
+### Stepping through a filter (`stepper`)
+
+Every plot with a toolbar (`LinePlot`, `MirrorPlot`, `DeconvolvedSpectrum`, `SeriesPlot`, `VolcanoPlot`, `PCAPlot`, `Plot3D`, `Heatmap`) takes a `stepper`: one of its filter identifiers. The plot toolbar then shows `‹ frame 12 ›`; the arrows set that identifier to the previous or next value of its column, in sorted order, and the tooltip says where the value is (`12 of 340`). While the filter has no value (and no `filter_defaults` entry) the plot starts at the first one. A peak map of one ion-mobility frame steps through the frames, a spectrum plot through its spectra:
+
+```python
+Heatmap(
+    cache_id="frames",
+    data=peaks,
+    x_column="mz",
+    y_column="inv_k0",
+    intensity_column="intensity",
+    filters={"frame": "frame"},
+    categorical_filters=["frame"],  # optional: resolution levels per frame
+    stepper="frame",
+)(state_manager=state)
+```
+
+A `Table` has no toolbar and refuses a `stepper`; a table that writes the same identifier through `interactivity` follows the steps and moves the plot when a row is clicked. The sorted values are read once from the cache; only the current value and its neighbours are sent with each render. Render-time only, not part of the cache.
 
 ### Keeping the zoom in the state (`zoom_identifier`)
 

@@ -1,7 +1,7 @@
 <template>
   <div class="pca-plot">
     <MeasureHint v-if="args.measure" :measure="measure" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="pca-container"></div>
   </div>
 </template>

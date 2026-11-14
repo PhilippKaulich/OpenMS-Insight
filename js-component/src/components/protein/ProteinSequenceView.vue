@@ -336,13 +336,35 @@
       </div>
       <div ref="sequenceGrid" class="pb-4 px-2 sequence-grid" :style="gridStyles">
         <template v-for="(aminoAcidObj, aa_index) in sequenceObjects" :key="aa_index">
+          <!-- With truncations hidden, a break line one cell per truncated
+               residue (at most a row) stands for the residues outside the
+               proteoform. The first row runs: an empty row-number cell, the
+               break line (positions, then zig-zag), N, the sequence; the last:
+               the sequence, C, the break line (zig-zag, then positions), on a
+               row of its own when the rest of C's row is too short for it. -->
           <div
-            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && ((aa_index - sequence_start) !== 0) && ((aa_index - sequence_start) % perRow === 0) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="aa_index === sequence_start && truncatedBefore > 0"
+            class="truncated-gap"
+          ></div>
+          <TruncationBreak
+            :range="truncatedRange(1, truncatedBefore)" :text="truncatedText(truncatedBefore, 1, truncatedBefore)"
+            :mass="truncatedMassText(0, truncatedBefore)" :residues="truncatedResidues(0, truncatedBefore)"
+            testid="truncated-n-term" data-testid="truncated-n-term"
+            v-if="aa_index === sequence_start && truncatedBefore > 0 && nBreakCells > 0"
+            :cells="nBreakCells" :style="{ gridColumn: `span ${nBreakCells}` }"
+          />
+          <ProteinTerminalCell
+            v-if="(aa_index === 0 && truncatedBefore === 0) || (aa_index === sequence_start && truncatedBefore > 0)"
+            protein-terminal="N-term" :truncated=n_truncation :index="-1"
+            :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"
+          />
+          <div
+            v-if="(showTruncations && (aa_index !== 0) && (aa_index % perRow === 0)) || (!showTruncations && (aa_index >= sequence_start) && (aa_index <= sequence_end) && (gridCell(aa_index) === 0) && (aa_index > sequence_start || truncatedBefore > 0))"
             class="row-number row-number-start"
+            :style="showTruncations ? undefined : { gridColumn: '1' }"
           >
-          {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+          {{ aa_index + 1 }}
           </div>
-          <ProteinTerminalCell v-if="aa_index === 0" protein-terminal="N-term" :truncated=n_truncation :index="-1" :disable-variable-modification-selection="disableVariableModifications" :determined="n_determined" :font-size="fontSize"/>
           <AminoAcidCell
             v-if="showTruncations || ((sequence_start <= aa_index) && (sequence_end >= aa_index))"
             :index="aa_index"
@@ -360,10 +382,10 @@
             @selected="aminoAcidSelected"
           />
           <div
-            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && ((aa_index - sequence_start) % perRow === perRow - 1) && (aa_index < sequence_end) && (aa_index > sequence_start))"
+            v-if="(showTruncations && (aa_index % perRow === perRow - 1 && aa_index !== sequence.length - 1)) || (!showTruncations && (gridCell(aa_index) === perRow - 1) && (aa_index < sequence_end) && (aa_index >= sequence_start))"
             class="row-number row-number-end"
           >
-            {{ showTruncations ? aa_index + 1 : aa_index - sequence_start + 1 }}
+            {{ aa_index + 1 }}
           </div>
           <ProteinTerminalCell
             v-if="aa_index === sequence.length - 1"
@@ -372,6 +394,20 @@
             :disable-variable-modification-selection="disableVariableModifications"
             :determined="c_determined"
             :font-size="fontSize"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && cBreakInline"
+            :cells="cBreakCells" :style="{ gridColumn: `span ${cBreakCells}` }"
+          />
+          <TruncationBreak
+            :range="truncatedRange(sequence_end + 2, sequence.length)" :text="truncatedText(truncatedAfter, sequence_end + 2, sequence.length)"
+            :mass="truncatedMassText(sequence_end + 1, sequence.length)" :residues="truncatedResidues(sequence_end + 1, sequence.length)"
+            end testid="truncated-c-term" data-testid="truncated-c-term"
+            v-if="aa_index === sequence.length - 1 && truncatedAfter > 0 && !cBreakInline"
+            :cells="cBreakCells" :style="{ gridColumn: `2 / span ${cBreakCells}` }"
           />
           </template>
       </div>
@@ -439,13 +475,15 @@
       <template v-if="(fragmentTableTitle !== '') && showFragments">
         <FragmentTable
           :key="usesAnnotator ? 'annotator' : 'matched'"
-          :table-data="fragmentTableData"
+          :table-data="fragmentRows"
           :column-definitions="usesAnnotator ? annotatorTableColumnDefinitions : fragmentColumns"
           :index="index"
           :selected-row-index-from-listening="selectedFragTableRowIndex"
           :go-to-fields="['Name']"
+          :filter-presets="fragmentFilterPresets"
           table-layout-param="fitColumns"
           @row-selected="onFragmentTableRowSelected"
+          @preset-changed="onFragmentPresetChanged"
         >
           <template #default>{{ fragmentTableTitle }}</template>
           <template #end-title-row
@@ -593,11 +631,14 @@ import type {
 import type { SequenceObject } from '@/types/protein-sequence-object'
 import type { ColumnDefinition } from 'tabulator-tables'
 import FragmentTable from './FragmentTable.vue'
+import type { FilterPreset } from '../filterPresets'
 import AminoAcidCell from './ProteinAminoAcidCell.vue'
 import ProteinTerminalCell from './ProteinTerminalCell.vue'
 import ImageScreenshot from './ImageScreenshot.vue'
 import SequenceViewInformation from './SequenceViewInformation.vue'
 import InternalFragmentTrack from './InternalFragmentTrack.vue'
+import TruncationBreak from './TruncationBreak.vue'
+import { STANDARD_RESIDUE_MASSES } from '@/utils/measure'
 import { builtInLibrary, extraFragmentTypeObject, type ExtraFragmentType } from '@/components/sequence/modification'
 import {
   describeLocalization,
@@ -743,6 +784,7 @@ export default defineComponent({
     ProteinTerminalCell,
     ImageScreenshot,
     InternalFragmentTrack,
+    TruncationBreak,
   },
   props: {
     args: {
@@ -888,6 +930,13 @@ export default defineComponent({
         },
       ] as ColumnDefinition[],
       fragmentTableData: [] as Record<string, unknown>[],
+      // Observed masses no selected fragment ion matches (unmatchedMasses):
+      // rows appended to the fragment table while the filter is off
+      unmatchedTableData: [] as Record<string, unknown>[],
+      unmatchedTableTitle: '' as string,
+      unmatchedTableTooltip: '' as string,
+      // Mirrors the 'Hide unmatched masses' preset of the fragment table
+      showUnmatched: false as boolean,
       // Annotated fragment behind each fragmentTableData row
       fragmentTableSource: [] as AnnotatedFragment[],
       selectedFragment: undefined as AnnotatedFragment | undefined,
@@ -1062,8 +1111,42 @@ export default defineComponent({
           text: `The fragments place the ${shift} shift at ${range(span.lo, span.hi)} (${votes})` }]
       })
     },
+    unmatchedAvailable(): boolean {
+      return this.args.unmatchedMasses === true && !this.usesAnnotator &&
+        this.unmatchedTableTitle !== ''
+    },
+    // The fragment table's rows: the matched fragments, then the unmatched
+    // masses, which the table's 'Hide unmatched masses' preset hides by default
+    fragmentRows(): Record<string, unknown>[] {
+      if (!this.unmatchedAvailable) return this.fragmentTableData
+      return [...this.fragmentTableData, ...this.unmatchedTableData]
+    },
+    fragmentFilterPresets(): FilterPreset[] {
+      if (!this.unmatchedAvailable) return []
+      return [{
+        id: 'hide-unmatched',
+        label: `Hide ${this.unmatchedTableTitle}`,
+        help: this.unmatchedTableTooltip,
+        filters: [{ column: 'Unmatched', op: '!=', value: true }],
+        default: true,
+      }]
+    },
     fragmentColumns(): ColumnDefinition[] {
-      const base = this.spanModifications.length === 0
+      const columns = this.columnsWithIsotope
+      if (!this.unmatchedAvailable) return columns
+      const at = columns.findIndex((column) => column.field === 'Name') + 1
+      return [
+        ...columns.slice(0, at),
+        {
+          title: 'Nearest ion', field: 'Nearest',
+          headerTooltip: 'For an unmatched mass: the theoretical fragment ion (of the selected types) closest to it. The theoretical mass and the mass differences of that row are to this ion, outside the tolerance.',
+        } as unknown as ColumnDefinition,
+        ...columns.slice(at),
+      ]
+    },
+    columnsWithIsotope(): ColumnDefinition[] {
+      // a Shift column while a modification spans several residues
+      const columns = this.spanModifications.length === 0
         ? this.fragmentTableColumnDefinitions
         : [
             ...this.fragmentTableColumnDefinitions,
@@ -1072,7 +1155,6 @@ export default defineComponent({
               headerTooltip: 'For a fragment cut inside a modification range: whether it matched with or without that shift. Such a fragment is ambiguous, since the shift may sit on either side of the cut; it narrows the range down but is not counted as a match.',
             } as unknown as ColumnDefinition,
           ]
-      const columns = base
       if (this.activeIsotopeErrors === 0) return columns
       const at = columns.findIndex((column) => column.field === 'ObservedMass') + 1
       return [
@@ -1146,6 +1228,38 @@ export default defineComponent({
     },
     c_truncation(): boolean {
       return this.sequence_end < (this.sequence.length - 1)
+    },
+    /** Cells of the N-terminal break line: one per truncated residue, at
+     *  most a row beside N */
+    nBreakCells(): number {
+      return Math.min(this.truncatedBefore, Math.max(this.perRow - 1, 0))
+    },
+    /** Cells before the first residue of the proteoform in the grid's first
+     *  row: the break line and N (truncations hidden) */
+    gridOffset(): number {
+      return this.truncatedBefore > 0 ? this.nBreakCells + 1 : 0
+    },
+    /** Cells of the C-terminal break line: one per truncated residue, at
+     *  most a row */
+    cBreakCells(): number {
+      return Math.min(this.truncatedAfter, this.perRow)
+    },
+    /** The C-terminal break line fits in the cells left after C in the last
+     *  row; C takes the row-number column when the last residue ends a row */
+    cBreakInline(): boolean {
+      const last = this.gridCell(this.sequence_end)
+      const free = last === this.perRow - 1 ? 0 : this.perRow - 2 - last
+      return this.cBreakCells <= free
+    },
+    /** Residues before the proteoform truncated from the grid (truncations hidden) */
+    truncatedBefore(): number {
+      return this.showIdentification && !this.showTruncations ? this.sequence_start : 0
+    },
+    /** Residues after the proteoform truncated from the grid (truncations hidden) */
+    truncatedAfter(): number {
+      return this.showIdentification && !this.showTruncations
+        ? Math.max(0, this.sequence.length - 1 - this.sequence_end)
+        : 0
     },
     c_determined(): boolean {
       return this.sequence_end_reported >= 0
@@ -1613,6 +1727,43 @@ export default defineComponent({
         item.selected = selected.has(item.text)
       })
     },
+    /** "1–23": protein positions (1-based) of truncated residues, the
+     *  label of the break line marking a truncated terminus */
+    truncatedRange(first: number, last: number): string {
+      return first === last ? `${first}` : `${first}–${last}`
+    },
+    /** "23 residues truncated (1–23)": hover text and accessible label
+     *  of the break line */
+    truncatedText(count: number, first: number, last: number): string {
+      return `${count} ${count === 1 ? 'residue' : 'residues'} truncated (${this.truncatedRange(first, last)})`
+    },
+    /** Cell (0-based column of the residue cells) of residue `index` in
+     *  the grid with truncations hidden */
+    gridCell(index: number): number {
+      return (this.gridOffset + index - this.sequence_start) % this.perRow
+    },
+    /** Summed monoisotopic residue masses (Da) of the truncated residues
+     *  (0-based, end exclusive); null when one of them is not a standard
+     *  residue */
+    truncatedMass(start: number, end: number): number | null {
+      let mass = 0
+      for (const aa of this.sequence.slice(start, end)) {
+        const m = STANDARD_RESIDUE_MASSES[aa === 'I' || aa === 'L' ? 'I/L' : aa]
+        if (m === undefined) return null
+        mass += m
+      }
+      return mass
+    },
+    /** "Residue mass 2,156.21 Da": hover text of the break line */
+    truncatedMassText(start: number, end: number): string | null {
+      const mass = this.truncatedMass(start, end)
+      if (mass === null) return null
+      return `Residue mass ${mass.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Da`
+    },
+    /** The truncated residues themselves (0-based, end exclusive), shown on hover */
+    truncatedResidues(start: number, end: number): string {
+      return this.sequence.slice(start, end).join('')
+    },
     updateSettings() {
       const settings = this.settings
       if (settings?.ion_types !== undefined && settings.ion_types !== null) {
@@ -1682,7 +1833,9 @@ export default defineComponent({
 
         // Ensures this is only executed once
         if (!this.visibilityOptions.some(option => option.text === 'Tags')) {
-          this.visibilityOptions.push({ text: 'Truncations', selected: true })
+          // settings.show_truncations === false starts with the truncated
+          // termini summarized instead of drawn
+          this.visibilityOptions.push({ text: 'Truncations', selected: this.settings?.show_truncations !== false })
           this.visibilityOptions.push({ text: 'Tags', selected: true })
           this.visibilityOptions.push({ text: 'Internal fragments', selected: true })
           this.updateSettings()
@@ -1737,6 +1890,9 @@ export default defineComponent({
         return
       }
       this.fragmentTableSource = []
+      this.unmatchedTableData = []
+      this.unmatchedTableTitle = ''
+      this.unmatchedTableTooltip = ''
 
       if (this.sequence.length <= 0) {
         this.fragmentTableTitle = '' // if no sequence is selected, nothing to show
@@ -1776,6 +1932,10 @@ export default defineComponent({
       const spans = this.spanModifications
       const evidence: { prefix: boolean; edge: number; carries: boolean }[][] = spans.map(() => [])
       let ambiguousCount = 0
+      // The theoretical fragment closest to each observed mass (unmatchedMasses)
+      const trackNearest = this.args.unmatchedMasses === true
+      const nearestName: string[] = new Array(observed_masses.length).fill('')
+      const nearestDiff: number[] = new Array(observed_masses.length).fill(Infinity)
       
       this.selectedIonSeries
         .forEach((series) => {
@@ -1824,6 +1984,13 @@ export default defineComponent({
               extraFragments.forEach(({ typeName, typeMass }) => {
                 // Mass difference = (observed-theoretical)/theoretical*1e6
                 const thisTypeMass = theoretical_mass + series.offset + typeMass
+                if (trackNearest) {
+                  const diff = observed_masses[obsIndex] - thisTypeMass
+                  if (Math.abs(diff) < Math.abs(nearestDiff[obsIndex])) {
+                    nearestDiff[obsIndex] = diff
+                    nearestName[obsIndex] = `${series.name}${theoIndex + 1}${typeName}`
+                  }
+                }
                 // The smallest isotope offset (0 without isotope errors) that
                 // brings the masses within the tolerance
                 const isotope = matchIsotopeOffset(
@@ -1896,6 +2063,30 @@ export default defineComponent({
       this.fragmentTableTitle = ambiguousCount > 0
         ? `Matching fragments (# ${matching_fragments.length - ambiguousCount}, ${ambiguousCount} ambiguous)`
         : `Matching fragments (# ${matching_fragments.length})`
+      if (trackNearest) {
+        const matchedIndices = new Set(matchedIons.map((ion) => ion.massIndex))
+        const rows: Record<string, unknown>[] = []
+        observed_masses.forEach((mass, obsIndex) => {
+          if (matchedIndices.has(obsIndex)) return
+          const diff = nearestDiff[obsIndex]
+          const known = Number.isFinite(diff)
+          rows.push({
+            Name: 'unmatched',
+            IonType: '',
+            Nearest: nearestName[obsIndex],
+            TheoreticalMass: known ? (mass - diff).toFixed(3) : '',
+            ObservedMass: mass,
+            MassDiffDa: known ? diff.toFixed(3) : '',
+            MassDiffPpm: known ? ((diff / (mass - diff)) * 1e6).toFixed(3) : '',
+            Unmatched: true,
+          })
+        })
+        this.unmatchedTableData = rows
+        this.unmatchedTableTitle =
+          `unmatched masses (${rows.length} of ${observed_masses.length})`
+        this.unmatchedTableTooltip =
+          'Observed masses no fragment ion of the selected types matches. Shown, each is listed as \'unmatched\' with the nearest fragment ion and the differences to it.'
+      }
       this.publishFragmentMatches(matchedIons)
     },
     // Externally annotated fragment ions: the envelopes accepted on the raw
@@ -2120,10 +2311,23 @@ export default defineComponent({
               spectrum: this.spectrum?.key ?? null,
               tolerance: { value: this.fragmentMassTolerance, unit: this.toleranceUnit },
               fragments,
+              ...(this.args.fragmentMatchesProteoform ? { proteoform: this.matchedProteoform() } : {}),
             }
       // Skip no-op writes: each write is a round trip to Python
       if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
       this.selectionStore.updateSelection(id, next)
+    },
+    // The proteoform the fragments are matched against (fragmentMatchesProteoform)
+    matchedProteoform(): NonNullable<FragmentMatches['proteoform']> {
+      let theoreticalMass = this.theoreticalMass
+      for (const mass of Object.values(this.variableModifications)) theoreticalMass += mass
+      return {
+        proforma: this.proForma(),
+        sequence: this.sequence.join(''),
+        length: this.sequence.length,
+        theoreticalMass,
+        cleavagePercentage: this.calculateCleavagePercentage,
+      }
     },
     publishSelectedFragment(rowIndex?: number) {
       const id = this.args.fragmentIdentifier
@@ -2133,14 +2337,18 @@ export default defineComponent({
       if (JSON.stringify(next) === JSON.stringify(this.selectionStore.$state[id] ?? null)) return
       this.selectionStore.updateSelection(id, next)
     },
+    onFragmentPresetChanged(id: string, active: boolean) {
+      if (id === 'hide-unmatched') this.showUnmatched = !active
+    },
     onFragmentTableRowSelected(rowIndex?: number) {
-      this.publishSelectedFragment(rowIndex)
-      if (rowIndex !== undefined && this.fragmentTableSource[rowIndex]) {
+      const row = rowIndex === undefined ? undefined : this.fragmentRows[rowIndex]
+      // An unmatched mass is no fragment: only the mass table follows it
+      this.publishSelectedFragment(row?.Unmatched ? undefined : rowIndex)
+      if (rowIndex !== undefined && !row?.Unmatched && this.fragmentTableSource[rowIndex]) {
         this.selectedFragment = this.fragmentTableSource[rowIndex]
       }
-      if (rowIndex !== undefined && this.fragmentTableData[rowIndex]) {
-        const observedMass = this.fragmentTableData[rowIndex].ObservedMass as number
-        this.updateMassTableFromFragmentMass(observedMass)
+      if (row) {
+        this.updateMassTableFromFragmentMass(row.ObservedMass as number)
       }
     },
     updateMassTableFromFragmentMass(observedMass: number) {
@@ -2215,8 +2423,10 @@ export default defineComponent({
       const tolerance = this.massLinkTolerance(selectedMass)
       let bestMatch: { index: number; diff: number } | null = null
       
-      for (let i = 0; i < this.fragmentTableData.length; i++) {
-        const fragmentRow = this.fragmentTableData[i]
+      for (let i = 0; i < this.fragmentRows.length; i++) {
+        const fragmentRow = this.fragmentRows[i]
+        // Hidden unmatched rows cannot be selected
+        if (fragmentRow.Unmatched && !this.showUnmatched) continue
         const observedMass = fragmentRow.ObservedMass as number
         
         if (observedMass !== undefined) {
@@ -2828,6 +3038,19 @@ export default defineComponent({
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   opacity: var(--v-medium-emphasis-opacity);
+}
+
+.sequence-grid > .truncated-gap {
+  aspect-ratio: auto;
+  grid-column: 1;
+}
+
+.sequence-grid > .truncated-residues {
+  aspect-ratio: auto;
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
 }
 
 .row-number-start {

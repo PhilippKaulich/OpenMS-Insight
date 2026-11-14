@@ -83,6 +83,11 @@ def check_fragment_settings(settings: dict[str, Any] | None) -> None:
         raise ValueError(
             f"settings['tolerance_unit'] must be 'ppm' or 'Da', not {unit!r}"
         )
+    show = settings.get("show_truncations")
+    if show is not None and not isinstance(show, bool):
+        raise ValueError(
+            f"settings['show_truncations'] must be True or False, not {show!r}"
+        )
     method = settings.get("fragmentation")
     if method is not None and (
         not isinstance(method, str)
@@ -282,6 +287,7 @@ class ProteinSequenceView(BaseComponent):
         proforma_identifier: str | None = None,
         isotope_errors: int | None = None,
         method_ion_options: bool = False,
+        unmatched_masses: bool = False,
         variable_modification_library: list[dict[str, Any]] | str | None = None,
         variable_modification_suggestions: dict[str, list[str]] | None = None,
         settings: dict[str, Any] | None = None,
@@ -292,6 +298,7 @@ class ProteinSequenceView(BaseComponent):
         fragment_identifier: str | None = None,
         edit_identifier: str | None = None,
         fragment_matches_identifier: str | None = None,
+        fragment_matches_proteoform: bool = False,
         entry_title: str = "Identification",
         observed_mass_label: str = "Observed mass",
         image_format: str | None = None,
@@ -369,8 +376,12 @@ class ProteinSequenceView(BaseComponent):
                 y-1 z•, also written a+1 x+1 z+1; default b and y) and
                 ``fragmentation`` ('CID/HCD', 'ETD/ECD', 'EThcD' or 'UVPD',
                 selecting that method's ion series when ``ion_types`` is not
-                given). The user can change all of them in the view. See
-                ``check_fragment_settings``.
+                given), ``show_truncations`` (True default: the residues
+                outside an identified proteoform are drawn greyed; False:
+                each truncated terminus is marked by a break line labelled
+                with the positions of those residues, whose hover text gives
+                their number and the residues themselves). The user can change all of them in the view.
+                See ``check_fragment_settings``.
             title: Title above the view (None: no title).
             annotation_title: Label of the ``annotation_summary`` line.
             svg_filename: File name (without extension) of the image download;
@@ -410,6 +421,15 @@ class ProteinSequenceView(BaseComponent):
                 table has an Isotope column. The precursor's Δ in ppm and its
                 isotope reading are shown either way. None (default): no
                 setting, exact matches only.
+            unmatched_masses: List the observed masses that no fragment ion
+                of the selected types matches as rows of the fragment table
+                ('unmatched', with the nearest theoretical fragment ion and the
+                differences to it; a shift shared by several masses can point
+                at a modification). The table's filter dialog has a preset,
+                'Hide unmatched masses', that is on by default, so the rows
+                show only once the user switches it off. Clicking such a row
+                selects the mass in the mass table. Not offered with annotated
+                fragments. Default False.
             fragment_identifier: Identifier the selected fragment's bounds are
                 written to, as {'name', 'kind' ('N', 'C' or 'I'), 'start',
                 'end'} (positions in the sequence), e.g. for a
@@ -442,6 +462,15 @@ class ProteinSequenceView(BaseComponent):
                 ``charge`` and ``mz``. None while no spectrum is matched. Pass
                 the same identifier to ``DeconvolvedSpectrum``. Render-time
                 only: not part of the cache.
+            fragment_matches_proteoform: Also write the proteoform the
+                fragments were matched against to
+                ``fragment_matches_identifier``, as ``proteoform``: a dict
+                with ``proforma`` (the sequence with its fixed and variable
+                modifications), ``sequence``, ``length``,
+                ``theoreticalMass`` (with the variable modifications) and
+                ``cleavagePercentage`` (the share of bonds explained by a
+                matched fragment), so a page can keep the proteoforms it tried and compare them.
+                Render-time only: not part of the cache.
             entry_title: Heading of the mass summary of an entry with an
                 observed mass.
             observed_mass_label: Label of the entry's observed mass in that
@@ -473,6 +502,7 @@ class ProteinSequenceView(BaseComponent):
         self._proforma_identifier = proforma_identifier
         self.set_isotope_errors(isotope_errors)
         self._method_ion_options = bool(method_ion_options)
+        self._unmatched_masses = bool(unmatched_masses)
         self.set_variable_modification_library(
             variable_modification_library, variable_modification_suggestions
         )
@@ -489,6 +519,8 @@ class ProteinSequenceView(BaseComponent):
         self._edit_identifier = edit_identifier
         # Render-time option, kept out of the cache config
         self._fragment_matches_identifier = fragment_matches_identifier
+        # Render-time option, kept out of the cache config
+        self._fragment_matches_proteoform = bool(fragment_matches_proteoform)
         self._entry_title = entry_title
         self._observed_mass_label = observed_mass_label
         # Sequence tag marked on the sequence (set per render, not cached)
@@ -792,6 +824,20 @@ class ProteinSequenceView(BaseComponent):
         self._fragment_matches_identifier = identifier
         return self
 
+    def set_fragment_matches_proteoform(
+        self, enabled: bool = True
+    ) -> "ProteinSequenceView":
+        """Write the matched proteoform with the matched fragment ions.
+
+        Not cached, so a view loaded from its cache can set it per render.
+        See ``fragment_matches_proteoform`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._fragment_matches_proteoform = bool(enabled)
+        return self
+
     def set_proforma_copy(self, enabled: bool = True) -> "ProteinSequenceView":
         """Show or hide the "Copy as ProForma" button.
 
@@ -861,6 +907,18 @@ class ProteinSequenceView(BaseComponent):
         self._method_ion_options = bool(enabled)
         return self
 
+    def set_unmatched_masses(self, enabled: bool = True) -> "ProteinSequenceView":
+        """List unmatched masses in the fragment table (hidden by a preset).
+
+        Not cached, so a view loaded from its cache can set it per render. See
+        ``unmatched_masses`` in the constructor.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._unmatched_masses = bool(enabled)
+        return self
+
     def _get_component_args(self) -> dict[str, Any]:
         return {
             "componentType": self._get_vue_component_name(),
@@ -881,6 +939,7 @@ class ProteinSequenceView(BaseComponent):
             else None,
             "isotopeErrors": self._isotope_errors,
             "methodIonOptions": self._method_ion_options,
+            "unmatchedMasses": self._unmatched_masses,
             "variableModificationLibrary": self._variable_modification_library,
             "variableModificationSuggestions": self._variable_modification_suggestions,
             "settings": self._settings,
@@ -891,6 +950,7 @@ class ProteinSequenceView(BaseComponent):
             "fragmentIdentifier": self._fragment_identifier,
             "editIdentifier": self._edit_identifier,
             "fragmentMatchesIdentifier": self._fragment_matches_identifier,
+            "fragmentMatchesProteoform": self._fragment_matches_proteoform,
             "entryTitle": self._entry_title,
             "observedMassLabel": self._observed_mass_label,
         }

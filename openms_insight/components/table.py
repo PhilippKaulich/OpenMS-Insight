@@ -2,11 +2,20 @@
 
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 import polars as pl
 
 from ..core.base import BaseComponent
+from ..core.excel_export import (
+    EXCEL_MAX_ROWS,
+    about_rows,
+    excel_available,
+    flatten_nested,
+    xlsx_payload,
+)
+from ..core.filter_presets import normalize_filter_presets, preset_expression
 from ..core.multi_select import (
     combine,
     filter_selection,
@@ -78,6 +87,7 @@ _VUE_OPTION_KEYS = (
     "search",
     "search_placeholder",
     "numeric_filters",
+    "filter_presets",
     "fill_height",
     "fill_row",
     "row_overview",
@@ -163,7 +173,10 @@ class Table(BaseComponent):
         search: bool | list[str] = False,
         search_placeholder: str | None = None,
         numeric_filters: dict[str, dict[str, Any]] | None = None,
+        filter_presets: list[dict[str, Any]] | None = None,
         keyboard_navigation: bool = True,
+        collapse_columns: bool = True,
+        export_info: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -297,6 +310,28 @@ class Table(BaseComponent):
                   the table's filters.
                 Example: {'q_value': {'op': '<=', 'suggestions': [0.01, 0.001]},
                 'peptides': {'op': '>=', 'suggestions': [2, 3], 'default': 2}}
+            filter_presets: Ready-made filters listed at the top of the filter
+                dialog, each switched on and off with a check box and counted
+                in the filter badge while on. A preset that is on keeps only
+                the rows matching all of its conditions; the filtering runs on
+                the server, over every row. Each entry is a dict:
+                - label: Check box label
+                - filters: Conditions, each {"column", "op", "value"} with op
+                  one of "==", "!=", "<=", ">=", "<", ">", "in", "not in".
+                  A single condition can be given as "column", "op" and
+                  "value" on the preset itself.
+                - help: Optional text shown below the check box
+                - default: Initial state (default: False)
+                - id: Optional key of its state (default: the label)
+                Example: [{'label': 'Hide decoys', 'column': 'is_decoy',
+                'op': '!=', 'value': True, 'default': True},
+                {'label': 'Confident PSMs', 'filters': [{'column': 'q_value',
+                'op': '<=', 'value': 0.01}, {'column': 'charge', 'op': '>=',
+                'value': 2}]}]
+            collapse_columns: Fold the columns that do not fit the width into
+                a row overview (default). False keeps every column and scrolls
+                the table sideways instead, which suits a narrow table whose
+                columns all matter. It does not affect the cache.
             keyboard_navigation: Step through the rows with the keyboard while
                 the table has focus (after a row was clicked, or tabbed to):
                 Up and Down select the previous and next row, Page Up and Page
@@ -306,6 +341,12 @@ class Table(BaseComponent):
                 for 200 ms, so holding a key down does not rerun the app for
                 every row it passes. False leaves the keys to the browser.
                 Display-only, so not part of the cache configuration.
+            export_info: What the Excel download's "About" sheet says besides
+                the table, its sort, filters and search: ``{"Run": "Run 3",
+                "Search": "10 ppm, Trypsin/P"}``, one row per item, in this
+                order. The download menu offers Excel (.xlsx) next to CSV when
+                ``xlsxwriter`` is installed and the table is paginated on the
+                server. Not part of the cache configuration.
             **kwargs: Additional configuration options
         """
         self._column_definitions = column_definitions
@@ -321,6 +362,8 @@ class Table(BaseComponent):
         self._hidden_columns = list(hidden_columns or [])
         self._column_menu = bool(column_menu)
         self._keyboard_navigation = bool(keyboard_navigation)
+        self._collapse_columns = bool(collapse_columns)
+        self._export_info = dict(export_info or {})
         self._reset_sort = bool(reset_sort)
         self._reset_sort_on = list(reset_sort_on or [])
         self._fill_height = bool(fill_height)
@@ -330,6 +373,8 @@ class Table(BaseComponent):
             if isinstance(row_overview, str) and row_overview
             else bool(row_overview)
         )
+        # Buttons per row (on_row_action): set per render, never cached
+        self._row_actions: dict[str, dict[str, Any]] = {}
         # Default pagination identifier based on cache_id
         self._pagination_identifier = pagination_identifier or f"{cache_id}_page"
         self._toggle_filters = self._normalize_toggle_filters(toggle_filters)
@@ -339,6 +384,7 @@ class Table(BaseComponent):
             self._search = bool(search)
         self._search_placeholder = search_placeholder
         self._numeric_filters = self._normalize_numeric_filters(numeric_filters)
+        self._filter_presets = normalize_filter_presets(filter_presets)
         self._range_filters = {k: list(v) for k, v in (range_filters or {}).items()}
         self._on_select = dict(on_select) if on_select else {}
         if reclick not in ("keep", "unhighlight", "deselect"):
@@ -391,6 +437,7 @@ class Table(BaseComponent):
             search=search,
             search_placeholder=search_placeholder,
             numeric_filters=numeric_filters,
+            filter_presets=filter_presets,
             **kwargs,
         )
         self._config.pop("multi_select", None)
@@ -500,6 +547,9 @@ class Table(BaseComponent):
                 if self._numeric_filters
                 else {}
             ),
+            **(
+                {"filter_presets": self._filter_presets} if self._filter_presets else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -528,6 +578,7 @@ class Table(BaseComponent):
         self._search = config.get("search", False)
         self._search_placeholder = config.get("search_placeholder")
         self._numeric_filters = config.get("numeric_filters") or {}
+        self._filter_presets = config.get("filter_presets") or []
         self._fill_height = config.get("fill_height", False)
         self._fill_row = config.get("fill_row", True)
         self._row_overview = config.get("row_overview", False)
@@ -1007,11 +1058,22 @@ class Table(BaseComponent):
         # and the displayed columns, which is all Tabulator's own download sees).
         download_payload = None
         if download_request is not None:
-            download_payload = {
-                "request_id": download_request,
-                "filename": f"{self._title or self._cache_id}.csv",
-                "csv": csv_safe(self._order_export_columns(data.collect())).write_csv(),
-            }
+            rows = self._order_export_columns(data.collect())
+            if pagination_state.get("download_format") == "xlsx" and excel_available():
+                download_payload = self._xlsx_download(
+                    download_request,
+                    rows,
+                    sort_column,
+                    sort_dir,
+                    column_filters,
+                    search,
+                )
+            else:
+                download_payload = {
+                    "request_id": download_request,
+                    "filename": f"{self._title or self._cache_id}.csv",
+                    "csv": csv_safe(flatten_nested(rows)).write_csv(),
+                }
 
         data = project(data)
 
@@ -1077,7 +1139,11 @@ class Table(BaseComponent):
             if _LAST_SORT_FILTER_KEY not in st.session_state:
                 st.session_state[_LAST_SORT_FILTER_KEY] = {}
 
-            component_key = self._cache_id  # Unique key for this table instance
+            # The table's own pagination slot, not its cache id: an app that
+            # rebuilds the cache when the data grows (a live view) gives each
+            # version its own cache id, and keyed by it every version saw the
+            # selection as new and jumped to its page, costing a rerun each time
+            component_key = self._pagination_identifier
 
             # Get PREVIOUS states (from last render)
             last_selections = st.session_state[_LAST_SELECTION_KEY].get(
@@ -1101,6 +1167,8 @@ class Table(BaseComponent):
             }
             if self._toggle_filters:
                 current_sort_filter["toggles"] = self._toggle_states(pagination_state)
+            if self._filter_presets:
+                current_sort_filter["presets"] = self._preset_states(pagination_state)
             if self._search:
                 current_sort_filter["search"] = search
 
@@ -1301,6 +1369,11 @@ class Table(BaseComponent):
                     if self._toggle_filters
                     else {}
                 ),
+                **(
+                    {"presets": self._preset_states(pagination_state)}
+                    if self._filter_presets
+                    else {}
+                ),
                 # The filters in force, so a view that is drawn again (e.g. after
                 # the page was left and opened again) shows them
                 **({"column_filters": column_filters} if column_filters else {}),
@@ -1421,11 +1494,25 @@ class Table(BaseComponent):
     def _apply_toggle_filters(
         self, data: pl.LazyFrame, pagination_state: dict[str, Any]
     ) -> pl.LazyFrame:
-        """Keep rows whose column is true for every ticked toggle filter."""
+        """Keep rows whose column is true for every ticked toggle filter.
+
+        The filter presets that are on apply here too.
+        """
         for column, enabled in self._toggle_states(pagination_state).items():
             if enabled:
                 data = data.filter(pl.col(column))
+        for preset in self._filter_presets:
+            if self._preset_states(pagination_state).get(preset["id"]):
+                data = data.filter(preset_expression(preset))
         return data
+
+    def _preset_states(self, pagination_state: dict[str, Any]) -> dict[str, bool]:
+        """Current on/off state of each filter preset, keyed by id."""
+        requested = pagination_state.get("presets") or {}
+        return {
+            preset["id"]: bool(requested.get(preset["id"], preset["default"]))
+            for preset in self._filter_presets
+        }
 
     def _effective_column_filters(
         self, pagination_state: dict[str, Any]
@@ -1559,6 +1646,50 @@ class Table(BaseComponent):
             )
         return data
 
+    def _column_titles(self, columns: list[str]) -> dict[str, str]:
+        """Column titles to use as the Excel header, where they are unique."""
+        titles = {
+            col_def["field"]: str(col_def["title"])
+            for col_def in (self._column_definitions or [])
+            if col_def.get("field") in columns and col_def.get("title")
+        }
+        taken = [titles.get(c, c) for c in columns]
+        return {f: t for f, t in titles.items() if taken.count(t) == 1}
+
+    def _xlsx_download(
+        self,
+        request_id: Any,
+        rows: pl.DataFrame,
+        sort_column: str | None,
+        sort_dir: str,
+        column_filters: list[dict[str, Any]],
+        search: str,
+    ) -> dict[str, Any]:
+        """The rows as an Excel workbook, with an 'About' sheet."""
+        titles = self._column_titles(rows.columns)
+        named_filters = [
+            {**f, "field": titles.get(f.get("field"), f.get("field"))}
+            for f in column_filters
+        ]
+        exported = min(rows.height, EXCEL_MAX_ROWS - 1)
+        about = about_rows(
+            self._title or self._cache_id,
+            rows.height,
+            exported,
+            titles.get(sort_column, sort_column) if sort_column else None,
+            sort_dir,
+            named_filters,
+            search,
+            self._export_info,
+        )
+        return xlsx_payload(
+            request_id,
+            f"{self._title or self._cache_id}.xlsx",
+            rows.rename(titles),
+            self._title or self._cache_id,
+            about,
+        )
+
     def _order_export_columns(self, df: pl.DataFrame) -> pl.DataFrame:
         """Put the displayed columns first, in display order, then the rest."""
         shown = [
@@ -1570,7 +1701,52 @@ class Table(BaseComponent):
         rest = [c for c in df.columns if c not in shown]
         return df.select(shown + rest)
 
+    def on_row_action(
+        self,
+        action_id: str,
+        handler: Callable[[dict[str, Any]], Any] | None,
+        icon: str = "mdi-open-in-new",
+        label: str = "",
+    ) -> "Table":
+        """
+        Add a button to each row that hands the row to ``handler``, for an
+        action on one row (open it on another page, for example). Clicking
+        the button also selects the row, as a click on the row does.
+
+        Args:
+            action_id: Name of the action; one button per name, in the order
+                they are added.
+            handler: Called once per click with the row: its values by
+                field, as the table holds them (the index field included).
+                Returns True if the page should rerun to show the result.
+                None removes the button.
+            icon: Material Design icon of the button (``mdi-...``).
+            label: Tooltip and accessible name of the button.
+
+        Returns:
+            Self for method chaining.
+        """
+        if handler is None:
+            self._row_actions.pop(action_id, None)
+        else:
+            self._row_actions[action_id] = {
+                "id": action_id,
+                "icon": icon,
+                "label": label,
+                "handler": handler,
+            }
+        return self
+
     def _handle_event(self, event: dict[str, Any]) -> bool:
+        if event.get("type") == "row_action":
+            action = self._row_actions.get(str(event.get("id")))
+            row = event.get("row")
+            if action is None or not isinstance(row, dict):
+                return False
+            return bool(action["handler"](row))
+        return self._select_all(event)
+
+    def _select_all(self, event: dict[str, Any]) -> bool:
         """The header check box: select (or unselect) every row passing the
         table's filters, on all pages."""
         if event.get("type") != "multi_select_all" or not self._multi_select:
@@ -1687,6 +1863,10 @@ class Table(BaseComponent):
             args["columnMenu"] = False
         if not self._keyboard_navigation:
             args["keyboardNavigation"] = False
+        if not getattr(self, "_collapse_columns", True):
+            args["collapseColumns"] = False
+        if self._pagination and excel_available():
+            args["excelExport"] = True
         if self._reset_sort:
             args["resetSort"] = True
         if self._reset_sort_on:
@@ -1701,6 +1881,11 @@ class Table(BaseComponent):
                 args["rowOverviewTitle"] = self._row_overview
         if self._multi_select:
             args["multiSelect"] = self._multi_select
+        if self._row_actions:
+            args["rowActions"] = [
+                {k: v for k, v in action.items() if k != "handler"}
+                for action in self._row_actions.values()
+            ]
 
         # Add any extra config options
         args.update(self._config)
@@ -1724,6 +1909,8 @@ class Table(BaseComponent):
                 args["searchPlaceholder"] = self._search_placeholder
         if self._numeric_filters:
             args["numericFilters"] = self._numeric_filters
+        if self._filter_presets:
+            args["filterPresets"] = self._filter_presets
 
         return args
 

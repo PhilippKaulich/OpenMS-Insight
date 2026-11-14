@@ -311,17 +311,32 @@ export default defineComponent({
   },
   created() {
     Streamlit.setComponentReady()
-    // Set initial frame height - will be updated when data arrives
-    Streamlit.setFrameHeight(400)
+    // No height of its own here: the frame starts at the height Python gave the
+    // view and keeps it until the view has its data (see mounted)
     Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, this.updateStreamlitData)
   },
   mounted() {
     // Use ResizeObserver to update frame height only when size actually changes
     // This replaces polling (setInterval every 500ms) with event-driven updates
+    // Until the data arrives the view shows a placeholder, whose height is not
+    // the view's: measured, the frame shrank to it and grew again with the data,
+    // and everything below jumped twice. It keeps Python's height until then.
+    // Measured on the view, not the document: while a table lays out new rows
+    // the document is briefly taller than the view, and the frame grew to that.
     this.resizeObserver = new ResizeObserver(() => {
-      Streamlit.setFrameHeight()
+      if (this.streamlitDataStore.hash) {
+        Streamlit.setFrameHeight(this.viewHeight())
+      }
     })
     this.resizeObserver.observe(this.$el as HTMLElement)
+    // The data may leave the size as it was, so no resize follows: measure once
+    this.$watch(
+      () => !!this.streamlitDataStore.hash,
+      (hasData: boolean) => {
+        if (hasData) this.$nextTick(() => Streamlit.setFrameHeight(this.viewHeight()))
+      },
+      { immediate: true }
+    )
   },
   unmounted() {
     Streamlit.events.removeEventListener(Streamlit.RENDER_EVENT, this.updateStreamlitData)
@@ -333,6 +348,13 @@ export default defineComponent({
   // This was redundant - height is now set explicitly by components
   // and via the watch on allDataForDrawing.height
   methods: {
+    /** Bottom of the view in the document, its last element's margin included. */
+    viewHeight(): number {
+      const root = this.$el as HTMLElement
+      const last = root.lastElementChild as HTMLElement | null
+      const margin = last ? parseFloat(getComputedStyle(last).marginBottom) || 0 : 0
+      return Math.ceil(root.getBoundingClientRect().bottom + window.scrollY + margin)
+    },
     async updateStreamlitData(event: Event): Promise<void> {
       const detail = (event as CustomEvent<RenderData>).detail
       // The app's fonts and primary colour, so the frame matches the page around it

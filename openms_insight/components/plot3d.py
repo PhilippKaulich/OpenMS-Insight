@@ -51,6 +51,8 @@ class Plot3D(BaseComponent):
         signals(key="signals", state_manager=state_manager)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "plot3d"
     _parquet_row_group_size = 4096
 

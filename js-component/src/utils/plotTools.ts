@@ -89,6 +89,12 @@ export const ICONS = {
   number:
     'M20.5 10L21 8h-4l1-4h-2l-1 4h-4l1-4h-2L9 8H5l-.5 2h4l-1 4h-4L3 16h4l-1 4h2l1-4h4l-1 4h2l1-4h4l.5-2h-4l1-4h4zm-7 4h-4l1-4h4l-1 4z',
   pin: 'M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z',
+  /** A shaded band between two edges, as the x window draws it. */
+  window: 'M3 3h2v18H3V3zm16 0h2v18h-2V3zM7 5h10v14H7V5z',
+  /** Dashed vertical guides, as the x markers draw them. */
+  markers: 'M5 3h2v4H5V3zm0 6h2v4H5V9zm0 6h2v4H5v-4zm0 6h2v-1H5v1zM11 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4zM17 3h2v4h-2V3zm0 6h2v4h-2V9zm0 6h2v4h-2v-4z',
+  previous: 'M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z',
+  next: 'M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z',
   close: 'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
   download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
   more: 'M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',

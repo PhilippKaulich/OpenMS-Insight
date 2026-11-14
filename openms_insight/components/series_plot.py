@@ -1,4 +1,4 @@
-"""Series plot component: one line (or marker) trace per group using Plotly.js."""
+"""Series plot component: one line, marker, bar or box trace per group using Plotly.js."""
 
 from typing import Any
 
@@ -14,15 +14,24 @@ from ..core.registry import register_component
 from ..core.zoom import validate_zoom_identifier, zoom_args
 from ..preprocessing.filtering import filter_and_collect_cached
 
+# Plotly scatter modes, then bars and boxes
+MODES = ("lines", "markers", "lines+markers", "bars", "box")
+
 
 @register_component("series_plot")
 class SeriesPlot(BaseComponent):
     """
-    Line and marker plot with one trace per series.
+    Line, marker, bar or box plot with one trace per series.
 
     Suited to continuous curves such as score distributions (target vs. decoy
     densities), calibration curves or chromatogram overlays, where the x values
     are sampled points rather than peaks. For stick spectra use LinePlot.
+
+    ``mode="bars"`` draws bars, the series side by side: counts per sample,
+    a histogram (one row per bin) or the top terms of an enrichment
+    (``orientation="h"`` for long category names). ``mode="box"`` draws one box
+    per x value and series from all y values of that x (one row per value),
+    e.g. the distribution of abundances in every sample.
 
     Data is tidy: one row per point, with an optional series column naming the
     trace each point belongs to. Points are drawn in the order of the data.
@@ -42,6 +51,8 @@ class SeriesPlot(BaseComponent):
         )
         fdr_plot(key="fdr", state_manager=state_manager)
     """
+
+    _supports_stepper = True
 
     _component_type: str = "series_plot"
 
@@ -70,9 +81,17 @@ class SeriesPlot(BaseComponent):
         font: dict[str, str] | None = None,
         y_range_mode: str = "nonnegative",
         hover_column: str | None = None,
+        orientation: str = "v",
         measure: bool = True,
         image_format: str | None = None,
         zoom_identifier: str | None = None,
+        view_column: str | None = None,
+        view_names: dict[str, str] | None = None,
+        view_identifier: str | None = None,
+        view_default: str | None = None,
+        top_choices: list[int] | None = None,
+        top_default: int | None = None,
+        bar_height: int | None = None,
         **kwargs,
     ):
         """
@@ -96,7 +115,9 @@ class SeriesPlot(BaseComponent):
                 Series are drawn in this mapping's order, then any others in
                 order of appearance.
             series_colors: Colour per series value (default: Plotly's palette).
-            mode: Plotly scatter mode: 'lines', 'markers' or 'lines+markers'.
+            mode: 'lines', 'markers' or 'lines+markers' (Plotly scatter modes),
+                'bars' (bars, the series side by side) or 'box' (a box per x
+                value and series, from the y values of its rows).
             title: Plot title.
             x_label: X-axis label (default: x_column).
             y_label: Y-axis label (default: y_column).
@@ -111,6 +132,10 @@ class SeriesPlot(BaseComponent):
                 signed values such as mass errors).
             hover_column: Column whose text is shown when hovering a point
                 (e.g. a fragment name), above its x and y values.
+            orientation: 'v' (default) or 'h': with 'h', bars and boxes lie
+                horizontally, x_column on the vertical axis and y_column on
+                the horizontal one (e.g. GO terms and their -log10 p-value).
+                The axis labels follow their columns.
             measure: Show a "Measure" button in the mode bar (default True;
                 False hides it). In measure mode, clicking two points draws a
                 bracket labelled with their x difference ("ΔRT 12.400"). Esc
@@ -128,6 +153,30 @@ class SeriesPlot(BaseComponent):
                 in the browser). The plot reports its ranges there after a zoom
                 or pan and zooms to a value set there, e.g. by a saved view.
                 Render-time only: not part of the cache.
+            view_column: Column splitting the data into views, of which the
+                plot shows one at a time (e.g. the GO category of each term).
+                The plot draws a switch with one button per view above its
+                toolbar. None (default) shows all rows.
+            view_names: Button label per view value (default: the value).
+                Views are offered in this mapping's order, then any others in
+                order of appearance. ``{view}`` in ``title`` is replaced by the
+                label of the view shown.
+            view_identifier: State identifier the picked view is written to
+                (its value in view_column), so other components can follow it,
+                e.g. a Table with ``filters={view_identifier: view_column}``.
+                A value set there from Python picks the view. None (default):
+                the pick stays in the browser. Render-time only.
+            view_default: View shown until one is picked (default: the first).
+            top_choices: Numbers of rows the plot can show, offered as a
+                "Top n" menu in its toolbar: the plot shows the first n x
+                values (of the view shown) in the order of the data, so sort
+                it first (e.g. the most significant terms). None (default)
+                shows all rows.
+            top_default: The number shown until another is picked (default:
+                the middle of top_choices).
+            bar_height: Pixels per category of a horizontal bar or box plot:
+                the plot grows with the categories shown (at least its
+                height). Render-time only.
             **kwargs: Additional configuration options.
         """
         if y_range_mode not in ("nonnegative", "tozero", "normal"):
@@ -135,10 +184,29 @@ class SeriesPlot(BaseComponent):
                 "y_range_mode must be 'nonnegative', 'tozero' or 'normal', "
                 f"got {y_range_mode!r}"
             )
-        if mode not in ("lines", "markers", "lines+markers"):
+        if mode not in MODES:
             raise ValueError(
-                f"mode must be 'lines', 'markers' or 'lines+markers', got {mode!r}"
+                f"mode must be one of {', '.join(repr(m) for m in MODES)}, got {mode!r}"
             )
+        if orientation not in ("v", "h"):
+            raise ValueError(f"orientation must be 'v' or 'h', got {orientation!r}")
+        if top_choices is not None:
+            top_choices = [int(n) for n in top_choices]
+            if not top_choices or any(n < 1 for n in top_choices):
+                raise ValueError("top_choices must be positive numbers")
+            if top_default is None:
+                top_default = top_choices[len(top_choices) // 2]
+            if int(top_default) not in top_choices:
+                raise ValueError(
+                    f"top_default {top_default!r} is not one of top_choices {top_choices}"
+                )
+            top_default = int(top_default)
+        elif top_default is not None:
+            raise ValueError("top_default needs top_choices")
+        if view_identifier is not None and view_column is None:
+            raise ValueError("view_identifier needs view_column")
+        if bar_height is not None and int(bar_height) < 1:
+            raise ValueError("bar_height must be a positive number of pixels")
         self._x_column = x_column
         self._y_column = y_column
         self._series_column = series_column
@@ -154,6 +222,16 @@ class SeriesPlot(BaseComponent):
         self._font = dict(font) if font else None
         self._y_range_mode = y_range_mode
         self._hover_column = hover_column
+        self._orientation = orientation
+        self._view_column = view_column
+        self._view_names = dict(view_names or {})
+        self._view_default = view_default
+        self._top_choices = top_choices
+        self._top_default = top_default
+
+        # Render-time: the identifier the picked view goes to, the bar height
+        self._view_identifier = view_identifier
+        self._bar_height = int(bar_height) if bar_height is not None else None
 
         # Render-time options, kept out of the cache config (see core/measure.py)
         self._measure = validate_measure(measure)
@@ -188,6 +266,12 @@ class SeriesPlot(BaseComponent):
             font=font,
             y_range_mode=y_range_mode,
             hover_column=hover_column,
+            orientation=orientation,
+            view_column=view_column,
+            view_names=view_names,
+            view_default=view_default,
+            top_choices=top_choices,
+            top_default=top_default,
             **kwargs,
         )
 
@@ -213,6 +297,21 @@ class SeriesPlot(BaseComponent):
                 else {}
             ),
             **({"hover_column": self._hover_column} if self._hover_column else {}),
+            **({"orientation": self._orientation} if self._orientation != "v" else {}),
+            **(
+                {
+                    "view_column": self._view_column,
+                    "view_names": self._view_names,
+                    "view_default": self._view_default,
+                }
+                if self._view_column
+                else {}
+            ),
+            **(
+                {"top_choices": self._top_choices, "top_default": self._top_default}
+                if self._top_choices
+                else {}
+            ),
         }
 
     def _restore_cache_config(self, config: dict[str, Any]) -> None:
@@ -231,6 +330,12 @@ class SeriesPlot(BaseComponent):
         self._font = config.get("font")
         self._y_range_mode = config.get("y_range_mode", "nonnegative")
         self._hover_column = config.get("hover_column")
+        self._orientation = config.get("orientation", "v")
+        self._view_column = config.get("view_column")
+        self._view_names = config.get("view_names") or {}
+        self._view_default = config.get("view_default")
+        self._top_choices = config.get("top_choices")
+        self._top_default = config.get("top_default")
 
     def _validate_mappings(self) -> None:
         super()._validate_mappings()
@@ -240,6 +345,7 @@ class SeriesPlot(BaseComponent):
             ("y_column", self._y_column),
             ("series_column", self._series_column),
             ("hover_column", self._hover_column),
+            ("view_column", self._view_column),
         ):
             if column is not None and column not in columns:
                 raise ValueError(
@@ -261,6 +367,7 @@ class SeriesPlot(BaseComponent):
         for column in [
             self._series_column,
             self._hover_column,
+            self._view_column,
             *(self._interactivity or {}).values(),
             *(self._filters or {}).values(),
         ]:
@@ -297,6 +404,7 @@ class SeriesPlot(BaseComponent):
             "fixedYRange": self._fixed_y_range,
             "yRangeMode": self._y_range_mode,
             "hoverColumn": self._hover_column,
+            "orientation": self._orientation,
             "interactivity": self._interactivity or {},
         }
         if self._title:
@@ -308,4 +416,17 @@ class SeriesPlot(BaseComponent):
         args.update(measure_args(self._measure))
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
+        if self._view_column:
+            args["viewColumn"] = self._view_column
+            # Lists keep the order of view_names through JSON
+            args["viewNames"] = [[k, v] for k, v in self._view_names.items()]
+            if self._view_default is not None:
+                args["viewDefault"] = self._view_default
+            if self._view_identifier:
+                args["viewIdentifier"] = self._view_identifier
+        if self._top_choices:
+            args["topChoices"] = list(self._top_choices)
+            args["topDefault"] = self._top_default
+        if self._bar_height:
+            args["barHeight"] = self._bar_height
         return args

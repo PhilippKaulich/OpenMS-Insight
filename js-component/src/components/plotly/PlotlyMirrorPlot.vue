@@ -3,7 +3,7 @@
     <MeasureHint v-if="args.measure" :measure="measure" />
     <MeasureHint v-if="args.peakLabels" :measure="labels" />
     <PeakLabelEditor v-if="args.peakLabels" :labels="labels" :position="labelEditorPosition" />
-    <PlotToolbar :plot-id="id" :tools="toolbarTools" />
+    <PlotToolbar :plot-id="id" :tools="toolbarTools" :stepper="args.stepper" />
     <div :id="id" class="plot-container"></div>
   </div>
 </template>
@@ -25,6 +25,14 @@ import PeakLabelEditor from './PeakLabelEditor.vue'
 import { imageFormatOf } from '@/utils/imageExport'
 import { downloadTool } from '@/utils/plotlyDownload'
 import { TOOLBAR_HEIGHT, type PlotTool } from '@/utils/plotTools'
+import {
+  currentWindow,
+  windowOverlay,
+  windowText,
+  windowTool,
+  type CurrentWindow,
+  type WindowOverlay,
+} from '@/utils/mzWindow'
 import PlotToolbar from './PlotToolbar.vue'
 
 // Default styling configuration (matches PlotlyLineplot for visual consistency)
@@ -86,6 +94,8 @@ export default defineComponent({
   data() {
     return {
       isInitialized: false as boolean,
+      // The Window button hides the shaded window (window_identifier) and shows it again
+      windowShown: true as boolean,
       manualXRange: undefined as number[] | undefined,
       textMeasureCanvas: null as HTMLCanvasElement | null,
       labelEditorPosition: null as { left: number; top: number } | null,
@@ -97,11 +107,36 @@ export default defineComponent({
       return (this.args.height || 400) - TOOLBAR_HEIGHT
     },
 
+    /** The window kept under window_identifier, if one is set. */
+    currentWindow(): CurrentWindow | null {
+      return currentWindow(this.args, this.selectionStore.$state)
+    },
+
+    /** The Window switch, only while a window is set. */
+    windowTools(): PlotTool[] {
+      if (!this.currentWindow) return []
+      return [windowTool(this.windowShown, () => (this.windowShown = !this.windowShown))]
+    },
+
+    /** The shaded window over both spectra (none without one, or while hidden). */
+    windowLayer(): WindowOverlay {
+      const window = this.currentWindow
+      if (!window || !this.windowShown) return { shapes: [], annotations: [] }
+      return windowOverlay(
+        window.range,
+        windowText(window.value, window.range, window.tolerance, window.unit),
+        this.xRange,
+        this.actualPlotWidth,
+        this.styling.selectedColor,
+      )
+    },
+
     toolbarTools(): PlotTool[] {
       return [
         ...this.measure.tools('click two peaks of the same spectrum (Esc cancels)'),
         ...this.labels.tools(),
         ...this.pinZoom.tools(),
+        ...this.windowTools,
         downloadTool({
           plotId: this.id,
           format: () => imageFormatOf(this.args.imageFormat),
@@ -272,6 +307,10 @@ export default defineComponent({
     },
     'labels.mode'(on: boolean) {
       if (on && this.measure.mode) this.measure.toggle()
+    },
+    // Window button: the shaded window hidden or shown again
+    windowShown() {
+      this.recolor()
     },
     'selectionStore.$state': {
       handler() {
@@ -499,7 +538,7 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
       const measureOverlay = this.buildMeasureOverlay()
-      const shapes = [...stickShapes, ...labelShapes, ...measureOverlay.shapes]
+      const shapes = [...this.windowLayer.shapes, ...stickShapes, ...labelShapes, ...measureOverlay.shapes]
 
       // Marker traces give us click events (the shapes alone don't)
       const traces: Partial<Plotly.PlotData>[] = [
@@ -568,6 +607,7 @@ export default defineComponent({
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
+        ...this.windowLayer.annotations,
       ]
 
       const layout: Partial<Plotly.Layout> = {
@@ -817,7 +857,7 @@ export default defineComponent({
         ...this.buildAnnotationShapes(this.annotationBoxDataBottom, 'bottom'),
       ]
       const measureOverlay = this.buildMeasureOverlay()
-      const shapes = [...stickShapes, ...labelShapes, ...measureOverlay.shapes]
+      const shapes = [...this.windowLayer.shapes, ...stickShapes, ...labelShapes, ...measureOverlay.shapes]
 
       const titleAnnotations: Partial<Plotly.Annotations>[] = [
         ...(this.args.titleTop
@@ -855,6 +895,7 @@ export default defineComponent({
         ...this.buildPeakAnnotations(this.annotationBoxDataBottom, 'bottom'),
         ...measureOverlay.annotations,
         ...this.buildLabelOverlay(),
+        ...this.windowLayer.annotations,
       ]
 
       void Plotly.relayout(this.id, { shapes, annotations })

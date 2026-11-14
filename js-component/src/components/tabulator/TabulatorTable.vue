@@ -8,13 +8,35 @@
       <div class="table-toolbar">
         <div class="table-toolbar-buttons">
           <v-btn
+            v-if="!offersExcel"
             variant="text"
             size="small"
             icon="mdi-download"
             :loading="pendingDownloadId !== null"
             :title="isServerSidePagination ? 'Download all rows and columns as CSV' : undefined"
-            @click="downloadTable"
+            @click="downloadTable('csv')"
           />
+          <v-btn
+            v-else
+            variant="text"
+            size="small"
+            icon="mdi-download"
+            :loading="pendingDownloadId !== null"
+            title="Download all rows and columns"
+          >
+            <v-icon>mdi-download</v-icon>
+            <v-menu activator="parent" location="bottom start">
+              <v-list density="compact">
+                <v-list-item prepend-icon="mdi-file-delimited-outline" title="CSV" @click="downloadTable('csv')" />
+                <v-list-item
+                  prepend-icon="mdi-file-excel-outline"
+                  title="Excel (.xlsx)"
+                  subtitle="With a sheet on the sort and filters"
+                  @click="downloadTable('xlsx')"
+                />
+              </v-list>
+            </v-menu>
+          </v-btn>
           <div style="position: relative; display: inline-flex">
             <v-btn
               variant="text"
@@ -206,6 +228,7 @@ import type {
   NumericFilterConfig,
 } from '@/types/component'
 import { isCustomFormatter, getCustomFormatter } from './formatters'
+import { type FilterPreset, renderPresetSection } from '../filterPresets'
 import { combineSelection } from '@/composables/useMultiSelect'
 import { publishRowFill, rowFillExtra, watchRow } from '@/utils/rowFill'
 
@@ -221,7 +244,7 @@ type FilterValue = {
 }
 interface FilterChip {
   key: string
-  kind: 'search' | 'categorical' | 'numeric' | 'text'
+  kind: 'search' | 'preset' | 'categorical' | 'numeric' | 'text'
   field?: string
   label: string
 }
@@ -319,6 +342,10 @@ export default defineComponent({
       currentColumnFilters: [] as Array<{ field: string; type: string; value: unknown }>,
       // On/off state of the title-row toggle filters, keyed by column
       currentToggles: {} as Record<string, boolean>,
+      // On/off state of the filter presets, keyed by id
+      currentPresets: {} as Record<string, boolean>,
+      // Where the filter dialog draws its card of filters (while it is open)
+      filterCardHost: null as HTMLElement | null,
       // Text in the search box, and the search last sent to Python
       searchInput: '' as string,
       currentSearch: '' as string,
@@ -340,6 +367,9 @@ export default defineComponent({
       // These are local state that persists during the request-response cycle
       requestedSortColumn: '' as string,
       requestedSortDir: 'asc' as 'asc' | 'desc',
+      // True while the table loads a page it already holds (after new rows
+      // arrived): Tabulator then shows no Loading overlay
+      quietReload: false as boolean,
       // Track the counter value when AJAX request was made (for stale response detection)
       pendingRequestCounter: null as number | null,
       // multi_select: last check box toggled (for Shift ranges), and a check box
@@ -400,9 +430,16 @@ export default defineComponent({
      * Toggle state and search to merge into pagination requests (nothing for a
      * table that has neither, so its requests stay as they were).
      */
+    filterPresets(): FilterPreset[] {
+      return this.args.filterPresets || []
+    },
+    activePresets(): FilterPreset[] {
+      return this.filterPresets.filter((preset) => this.currentPresets[preset.id])
+    },
     viewFiltersPatch(): Record<string, unknown> {
       return {
         ...(this.toggleFilters.length > 0 ? { toggles: { ...this.currentToggles } } : {}),
+        ...(this.filterPresets.length > 0 ? { presets: { ...this.currentPresets } } : {}),
         ...(this.args.search ? { search: this.currentSearch } : {}),
       }
     },
@@ -419,6 +456,9 @@ export default defineComponent({
       const chips: FilterChip[] = []
       if (this.currentSearch) {
         chips.push({ key: 'search', kind: 'search', label: `Search: ${this.currentSearch}` })
+      }
+      for (const preset of this.activePresets) {
+        chips.push({ key: `p:${preset.id}`, kind: 'preset', field: preset.id, label: preset.label })
       }
       for (const field of this.selectedColumns) {
         const value = this.filterValues[field]
@@ -474,7 +514,10 @@ export default defineComponent({
       return `openms-insight:columns:${this.args.paginationIdentifier || this.args.title || ''}`
     },
     activeFilterCount(): number {
-      return this.selectedColumns.filter((field) => this.isFilterActive(field)).length
+      return (
+        this.activePresets.length +
+        this.selectedColumns.filter((field) => this.isFilterActive(field)).length
+      )
     },
     preparedTableData(): Record<string, unknown>[] {
       const indexField = this.args.tableIndexField || 'id'
@@ -539,9 +582,15 @@ export default defineComponent({
       return typeof val === 'number' ? val : null
     },
     // Full-table CSV export prepared by Python in answer to a download request
-    downloadPayload(): { request_id: number; filename: string; csv: string } | null {
+    downloadPayload(): { request_id: number; filename: string; csv?: string; xlsx?: string } | null {
       const val = this.streamlitDataStore.allDataForDrawing?._download
-      return val && typeof val === 'object' ? (val as { request_id: number; filename: string; csv: string }) : null
+      return val && typeof val === 'object'
+        ? (val as { request_id: number; filename: string; csv?: string; xlsx?: string })
+        : null
+    },
+    // Excel next to CSV: Python writes the workbook, so only for server-side tables
+    offersExcel(): boolean {
+      return this.isServerSidePagination && this.args.excelExport === true
     },
     // Check if server-side pagination is enabled
     isServerSidePagination(): boolean {
@@ -561,6 +610,13 @@ export default defineComponent({
     },
   },
   watch: {
+    // The dialog's card of filters follows every change of the filters
+    activeFilterChips: {
+      handler(): void {
+        if (this.teleportDialog) this.renderFilterCard()
+      },
+      deep: true,
+    },
     // The checked rows changed (here or in another component)
     multiSelectionKey() {
       this.refreshCheckboxes()
@@ -570,7 +626,15 @@ export default defineComponent({
     downloadPayload(payload) {
       if (!payload || payload.request_id !== this.pendingDownloadId) return
       this.pendingDownloadId = null
-      const blob = new Blob([payload.csv], { type: 'text/csv;charset=utf-8' })
+      let blob: Blob
+      if (typeof payload.xlsx === 'string') {
+        const binary = atob(payload.xlsx)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      } else {
+        blob = new Blob([payload.csv ?? ''], { type: 'text/csv;charset=utf-8' })
+      }
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -794,6 +858,11 @@ export default defineComponent({
     for (const toggle of this.toggleFilters) {
       this.currentToggles[toggle.column] = saved[toggle.column] ?? toggle.default
     }
+    // So do the filter presets
+    const savedPresets = this.paginationState?.presets || {}
+    for (const preset of this.filterPresets) {
+      this.currentPresets[preset.id] = savedPresets[preset.id] ?? !!preset.default
+    }
     // So do the search and the dialog's filters, e.g. when the page is opened again
     this.restoreFilters()
   },
@@ -818,7 +887,10 @@ export default defineComponent({
     }
     // A table fitted to its rows resizes with them: the frame follows it
     if (!this.isServerSidePagination) {
+      // Not before the table is built: until then it is a toolbar over an empty
+      // box, and the frame shrank to that and grew back with the rows
       this.rootResizeObserver = new ResizeObserver(() => {
+        if (!this.isTableBuilt) return
         Streamlit.setFrameHeight((this.$el as HTMLElement).offsetHeight)
       })
       this.rootResizeObserver.observe(this.$el as HTMLElement)
@@ -1029,6 +1101,10 @@ export default defineComponent({
         this.commitSearch()
         return
       }
+      if (chip.kind === 'preset') {
+        if (chip.field) this.setPresetActive(chip.field, false)
+        return
+      }
       const value = chip.field ? this.filterValues[chip.field] : undefined
       if (!chip.field || !value) return
       if (chip.kind === 'numeric' && value.numeric) {
@@ -1042,12 +1118,13 @@ export default defineComponent({
       this.refreshTeleportDialog()
     },
 
-    /** Remove the search and every filter of the dialog (not the title-row toggles). */
+    /** Remove the search, the presets and every filter of the dialog (not the title-row toggles). */
     clearAllFilters(): void {
       if (this.searchTimer) clearTimeout(this.searchTimer)
       this.searchInput = ''
-      const hadSearch = this.currentSearch !== ''
+      const hadSearch = this.currentSearch !== '' || this.activePresets.length > 0
       this.currentSearch = ''
+      for (const id of Object.keys(this.currentPresets)) this.currentPresets[id] = false
       for (const field of Object.keys(this.filterValues)) {
         const value = this.filterValues[field]
         if (value.numeric) value.numeric = { ...value.numeric, min: null, max: null }
@@ -1058,6 +1135,15 @@ export default defineComponent({
       this.applyFilters()
       if (hadSearch && !this.isServerSidePagination) this.requestFilteredRows()
       this.refreshTeleportDialog()
+    },
+
+    /**
+     * Switch a filter preset on or off. The filtering happens in Python, so
+     * this requests page 1 of the re-filtered rows.
+     */
+    setPresetActive(id: string, active: boolean): void {
+      this.currentPresets[id] = active
+      this.requestFilteredRows()
     },
 
     /**
@@ -1104,14 +1190,15 @@ export default defineComponent({
         minHeight: 150,
         maxHeight: Math.max(tableMaxHeight, 150),
         height: Math.max(tableMaxHeight, 150),
-        responsiveLayout: 'collapse',
+        // Columns that do not fit fold into the row, unless the table scrolls sideways
+        responsiveLayout: this.args.collapseColumns === false ? false : 'collapse',
         layout: this.args.tableLayoutParam || 'fitDataFill',
         selectable: 1,
         columnDefaults: {
           title: '',
           hozAlign: 'right',
         },
-        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...(this.args.columnDefinitions || []).map((col) => {
+        columns: [...this.multiSelectColumns(), ...this.rowOverviewColumns(), ...this.rowActionColumns(), ...(this.args.columnDefinitions || []).map((col) => {
           // Use a flexible type that allows both string and function formatters
           // Tabulator accepts function formatters but the TS types only declare string
           const colDef: Record<string, unknown> = { ...col }
@@ -1156,6 +1243,8 @@ export default defineComponent({
           tabulatorOptions.ajaxURL = 'streamlit://data'
           // Custom request handler
           tabulatorOptions.ajaxRequestFunc = this.handleRemoteRequest.bind(this)
+          // No overlay for a page the table already holds
+          tabulatorOptions.dataLoader = () => !this.quietReload
         } else {
           // For client-side pagination, set data directly
           tabulatorOptions.data = this.preparedTableData
@@ -1276,6 +1365,16 @@ export default defineComponent({
             console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort unchanged, skipping`)
             return
           }
+          // The header click already asked for this sort (handleRemoteRequest):
+          // asking again would cost Python a second rerun
+          if (
+            this.pendingDataRequest &&
+            sortColumn === this.requestedSortColumn &&
+            sortDir === this.requestedSortDir
+          ) {
+            console.log(`[TabulatorTable ${this.args.title}] dataSorting: sort already requested, skipping`)
+            return
+          }
 
           console.log(`[TabulatorTable ${this.args.title}] dataSorting: requesting sorted data`, {
             from: { col: cachedSortCol, dir: cachedSortDir },
@@ -1317,7 +1416,13 @@ export default defineComponent({
     handleRemoteRequest(
       url: string,
       config: any,
-      params: { page?: number; size?: number; sorters?: Array<{ field: string; dir: string }>; filter?: any[] }
+      params: {
+        page?: number
+        size?: number
+        sort?: Array<{ field: string; dir: string }>
+        sorters?: Array<{ field: string; dir: string }>
+        filter?: any[]
+      }
     ): Promise<{ last_page: number; last_row: number; data: any[] }> {
       // Extract pagination parameters
       const page = params.page || 1
@@ -1327,8 +1432,11 @@ export default defineComponent({
       this.lastRequestedPage = page
       // Use requested state (client) for fallbacks, not server state
       // This preserves sort during page navigation before server responds
-      const sortColumn = params.sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
-      const sortDir = (params.sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
+      // Tabulator sends its sorters as `sort` (dataSendParams default); a
+      // header click arrives here before dataSorting, with the new sort
+      const sorters = params.sort ?? params.sorters
+      const sortColumn = sorters?.[0]?.field ?? (this.requestedSortColumn || undefined)
+      const sortDir = (sorters?.[0]?.dir ?? this.requestedSortDir ?? 'asc') as 'asc' | 'desc'
 
       console.log(`[TabulatorTable ${this.args.title}] ===== handleRemoteRequest START =====`, {
         timestamp: Date.now(),
@@ -1336,7 +1444,7 @@ export default defineComponent({
         requestedSize: pageSize,
         requestedSortColumn: sortColumn,
         requestedSortDir: sortDir,
-        rawSorters: params.sorters,
+        rawSorters: sorters,
         paginationIdentifier: this.args.paginationIdentifier,
         currentPaginationState: this.paginationState,
         cachedSortColumn: this.paginationState?.sort_column,
@@ -1385,6 +1493,7 @@ export default defineComponent({
               ...this.viewFiltersPatch,
           })
         }
+        this.quietReload = false
 
         // Use setTimeout(0) to delay resolution to next tick
         // This allows Tabulator's internal state machine to complete setup
@@ -1398,7 +1507,12 @@ export default defineComponent({
         })
       }
 
+      this.quietReload = false
       this.isLoadingServerData = true
+      if (sorters?.length) {
+        this.requestedSortColumn = sortColumn || ''
+        this.requestedSortDir = sortDir
+      }
 
       // Mark that we're navigating pages (user-initiated, not filter change)
       this.isNavigatingPages = true
@@ -2313,7 +2427,9 @@ export default defineComponent({
               tab.redraw(true)
               // Trigger setPage to refresh pagination counter (Showing X of Y rows)
               // setMaxRows/setMaxPage update internal state but don't trigger _setPageCounter()
+              this.quietReload = true
               tab.setPage(targetPage || tab.getPage() || 1).catch(() => {})
+              this.quietReload = false
             } catch (error) {
               console.error('[TabulatorTable] Error setting pagination limits:', error)
             }
@@ -2325,7 +2441,9 @@ export default defineComponent({
         // Even for page 1, this is necessary because replaceData() + the initial AJAX resolution
         // leaves Tabulator in an inconsistent state without this explicit setPage() call.
         if (this.isServerSidePagination && targetPage && this.isNavigatingPages) {
+          this.quietReload = true
           ;(this.tabulator as any).setPage(targetPage).catch(() => {})
+          this.quietReload = false
         }
 
         // New rows start in the initial order again when the table asks so
@@ -2406,7 +2524,7 @@ export default defineComponent({
         // Storage can be unavailable (private window, blocked site data)
       }
     },
-    downloadTable(): void {
+    downloadTable(format: 'csv' | 'xlsx' = 'csv'): void {
       // A server-side paginated table only holds the current page, and only the
       // displayed columns, so ask Python for the whole filtered, sorted table.
       const paginationIdentifier = this.args.paginationIdentifier as string | undefined
@@ -2421,6 +2539,7 @@ export default defineComponent({
           column_filters: this.currentColumnFilters,
               ...this.viewFiltersPatch,
           download_request: requestId,
+          ...(format === 'xlsx' ? { download_format: 'xlsx' } : {}),
         })
         return
       }
@@ -2812,6 +2931,41 @@ export default defineComponent({
       } as unknown as ColumnDefinition]
     },
 
+    // Row actions: a button per row and action, sending the row to Python
+    rowActionColumns(): ColumnDefinition[] {
+      return (this.args.rowActions || []).map((action) => {
+        const label = action.label || action.id
+        const icon = /^mdi-[a-z0-9-]+$/.test(action.icon) ? action.icon : 'mdi-open-in-new'
+        return {
+          title: '',
+          field: `__row_action_${action.id}`,
+          headerSort: false,
+          resizable: false,
+          width: 36,
+          minWidth: 36,
+          hozAlign: 'center',
+          download: false,
+          responsive: 0,
+          headerTooltip: false,
+          tooltip: label,
+          formatter: () => {
+            const el = document.createElement('i')
+            el.className = `mdi ${icon} row-overview-button`
+            el.setAttribute('role', 'button')
+            el.setAttribute('aria-label', label)
+            el.dataset.testid = `row-action-${action.id}`
+            return el
+          },
+          // The row is selected too: rowClick follows this cellClick
+          cellClick: (_event: UIEvent, cell: CellComponent) => {
+            const row = { ...(cell.getRow().getData() as Record<string, unknown>) }
+            for (const key of Object.keys(row)) if (key.startsWith('__')) delete row[key]
+            this.streamlitDataStore.sendEvent({ type: 'row_action', id: action.id, row })
+          },
+        } as unknown as ColumnDefinition
+      })
+    },
+
     rowOverviewValue(col: Record<string, any>, value: unknown): string {
       const placeholders = (col.formatterParams && col.formatterParams.placeholders) || {}
       if (value !== null && value !== undefined && String(value) in placeholders) {
@@ -3029,6 +3183,11 @@ export default defineComponent({
         min-height: 0;
       `
 
+      // The filters in force and the presets first, kept current while the dialog is open
+      this.filterCardHost = this.parentDocument.createElement('div')
+      content.appendChild(this.filterCardHost)
+      this.renderFilterCard()
+
       // A table with suggested thresholds opens on them; the column choice follows
       if (Object.keys(this.numericFilterConfig).length > 0) {
         this.renderFilterControls(content)
@@ -3072,6 +3231,23 @@ export default defineComponent({
       this.teleportContainer.appendChild(header)
       this.teleportContainer.appendChild(content)
       this.teleportContainer.appendChild(footer)
+    },
+
+    /** (Re)draw the dialog's card of filters: the presets, then the filters the viewer set. */
+    renderFilterCard(): void {
+      const host = this.filterCardHost
+      if (!host || !this.parentDocument) return
+      host.innerHTML = ''
+      renderPresetSection(
+        this.parentDocument,
+        host,
+        this.filterPresets,
+        (preset) => !!this.currentPresets[preset.id],
+        (preset, active) => this.setPresetActive(preset.id, active),
+        this.activeFilterChips
+          .filter((chip) => chip.kind !== 'preset')
+          .map((chip) => ({ key: chip.key, label: chip.label, remove: () => this.removeFilterChip(chip) })),
+      )
     },
 
     renderColumnSelection(content: HTMLElement): void {

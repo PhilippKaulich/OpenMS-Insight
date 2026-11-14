@@ -89,6 +89,16 @@ import { defineComponent, type PropType } from 'vue'
 import { TabulatorFull as Tabulator, type ColumnDefinition, type Options } from 'tabulator-tables'
 import { useStreamlitDataStore } from '@/stores/streamlit-data'
 
+import {
+  type FilterPreset,
+  type UserFilterEntry,
+  presetColumns,
+  presetMatches,
+  renderPresetSection,
+} from '../filterPresets'
+
+export type { FilterPreset }
+
 export default defineComponent({
   name: 'FragmentTable',
   props: {
@@ -138,8 +148,16 @@ export default defineComponent({
       required: false,
       default: () => undefined
     },
+    // Ready-made filters offered at the top of the filter dialog. Each hides
+    // the rows whose `field` equals `value` while it is on; `active` is its
+    // state until the user switches it.
+    filterPresets: {
+      type: Array as PropType<FilterPreset[]>,
+      required: false,
+      default: () => []
+    },
   },
-  emits: ['rowSelected'],
+  emits: ['rowSelected', 'presetChanged'],
   setup() {
     const streamlitDataStore = useStreamlitDataStore()
     return { streamlitDataStore }
@@ -169,6 +187,8 @@ export default defineComponent({
         }
       }>,
       filterTypes: {} as Record<string, 'categorical' | 'numeric' | 'text'>,
+      // Presets the user switched, by id (others keep their `active`)
+      presetActive: {} as Record<string, boolean>,
       columnAnalysis: {} as Record<string, {
         uniqueValues: (string | number)[],
         minValue?: number,
@@ -178,6 +198,8 @@ export default defineComponent({
       debouncedTimeout: undefined as NodeJS.Timeout | undefined,
       // Teleport-related properties
       teleportDialog: false,
+      // Where the filter dialog draws its card of filters (while it is open)
+      filterCardHost: null as HTMLElement | null,
       teleportBackdrop: null as HTMLElement | null,
       teleportContainer: null as HTMLElement | null,
       parentDocument: null as Document | null,
@@ -213,8 +235,50 @@ export default defineComponent({
         title: col.title || col.field || ''
       })).filter(col => col.field !== '');
     },
+    /** The filters the viewer set in the dialog, as entries of its card of filters. */
+    userFilterEntries(): UserFilterEntry[] {
+      const entries: UserFilterEntry[] = [];
+      const fmt = (value: number) => Number(value.toPrecision(6)).toString();
+      for (const field of this.selectedColumns) {
+        const value = this.filterValues[field];
+        if (!value) continue;
+        const title = this.columnNames.find((col) => col.field === field)?.title || field;
+        const type = this.filterTypes[field];
+        const clear = () => {
+          const current = this.filterValues[field];
+          if (!current) return;
+          if (type === 'numeric') {
+            current.numeric = { min: this.getMinValue(field), max: this.getMaxValue(field) };
+          } else if (type === 'categorical') {
+            current.categorical = [];
+          } else {
+            current.text = '';
+          }
+          this.applyFilters();
+          this.refreshTeleportDialog();
+        };
+        if (type === 'categorical' && value.categorical && value.categorical.length > 0) {
+          const shown = value.categorical.slice(0, 3).join(', ');
+          const more = value.categorical.length > 3 ? ` +${value.categorical.length - 3}` : '';
+          entries.push({ key: `c:${field}`, label: `${title}: ${shown}${more}`, remove: clear });
+        } else if (type === 'numeric' && value.numeric) {
+          const lo = this.getMinValue(field);
+          const hi = this.getMaxValue(field);
+          const { min, max } = value.numeric;
+          if (min === lo && max === hi) continue;
+          let label: string;
+          if (min === lo) label = `${title} ≤ ${fmt(max)}`;
+          else if (max === hi) label = `${title} ≥ ${fmt(min)}`;
+          else label = `${title} ${fmt(min)} – ${fmt(max)}`;
+          entries.push({ key: `n:${field}`, label, remove: clear });
+        } else if (type === 'text' && value.text && value.text.trim() !== '') {
+          entries.push({ key: `t:${field}`, label: `${title} ~ ${value.text}`, remove: clear });
+        }
+      }
+      return entries;
+    },
     activeFilterCount(): number {
-      let count = 0;
+      let count = this.filterPresets.filter((preset) => this.isPresetActive(preset)).length;
       
       for (const columnField of this.selectedColumns) {
         const filterValue = this.filterValues[columnField];
@@ -248,7 +312,11 @@ export default defineComponent({
     },
     preparedTableData(): Record<string, unknown>[] {
 
-      const columns = [...this.columnDefinitions.map(col => col.field), 'id']
+      const columns = [
+        ...this.columnDefinitions.map(col => col.field),
+        ...presetColumns(this.filterPresets),
+        'id',
+      ]
       if ((this.tableData !== undefined) && (this.tableData.length > 0)) {
         const tableDataWithId: Record<string, unknown>[] = []
         this.tableData.forEach((row, index) => {
@@ -276,8 +344,22 @@ export default defineComponent({
     },
   },
   watch: {
+    // The dialog's card of filters follows every change of the filters
+    userFilterEntries() {
+      if (this.teleportDialog) this.renderPresets()
+    },
+    presetActive: {
+      handler() {
+        if (this.teleportDialog) this.renderPresets()
+      },
+      deep: true,
+    },
     tableData() {
       this.drawTable()
+    },
+    filterPresets() {
+      this.applyFilters()
+      if (this.teleportDialog) this.refreshTeleportDialog()
     },
     selectedRowIndexFromListening(newVal: number | undefined) {
       console.log('🔍 [DEBUG] TabulatorTable selectedRowIndexFromListening watcher triggered:', newVal)
@@ -382,6 +464,28 @@ export default defineComponent({
     },
     downloadTable(): void {
       if (this.tabulator !== undefined) this.tabulator.download('csv', `${this.title}.csv`)
+    },
+    isPresetActive(preset: FilterPreset): boolean {
+      return this.presetActive[preset.id] ?? preset.default ?? false
+    },
+    setPresetActive(preset: FilterPreset, active: boolean): void {
+      this.presetActive[preset.id] = active
+      this.$emit('presetChanged', preset.id, active)
+      this.applyFilters()
+    },
+    /** (Re)draw the dialog's card of filters: the presets, then the filters the viewer set. */
+    renderPresets(): void {
+      const host = this.filterCardHost;
+      if (!this.parentDocument || !host) return;
+      host.innerHTML = '';
+      renderPresetSection(
+        this.parentDocument,
+        host,
+        this.filterPresets,
+        (preset) => this.isPresetActive(preset),
+        (preset, active) => this.setPresetActive(preset, active),
+        this.userFilterEntries,
+      );
     },
     openFilterDialog(): void {
       if (this.canUseTeleport()) {
@@ -580,6 +684,14 @@ export default defineComponent({
         if (!this.tabulator) return;
 
         this.tabulator.clearFilter(true);
+
+        this.filterPresets.forEach((preset) => {
+          if (!this.isPresetActive(preset)) return;
+          // A function filter; Tabulator's typings only describe field filters
+          const addFilter = this.tabulator?.addFilter.bind(this.tabulator) as
+            ((filter: (data: Record<string, unknown>) => boolean) => void) | undefined;
+          addFilter?.((data) => presetMatches(data, preset));
+        });
         
         this.selectedColumns.forEach(columnField => {
           const filterValue = this.filterValues[columnField];
@@ -841,6 +953,10 @@ export default defineComponent({
         min-height: 0;
       `;
 
+      // The presets and the filters in force first, kept current while the dialog is open
+      this.filterCardHost = this.parentDocument!.createElement('div');
+      content.appendChild(this.filterCardHost);
+      this.renderPresets();
       this.renderColumnSelection(content);
       this.renderFilterControls(content);
 

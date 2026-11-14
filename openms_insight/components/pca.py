@@ -44,6 +44,8 @@ class PCAPlot(BaseComponent):
         pca(state_manager=state, pc_x=1, pc_y=2)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "pca"
 
     def __init__(

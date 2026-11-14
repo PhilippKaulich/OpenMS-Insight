@@ -15,6 +15,12 @@ from ..core.measure import (
     validate_measure_residues,
     validate_measure_tolerance,
 )
+from ..core.mz_window import (
+    DEFAULT_WINDOW_TOLERANCE,
+    mz_window_args,
+    validate_window_identifier,
+    validate_window_tolerance,
+)
 from ..core.peak_labels import peak_label_args, validate_peak_labels
 from ..core.registry import register_component
 from ..core.zoom import validate_zoom_identifier, zoom_args
@@ -46,6 +52,8 @@ class MirrorPlot(BaseComponent):
         )
         mirror(key="mirror", state_manager=state_manager)
     """
+
+    _supports_stepper = True
 
     _component_type: str = "mirrorplot"
 
@@ -87,6 +95,8 @@ class MirrorPlot(BaseComponent):
         image_format: str | None = None,
         keep_zoom: bool = False,
         zoom_identifier: str | None = None,
+        window_identifier: str | None = None,
+        window_tolerance: float | str = DEFAULT_WINDOW_TOLERANCE,
         **kwargs,
     ):
         """
@@ -178,6 +188,15 @@ class MirrorPlot(BaseComponent):
                 in the browser). The plot reports its ranges there after a zoom
                 or pan and zooms to a value set there, e.g. by a saved view.
                 Render-time only: not part of the cache.
+            window_identifier: State identifier of an x window to shade over
+                both spectra, e.g. the m/z window of an XIC shown elsewhere
+                (default None). The value there is a centre (widened by
+                ``window_tolerance``), ``[low, high]``, or None for no band.
+                Render-time only: not part of the cache.
+            window_tolerance: Half-width of the band around a stored centre:
+                a number of Da (default 0.01) or a string such as '10 ppm',
+                '0.02 Da' or '0.5 m/z'.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options.
         """
         # Subprocess preprocessing re-instantiates the component via
@@ -232,6 +251,10 @@ class MirrorPlot(BaseComponent):
 
         # Render-time option, kept out of the cache config (see core/zoom.py)
         self._zoom_identifier = validate_zoom_identifier(zoom_identifier)
+
+        # Render-time options, kept out of the cache config (see core/mz_window.py)
+        self._window_identifier = validate_window_identifier(window_identifier)
+        self._window_tolerance = validate_window_tolerance(window_tolerance)
 
         super().__init__(
             cache_id=cache_id,
@@ -648,6 +671,7 @@ class MirrorPlot(BaseComponent):
                 args[key] = val
         args.update(image_format_args(self._image_format))
         args.update(zoom_args(self._zoom_identifier))
+        args.update(mz_window_args(self._window_identifier, self._window_tolerance))
         args.update(keep_zoom_args(self._keep_zoom))
         return args
 

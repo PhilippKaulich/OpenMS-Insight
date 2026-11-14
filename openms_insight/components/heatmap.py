@@ -19,6 +19,7 @@ from ..core.multi_select import (
     values_in_region,
 )
 from ..core.registry import register_component
+from ..core.stepper import sorted_values
 from ..core.storage import scan_parquet
 from ..core.zoom import normalize_zoom
 from ..preprocessing.compression import (
@@ -101,7 +102,13 @@ class Heatmap(BaseComponent):
         heatmap(state_manager=state_manager)
     """
 
+    _supports_stepper = True
+
     _component_type: str = "heatmap"
+
+    # Data that grows while it is shown (e.g. a live acquisition) changes in a
+    # few rows per refresh: only those are sent again
+    _delta_tables = ("heatmapData",)
 
     def __init__(
         self,
@@ -147,6 +154,7 @@ class Heatmap(BaseComponent):
         color_columns: dict[str, str] | None = None,
         layer_column: str | None = None,
         colorbar_editor: bool = True,
+        stepper: str | None = None,
         **kwargs,
     ):
         """
@@ -266,6 +274,12 @@ class Heatmap(BaseComponent):
             colorbar_editor: The colorbar, drawn below the plot, opens an
                 editor on click: one, two or three colors, presets, reverse and
                 reset (default True; False keeps ``colorscale``).
+            stepper: A filter identifier to step through with ``‹`` / ``›``
+                buttons in the toolbar, e.g. the frames of an ion-mobility run
+                shown as m/z × 1/K0 (default None: no buttons). Listed in
+                ``categorical_filters`` too, every value keeps all its points;
+                otherwise the values come from the finest resolution level.
+                Render-time only: not part of the cache.
             **kwargs: Additional configuration options
         """
         if levels is not None and data is None:
@@ -364,6 +378,7 @@ class Heatmap(BaseComponent):
             highlight=highlight,
             on_select=on_select,
             multi_select=multi_select,
+            stepper=stepper,
             **kwargs,
         )
         self._config.pop("multi_select", None)
@@ -1499,6 +1514,27 @@ class Heatmap(BaseComponent):
             if value is not None and column in schema:
                 condition = condition & (pl.col(column) == value)
         return full.filter(condition).select(columns).collect()
+
+    def _stepper_values(self) -> list[Any]:
+        """The stepped filter's values: those of a categorical filter, else
+        those in the finest resolution level (see core/stepper.py)."""
+        categorical = self._preprocessed_data.get("categorical_filter_values") or {}
+        if self._stepper in categorical:
+            return sorted_values(
+                self._cache_dir,
+                self._filters[self._stepper],
+                lambda: list(categorical[self._stepper]),
+            )
+        return super()._stepper_values()
+
+    def _stepper_source(self) -> pl.LazyFrame | pl.DataFrame | None:
+        """The finest resolution level (all points unless it was downsampled)."""
+        num_levels = self._preprocessed_data.get("num_levels") or 0
+        for level in range(num_levels - 1, -1, -1):
+            data = self._preprocessed_data.get(f"level_{level}")
+            if isinstance(data, (pl.LazyFrame, pl.DataFrame)):
+                return data
+        return getattr(self, "_raw_data", None)
 
     def _get_component_args(self) -> dict[str, Any]:
         """

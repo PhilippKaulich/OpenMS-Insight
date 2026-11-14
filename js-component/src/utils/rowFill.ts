@@ -81,6 +81,9 @@ export function publishRowFill(extra: number): void {
  * any component in the row resizes, or elements are added or removed.
  * Returns a function that stops watching.
  */
+/** How long the row has to keep its size before a table fills it again. */
+const ROW_SETTLE_MS = 150
+
 export function watchRow(onChange: () => void): () => void {
   const frame = frameElement()
   const row = frame?.closest(COLUMN_SELECTOR)?.parentElement
@@ -88,14 +91,17 @@ export function watchRow(onChange: () => void): () => void {
   const parentWindow = frame.ownerDocument.defaultView as (Window & typeof globalThis) | null
   if (!parentWindow?.ResizeObserver || !parentWindow.MutationObserver) return () => {}
 
-  let scheduled = false
+  // Once the row has kept its size for a moment. Views beside this one pass
+  // through other heights while they load (a table laying out its rows is
+  // briefly much taller); followed at once, the table grew to each of them and
+  // back, and the views below moved with it.
+  let timer: ReturnType<typeof setTimeout> | null = null
   const schedule = () => {
-    if (scheduled) return
-    scheduled = true
-    window.requestAnimationFrame(() => {
-      scheduled = false
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
       onChange()
-    })
+    }, ROW_SETTLE_MS)
   }
   const resizeObserver = new parentWindow.ResizeObserver(schedule)
   const observeAll = () => {
@@ -112,6 +118,7 @@ export function watchRow(onChange: () => void): () => void {
   })
   mutationObserver.observe(row, { childList: true, subtree: true })
   return () => {
+    if (timer !== null) clearTimeout(timer)
     resizeObserver.disconnect()
     mutationObserver.disconnect()
   }
