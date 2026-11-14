@@ -6,9 +6,12 @@ its mass shift. A span of one residue is a localized modification; a longer
 span is a modification somewhere in it: an ambiguous range (``(EVTS)[+79.97]``)
 or an unlocalized one (``[+42.0106]?SEQ``, ``[Phospho]^2?SEQ``), which may sit
 anywhere in the sequence. Names, Unimod/PSI-MOD accessions, formulas and mass
-shifts are read; of alternatives (``[Oxidation|+15.995]``) the first that has
-a mass counts. Position groups (``#g1``), labile modifications (``{...}``),
-cross-links and charged or chimeric proteoforms are refused with a message.
+shifts and glycan compositions are read, a name for the residue it sits on
+(Phospho on S or on Y); of alternatives (``[Oxidation|+15.995]``) the first
+that has a mass counts, and INFO tags, which carry no mass, are left out. A
+charge (``PEPTIDE/2``) is read and left out. Position groups (``#g1``), labile
+modifications (``{...}``) and chimeric or cross-linked proteoforms
+(``A//B``) are refused with a message.
 
 Needs pyopenms (``ProForma`` in pyOpenMS 3.6 or later).
 """
@@ -38,21 +41,90 @@ def _db():
     return ModificationsDB()
 
 
-def _named_mass(name: str) -> tuple[float, str] | None:
-    """Mass shift and id of a modification name or accession, or None."""
-    try:
-        mod = _db().getModification(name)
-    except Exception:  # pragma: no cover - unknown names raise in pyOpenMS
-        return None
+def _text(value: Any) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
+def _named_mass(name: str, site: str | None = None) -> tuple[float, str] | None:
+    """Mass shift and readable name of a modification name or accession, or None.
+
+    ``site`` is the residue it sits on ('S'), 'N-term' or 'C-term': a name
+    such as Phospho then resolves to the variant for that site (Phospho (Y),
+    not the first one ModificationsDB knows). A PSI-MOD accession without a
+    Unimod entry is named by its full name, not by the accession."""
+    from pyopenms import ResidueModification
+
+    db = _db()
+    term = ResidueModification.TermSpecificity
+    lookups = []
+    if site in ("N-term", "C-term"):
+        lookups.append((name, "", term.N_TERM if site == "N-term" else term.C_TERM))
+    elif site:
+        lookups.append((name, site, term.ANYWHERE))
+    lookups.append((name,))
+    mod = None
+    for args in lookups:
+        try:
+            mod = db.getModification(*args)
+        except Exception:  # unknown here: try the next, less specific lookup
+            mod = None
+        if mod is not None:
+            break
     if mod is None:
         return None
-    mod_id = mod.getId()
-    mod_id = mod_id.decode() if isinstance(mod_id, bytes) else str(mod_id)
-    return float(mod.getDiffMonoMass()), mod_id or name
+    mod_id = _text(mod.getId())
+    if not mod_id or mod_id.upper().startswith(("MOD:", "UNIMOD:")):
+        mod_id = _text(mod.getFullName()) or mod_id or name
+    return float(mod.getDiffMonoMass()), mod_id
 
 
-def _tag_mass(tags: list[dict[str, Any]]) -> tuple[float, str | None]:
-    """Mass shift and name of one modification (its alternatives in order)."""
+def _glycan_mass(value: Any, site: str | None = None) -> float | None:
+    """Mass of a glycan composition (``[Glycan:HexNAc2Hex3]``): each
+    monosaccharide's mass shift, as ModificationsDB has it, times its count."""
+    if not isinstance(value, list):
+        return None
+    total = 0.0
+    for part in value:
+        sugar = part.get("monosaccharide", {}) if isinstance(part, dict) else {}
+        found = (
+            _named_mass(str(sugar.get("value", "")), site)
+            if sugar.get("type") == "name"
+            else None
+        )
+        if found is None:
+            return None
+        total += found[0] * int(part.get("count") or 1)
+    return total
+
+
+def _describe(entry: dict[str, Any]) -> str:
+    """One tag as the user wrote it, for a message (any shape of value)."""
+    tag = entry.get("tag", {}) if isinstance(entry, dict) else {}
+    value = tag.get("value", {})
+    if tag.get("type") == "glycan" and isinstance(value, list):
+        sugars = "".join(
+            f"{p.get('monosaccharide', {}).get('value', '?')}"
+            + (str(p["count"]) if p.get("count") not in (None, 1) else "")
+            for p in value
+            if isinstance(p, dict)
+        )
+        return f"Glycan:{sugars}"
+    if not isinstance(value, dict):
+        return str(value)
+    if "accession" in value:
+        return f"{value.get('database', '')}:{value['accession']}"
+    return str(
+        value.get("name") or value.get("formula_string") or value.get("text") or value
+    )
+
+
+def _tag_mass(
+    tags: list[dict[str, Any]], site: str | None = None
+) -> tuple[float, str | None] | None:
+    """Mass shift and name of one modification (its alternatives in order),
+    or None when it holds only INFO tags, which carry no mass (ProForma 2.0).
+    ``site`` (residue, 'N-term' or 'C-term') picks the variant of a name."""
+    info_only = True
     for entry in tags:
         if "label" in entry:
             raise ProFormaReadError(
@@ -61,10 +133,13 @@ def _tag_mass(tags: list[dict[str, Any]]) -> tuple[float, str | None]:
             )
         tag = entry.get("tag", {})
         kind, value = tag.get("type"), tag.get("value", {})
+        if kind == "info":
+            continue
+        info_only = False
         if kind == "mass_delta":
             return float(value["mass"]), None
         if kind == "named_mod":
-            found = _named_mass(value["name"])
+            found = _named_mass(value["name"], site)
             if found:
                 return found[0], value["name"]
         elif kind == "cv_accession":
@@ -82,22 +157,42 @@ def _tag_mass(tags: list[dict[str, Any]]) -> tuple[float, str | None]:
             return float(
                 EmpiricalFormula(formula).getMonoWeight()
             ), f"Formula:{formula}"
+        elif kind == "glycan":
+            mass = _glycan_mass(value, site)
+            if mass is not None:
+                return mass, _describe(entry)
+    if info_only:
+        return None
 
-    def describe(entry: dict[str, Any]) -> str:
-        value = entry.get("tag", {}).get("value", {})
-        if "accession" in value:
-            return f"{value.get('database', '')}:{value['accession']}"
-        return str(
-            value.get("name")
-            or value.get("formula_string")
-            or value.get("text")
-            or value
-        )
-
-    names = " | ".join(describe(t) for t in tags)
+    names = " | ".join(
+        _describe(t) for t in tags if t.get("tag", {}).get("type") != "info"
+    )
     raise ProFormaReadError(
         f"Cannot find the mass of [{names}]: give it as a mass, e.g. [+79.9663]"
     )
+
+
+def _parse(text: str) -> dict[str, Any]:
+    """The peptidoform of ``text`` as ProForma JSON. A charge (``PEPTIDE/2``)
+    is read and left out: the view shows the proteoform, not the ion.
+    Several chains (``A//B``, chimeric or cross-linked) are refused."""
+    from pyopenms import ProForma
+
+    try:
+        return json.loads(ProForma.toJSON(ProForma.parse(text)))
+    except Exception as e:
+        first = e
+    try:
+        chains = list(ProForma.parseIon(text).chains)
+    except Exception:
+        message = str(first).split("\n")[0]
+        raise ProFormaReadError(f"Not a ProForma proteoform: {message}") from first
+    if len(chains) != 1:
+        raise ProFormaReadError(
+            "Chimeric or cross-linked proteoforms (A//B) are not supported: "
+            "give one proteoform"
+        )
+    return json.loads(ProForma.toJSON(chains[0]))
 
 
 def _library_id(
@@ -144,16 +239,10 @@ def read_proforma(
         ProFormaReadError: the text cannot be read or shown.
         ImportError: pyopenms has no ProForma parser.
     """
-    from pyopenms import ProForma
-
     text = "".join(text.split())
     if not text:
         return {"sequence": "", "fixed_ids": [], "modifications": []}
-    try:
-        data = json.loads(ProForma.toJSON(ProForma.parse(text)))
-    except Exception as e:
-        message = str(e).split("\n")[0]
-        raise ProFormaReadError(f"Not a ProForma proteoform: {message}") from e
+    data = _parse(text)
     if data.get("labile_mods"):
         raise ProFormaReadError("Labile modifications ({...}) are not supported yet")
 
@@ -192,16 +281,23 @@ def read_proforma(
     variable_ids = variable_library or []
     modifications = []
     for start, end, tags in spans:
-        mass, name = _tag_mass(tags)
-        label = name or f"{mass:+.4f}"
-        if name and start == end:
-            site = (
+        site = (
+            (
                 "N-term"
                 if start < 0
                 else "C-term"
                 if start >= len(sequence)
                 else sequence[start]
             )
+            if start == end
+            else None
+        )
+        read = _tag_mass(tags, site)
+        if read is None:  # INFO only: a note, no mass shift
+            continue
+        mass, name = read
+        label = name or f"{mass:+.4f}"
+        if name and start == end:
             residue = sequence[0] if start < 0 else sequence[-1]
             label = _library_id(name, site, variable_ids, residue) or name
         modifications.append({"start": start, "end": end, "mass": mass, "label": label})

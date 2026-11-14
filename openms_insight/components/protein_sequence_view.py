@@ -713,13 +713,20 @@ class ProteinSequenceView(BaseComponent):
         return {**payload, "_hash": data_hash}
 
     def _read_app_proforma(self, state: dict[str, Any]) -> dict[str, Any] | None:
-        """The ProForma the app put in ``proforma_identifier``, read by
-        pyOpenMS (see ``openms_insight.core.proforma``): ``text`` with the
-        result, or with ``error``. None without such a text or without a
-        pyOpenMS that reads ProForma; the view then reads it itself."""
+        """The ProForma the app (or the dialog) put in ``proforma_identifier``,
+        read by pyOpenMS (see ``openms_insight.core.proforma``): ``text`` with
+        the result, or with ``error``. None without such a text, for the
+        view's own answer, or without a pyOpenMS that reads ProForma; the view
+        then reads it itself."""
         if not self._proforma_identifier:
             return None
-        text = proforma_text(state.get(self._proforma_identifier))
+        value = state.get(self._proforma_identifier)
+        # The view's own answer (by="view") is what it shows already: not read
+        # again, so its writes leave the payload alone and cause no further
+        # rerun (the view also ignores it, see externalProForma in Vue)
+        if isinstance(value, dict) and value.get("by") == "view":
+            return None
+        text = proforma_text(value)
         if not text.strip():
             return None
         from ..core import proforma

@@ -81,6 +81,75 @@ def test_refused_with_a_message(text, message):
         proforma.read_proforma(text)
 
 
+def test_glycans_info_and_charge():
+    assert spans(proforma.read_proforma("PEP[Glycan:Hex]K")) == [
+        (2, 2, 162.053, "Glycan:Hex")
+    ]
+    assert spans(proforma.read_proforma("PEPN[Glycan:HexNAc2Hex3]K")) == [
+        (3, 3, 892.317, "Glycan:HexNAc2Hex3")
+    ]
+    # INFO tags carry no mass: alone they leave no modification
+    assert spans(proforma.read_proforma("PEPS[INFO:checked]K")) == []
+    assert spans(
+        proforma.read_proforma("PEPS[Phospho|INFO:checked]K", LIBRARY, LIBRARY)
+    ) == [(3, 3, 79.966, "Phospho (S)")]
+    # the charge is read and left out: the view shows the proteoform
+    assert proforma.read_proforma("PEPTIDE/2")["sequence"] == "PEPTIDE"
+
+
+def test_names_resolve_for_their_residue():
+    assert spans(
+        proforma.read_proforma("PEPY[Phospho]K", LIBRARY, ["Phospho (Y)"])
+    ) == [(3, 3, 79.966, "Phospho (Y)")]
+    # a PSI-MOD accession without a Unimod entry is named, not shown raw
+    assert spans(proforma.read_proforma("PEPM[MOD:00719]K")) == [
+        (3, 3, 15.995, "oxidation to L-methionine sulfoxide")
+    ]
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("A//B", "Chimeric or cross-linked"),
+        ("PEP[Glycan:Foo]K", r"Cannot find the mass of \[Glycan:Foo\]"),
+    ],
+)
+def test_more_refused_with_a_message(text, message):
+    with pytest.raises(proforma.ProFormaReadError, match=message):
+        proforma.read_proforma(text)
+
+
+def test_view_answer_is_not_read_again(mock_streamlit, temp_cache_dir):
+    """The app asks, the view answers with by="view": the answer is not read
+    again, and further renders with it give the same payload (no rerun)."""
+    import polars as pl
+
+    from openms_insight import ProteinSequenceView
+
+    view = ProteinSequenceView(
+        cache_id="proforma_round_trip",
+        data=pl.LazyFrame(
+            {"scan_idx": [0], "masses": [[1.0]], "precursor_mass": [500.0]}
+        ),
+        filters={"scan": "scan_idx"},
+        sequence={"sequence": list("PEPSK")},
+        sequence_identifier="sequence",
+        proforma_identifier="proforma",
+        cache_path=str(temp_cache_dir),
+    )
+    assert "proforma" in view.get_state_dependencies()
+    asked = {"scan": 0, "proforma": {"text": "PEPS[Phospho]K", "by": "app", "n": 1}}
+    read = view._prepare_vue_data(asked)["proformaRead"]
+    assert read["text"] == "PEPS[Phospho]K" and read["sequence"] == "PEPSK"
+
+    answered = {"scan": 0, "proforma": {"text": "PEPS[Phospho]K", "by": "view", "n": 1}}
+    first = view._prepare_vue_data(answered)
+    assert "proformaRead" not in first
+    assert view._prepare_vue_data(answered)["_hash"] == first["_hash"]
+    # a plain string is the app's, and read
+    assert "proformaRead" in view._prepare_vue_data({"scan": 0, "proforma": "PEPK"})
+
+
 def test_link_text():
     assert proforma_text("PEPK") == "PEPK"
     assert proforma_text({"text": "PEPK", "by": "view", "n": 3}) == "PEPK"
